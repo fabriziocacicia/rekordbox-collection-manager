@@ -79,7 +79,6 @@ def ensure_rekordbox_not_running(force: bool = False, exit_on_running: bool = Tr
             print("⚠️  [Warning] Rekordbox is currently running. Proceeding anyway due to --force.\n")
             return True
 
-        print("⚠️  Rekordbox è ancora in esecuzione! Chiudilo prima di procedere (Cmd + Q).")
         print("⚠️  Rekordbox is still running! Please close it before proceeding (Cmd + Q).")
         if exit_on_running:
             sys.exit(1)
