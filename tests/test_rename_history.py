@@ -8,6 +8,8 @@ from sqlalchemy import create_engine
 
 from rekordbox_collection_fixer.rename_history import (
     fetch_history_records,
+    is_rekordbox_running,
+    main,
     parse_args,
     resolve_db_path,
     run_interactive_session,
@@ -137,6 +139,22 @@ class TestRenameHistory(unittest.TestCase):
         self.assertEqual(records[0]["name"], "HISTORY 2026-09-13")
         self.assertEqual(records[0]["date"], "2026-09-13")
 
+    def test_main_aborts_when_rekordbox_running(self):
+        with patch("rekordbox_collection_fixer.rename_history.ensure_rekordbox_not_running", side_effect=SystemExit(1)):
+            with self.assertRaises(SystemExit) as cm:
+                main(["dummy.db"])
+            self.assertEqual(cm.exception.code, 1)
+
+    def test_main_force_passes_flag_to_ensure_check(self):
+        with patch("rekordbox_collection_fixer.rename_history.ensure_rekordbox_not_running") as mock_ensure, \
+             patch("rekordbox_collection_fixer.rename_history.resolve_db_path", return_value="dummy.db"), \
+             patch("rekordbox_collection_fixer.rename_history.open_database", return_value=(MagicMock(), "djmdHistory")), \
+             patch("rekordbox_collection_fixer.rename_history.run_interactive_session") as mock_session:
+            main(["--force", "dummy.db"])
+            mock_ensure.assert_called_once_with(force=True)
+            mock_session.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()
+

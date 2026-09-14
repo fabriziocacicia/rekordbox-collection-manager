@@ -8,13 +8,20 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import questionary
 from pyrekordbox.config import get_config
-from pyrekordbox.db6.database import BLOB, get_rekordbox_pid
+from pyrekordbox.db6.database import BLOB
 from pyrekordbox.utils import deobfuscate
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 from sqlcipher3 import dbapi2 as sqlcipher_driver
 
+from rekordbox_collection_fixer.utils import (
+    ensure_rekordbox_not_running,
+    is_rekordbox_running,
+)
+
 DEVICE_LIBRARY_PLUS_KEY = "r8gddnr4k847830ar6cqzbkk0el6qytmb3trbbx805jm74vez64i5o8fnrqryqls"
+
+
 
 
 def get_default_master_db_path() -> Optional[str]:
@@ -160,6 +167,11 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         default=None,
         help="Path to Rekordbox database file.",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Proceed even if Rekordbox is currently running (not recommended).",
+    )
     return parser.parse_args(argv)
 
 
@@ -201,10 +213,6 @@ def resolve_db_path(args: argparse.Namespace) -> str:
 
 def run_interactive_session(engine: Engine, table_format: str, db_path: str) -> None:
     """Run interactive history selector and editor."""
-    if get_rekordbox_pid():
-        print("⚠️  [Notice] Rekordbox is currently running.")
-        print("   If you encounter lock errors, please quit Rekordbox and run again.\n")
-
     while True:
         records = fetch_history_records(engine, table_format)
 
@@ -314,6 +322,7 @@ def run_interactive_session(engine: Engine, table_format: str, db_path: str) -> 
 def main(argv: Optional[List[str]] = None) -> None:
     """Main CLI entrypoint."""
     args = parse_args(argv)
+    ensure_rekordbox_not_running(force=getattr(args, "force", False))
     db_path = resolve_db_path(args)
 
     print(f"Opening Rekordbox database: {db_path} ...")
