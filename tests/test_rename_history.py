@@ -7,10 +7,13 @@ from unittest.mock import MagicMock, patch
 from sqlalchemy import create_engine
 
 from rekordbox_collection_fixer.rename_history import (
+    ensure_djmd_history_folders,
     fetch_history_records,
     is_rekordbox_running,
     main,
+    normalize_date_input,
     parse_args,
+    parse_year_month,
     resolve_db_path,
     run_interactive_session,
     update_history_record,
@@ -78,6 +81,108 @@ class TestRenameHistory(unittest.TestCase):
         self.assertEqual(updated_records[0]["name"], "HISTORY 2026-09-13")
         self.assertEqual(updated_records[0]["date"], "2026-09-13")
 
+    def test_parse_year_month(self):
+        self.assertEqual(parse_year_month("2026-08-31 23:00:00"), (2026, 8))
+        self.assertEqual(parse_year_month("2026-08-31"), (2026, 8))
+        self.assertEqual(parse_year_month("2025/12/25"), (2025, 12))
+        self.assertEqual(parse_year_month("2024.01.05"), (2024, 1))
+        self.assertEqual(parse_year_month(""), (None, None))
+        self.assertEqual(parse_year_month(None), (None, None))
+        self.assertEqual(parse_year_month("invalid-date"), (None, None))
+
+    def test_normalize_date_input(self):
+        self.assertEqual(
+            normalize_date_input("2026-08-31", "2026-09-14 16:50:22"),
+            "2026-08-31 16:50:22",
+        )
+        self.assertEqual(
+            normalize_date_input("2026-08-31 22:00:00", "2026-09-14 16:50:22"),
+            "2026-08-31 22:00:00",
+        )
+        self.assertEqual(
+            normalize_date_input("2026-08-31", "2026-09-14"),
+            "2026-08-31",
+        )
+
+    def test_ensure_djmd_history_folders_and_hierarchy_update(self):
+        engine = create_engine("sqlite:///:memory:")
+        with engine.begin() as conn:
+            conn.exec_driver_sql("""
+                CREATE TABLE djmdHistory (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    Seq INTEGER,
+                    Name VARCHAR(255),
+                    Attribute INTEGER,
+                    ParentID VARCHAR(255),
+                    DateCreated VARCHAR(255),
+                    UUID VARCHAR(255),
+                    updated_at VARCHAR(255)
+                );
+            """)
+            conn.exec_driver_sql("""
+                INSERT INTO djmdHistory (ID, Name, DateCreated, Attribute, ParentID) 
+                VALUES ('100', 'HISTORY 2026-09-14', '2026-09-14 16:00:00', 0, '202609');
+            """)
+            conn.exec_driver_sql("""
+                INSERT INTO djmdHistory (ID, Name, Attribute, ParentID) 
+                VALUES ('2026', '2026', 1, 'root');
+            """)
+            conn.exec_driver_sql("""
+                INSERT INTO djmdHistory (ID, Name, Attribute, ParentID) 
+                VALUES ('202609', '9', 1, '2026');
+            """)
+
+        records = fetch_history_records(engine, "djmdHistory")
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["parent_id"], "202609")
+
+        new_parent = update_history_record(
+            engine,
+            records[0],
+            "HISTORY 2026-08-31",
+            "2026-08-31 23:00:00",
+        )
+        self.assertEqual(new_parent, "202608")
+
+        with engine.connect() as conn:
+            session = conn.exec_driver_sql("SELECT Name, DateCreated, ParentID, updated_at FROM djmdHistory WHERE ID = '100'").mappings().first()
+            self.assertEqual(session["Name"], "HISTORY 2026-08-31")
+            self.assertEqual(session["DateCreated"], "2026-08-31 23:00:00")
+            self.assertEqual(session["ParentID"], "202608")
+            self.assertIsNotNone(session["updated_at"])
+
+            aug_folder = conn.exec_driver_sql("SELECT ID, Name, ParentID, Attribute FROM djmdHistory WHERE ID = '202608'").mappings().first()
+            self.assertIsNotNone(aug_folder)
+            self.assertEqual(aug_folder["Name"], "8")
+            self.assertEqual(aug_folder["ParentID"], "2026")
+            self.assertEqual(aug_folder["Attribute"], 1)
+
+    def test_update_realigns_folder_when_date_already_set(self):
+        engine = create_engine("sqlite:///:memory:")
+        with engine.begin() as conn:
+            conn.exec_driver_sql("""
+                CREATE TABLE djmdHistory (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    Name VARCHAR(255),
+                    Attribute INTEGER,
+                    ParentID VARCHAR(255),
+                    DateCreated VARCHAR(255)
+                );
+            """)
+            conn.exec_driver_sql("""
+                INSERT INTO djmdHistory (ID, Name, DateCreated, Attribute, ParentID) 
+                VALUES ('100', 'HISTORY 2026-08-31', '2026-08-31 15:00:00', 0, '202609');
+            """)
+
+        records = fetch_history_records(engine, "djmdHistory")
+        new_parent = update_history_record(engine, records[0], "SET IN AUGUST", None)
+        self.assertEqual(new_parent, "202608")
+
+        with engine.connect() as conn:
+            session = conn.exec_driver_sql("SELECT ParentID, Name FROM djmdHistory WHERE ID = '100'").mappings().first()
+            self.assertEqual(session["ParentID"], "202608")
+            self.assertEqual(session["Name"], "SET IN AUGUST")
+
     def test_fetch_and_update_device_history(self):
         engine = create_engine("sqlite:///:memory:")
         with engine.begin() as conn:
@@ -138,6 +243,55 @@ class TestRenameHistory(unittest.TestCase):
         records = fetch_history_records(engine, "djmdHistory")
         self.assertEqual(records[0]["name"], "HISTORY 2026-09-13")
         self.assertEqual(records[0]["date"], "2026-09-13")
+
+    def test_interactive_session_detects_mismatch_and_updates_parent(self):
+        engine = create_engine("sqlite:///:memory:")
+        with engine.begin() as conn:
+            conn.exec_driver_sql("""
+                CREATE TABLE djmdHistory (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    Name VARCHAR(255),
+                    DateCreated VARCHAR(255),
+                    Attribute INTEGER,
+                    ParentID VARCHAR(255)
+                );
+            """)
+            conn.exec_driver_sql("""
+                INSERT INTO djmdHistory (ID, Name, DateCreated, Attribute, ParentID) 
+                VALUES ('42', 'HISTORY 2026-08-31', '2026-08-31 22:00:00', 0, '202609');
+            """)
+            conn.exec_driver_sql("""
+                INSERT INTO djmdHistory (ID, Name, Attribute, ParentID) 
+                VALUES ('2026', '2026', 1, 'root');
+            """)
+            conn.exec_driver_sql("""
+                INSERT INTO djmdHistory (ID, Name, Attribute, ParentID) 
+                VALUES ('202609', '9', 1, '2026');
+            """)
+
+        with patch("questionary.select") as mock_select, \
+             patch("questionary.text") as mock_text, \
+             patch("questionary.confirm") as mock_confirm:
+
+            mock_select.return_value.ask.return_value = "42"
+            # User simply confirms the existing name and date
+            mock_text.side_effect = [
+                MagicMock(ask=MagicMock(return_value="HISTORY 2026-08-31")),
+                MagicMock(ask=MagicMock(return_value="2026-08-31 22:00:00")),
+            ]
+            mock_confirm.return_value.ask.return_value = False
+
+            run_interactive_session(engine, "djmdHistory", "dummy.db")
+
+            # Verify choice had mismatch warning indicator
+            choices = mock_select.call_args[1]["choices"]
+            first_choice = choices[0]
+            self.assertIn("⚠️", first_choice.title)
+            self.assertIn("Folder: 202609 ➔ 202608", first_choice.title)
+
+        with engine.connect() as conn:
+            session = conn.exec_driver_sql("SELECT ParentID FROM djmdHistory WHERE ID = '42'").mappings().first()
+            self.assertEqual(session["ParentID"], "202608")
 
     def test_main_aborts_when_rekordbox_running(self):
         with patch("rekordbox_collection_fixer.rename_history.ensure_rekordbox_not_running", side_effect=SystemExit(1)):

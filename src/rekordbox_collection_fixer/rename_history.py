@@ -2,8 +2,9 @@
 
 import argparse
 import os
+import re
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import questionary
@@ -84,13 +85,119 @@ def open_database(db_path: str) -> Tuple[Engine, str]:
     )
 
 
+def parse_year_month(date_str: Optional[str]) -> Tuple[Optional[int], Optional[int]]:
+    """Extract (year, month) tuple from a date string (e.g. '2026-08-31 23:00:00')."""
+    if not date_str:
+        return None, None
+    m = re.search(r"(\d{4})[-/.]?(\d{2})", date_str.strip())
+    if m:
+        try:
+            y = int(m.group(1))
+            mon = int(m.group(2))
+            if 1900 <= y <= 2100 and 1 <= mon <= 12:
+                return y, mon
+        except ValueError:
+            pass
+    return None, None
+
+
+def normalize_date_input(new_date: str, current_date: Optional[str] = None) -> str:
+    """Normalize user date input: if user inputs only YYYY-MM-DD and current_date had a time part, preserve it."""
+    cleaned = new_date.strip()
+    if re.match(r"^\d{4}-\d{2}-\d{2}$", cleaned):
+        if current_date and " " in current_date.strip():
+            time_part = current_date.strip().split(" ", 1)[1]
+            if time_part:
+                return f"{cleaned} {time_part}"
+    return cleaned
+
+
+def ensure_djmd_history_folders(
+    conn: Any,
+    year: int,
+    month: int,
+    date_str: str,
+    cols: set,
+) -> str:
+    """Ensure Year and Month folder records exist in djmdHistory table.
+
+    Returns the target Month folder ID (e.g. '202608').
+    """
+    now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3] + " +00:00"
+    year_id = str(year)
+    month_id = f"{year}{month:02d}"
+
+    # 1. Check and create Year folder if missing
+    has_year = conn.exec_driver_sql(
+        "SELECT 1 FROM djmdHistory WHERE ID = :id", {"id": year_id}
+    ).fetchone()
+
+    if not has_year:
+        year_data = {
+            "ID": year_id,
+            "Name": year_id,
+            "ParentID": "root",
+            "Attribute": 1,
+            "DateCreated": date_str,
+            "UUID": year_id,
+            "Seq": 1,
+            "rb_data_status": 0,
+            "rb_local_data_status": 0,
+            "rb_local_deleted": 0,
+            "rb_local_synced": 1,
+            "created_at": now_utc,
+            "updated_at": now_utc,
+        }
+        insert_cols = [k for k in year_data if k in cols]
+        col_names = ", ".join(insert_cols)
+        placeholders = ", ".join(f":{k}" for k in insert_cols)
+        conn.execute(
+            text(f"INSERT INTO djmdHistory ({col_names}) VALUES ({placeholders})"),
+            {k: year_data[k] for k in insert_cols},
+        )
+
+    # 2. Check and create Month folder if missing
+    has_month = conn.exec_driver_sql(
+        "SELECT 1 FROM djmdHistory WHERE ID = :id", {"id": month_id}
+    ).fetchone()
+
+    if not has_month:
+        month_data = {
+            "ID": month_id,
+            "Name": str(month),
+            "ParentID": year_id,
+            "Attribute": 1,
+            "DateCreated": date_str,
+            "UUID": month_id,
+            "Seq": month,
+            "rb_data_status": 0,
+            "rb_local_data_status": 0,
+            "rb_local_deleted": 0,
+            "rb_local_synced": 1,
+            "created_at": now_utc,
+            "updated_at": now_utc,
+        }
+        insert_cols = [k for k in month_data if k in cols]
+        col_names = ", ".join(insert_cols)
+        placeholders = ", ".join(f":{k}" for k in insert_cols)
+        conn.execute(
+            text(f"INSERT INTO djmdHistory ({col_names}) VALUES ({placeholders})"),
+            {k: month_data[k] for k in insert_cols},
+        )
+
+    return month_id
+
+
 def fetch_history_records(engine: Engine, table_format: str) -> List[Dict[str, Any]]:
     """Fetch history items from either djmdHistory or history table."""
     records = []
     with engine.connect() as conn:
         if table_format == "djmdHistory":
-            query = """
-                SELECT ID, Name, DateCreated, Attribute 
+            cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(djmdHistory);").fetchall()}
+            has_parent = "ParentID" in cols
+            select_parent = ", ParentID" if has_parent else ""
+            query = f"""
+                SELECT ID, Name, DateCreated, Attribute{select_parent}
                 FROM djmdHistory 
                 WHERE Attribute = 0 OR Attribute IS NULL
                 ORDER BY rowid DESC;
@@ -101,6 +208,7 @@ def fetch_history_records(engine: Engine, table_format: str) -> List[Dict[str, A
                     "id": str(r[0]),
                     "name": r[1] or "(Untitled)",
                     "date": r[2] or "",
+                    "parent_id": str(r[4]) if has_parent and len(r) > 4 and r[4] is not None else None,
                     "table": "djmdHistory",
                 })
         elif table_format == "history":
@@ -116,6 +224,7 @@ def fetch_history_records(engine: Engine, table_format: str) -> List[Dict[str, A
                     "id": str(r[0]),
                     "name": r[1] or "(Untitled)",
                     "date": "",
+                    "parent_id": None,
                     "table": "history",
                 })
     return records
@@ -126,27 +235,62 @@ def update_history_record(
     record: Dict[str, Any],
     new_name: str,
     new_date: Optional[str] = None,
-) -> None:
-    """Update a history entry in place in the database."""
+) -> Optional[str]:
+    """Update a history entry in place in the database.
+
+    For djmdHistory, ensures target Year/Month folders exist and automatically
+    updates ParentID to the correct month folder.
+    Returns the target ParentID if updated, or None.
+    """
+    target_parent_id: Optional[str] = None
+    now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3] + " +00:00"
+
     with engine.begin() as conn:
         if record["table"] == "djmdHistory":
+            cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(djmdHistory);").fetchall()}
+
+            date_for_folder = new_date if new_date is not None else record.get("date")
+            if date_for_folder and "ParentID" in cols:
+                y, m = parse_year_month(date_for_folder)
+                if y and m:
+                    target_parent_id = ensure_djmd_history_folders(conn, y, m, date_for_folder, cols)
+
             if new_date is not None:
-                conn.execute(
-                    text(
-                        "UPDATE djmdHistory SET Name = :name, DateCreated = :date WHERE ID = :id"
-                    ),
-                    {"name": new_name, "date": new_date, "id": record["id"]},
-                )
+                set_clauses = ["Name = :name", "DateCreated = :date"]
+                params: Dict[str, Any] = {"name": new_name, "date": new_date, "id": record["id"]}
+
+                if target_parent_id and "ParentID" in cols:
+                    set_clauses.append("ParentID = :parent_id")
+                    params["parent_id"] = target_parent_id
+
+                if "updated_at" in cols:
+                    set_clauses.append("updated_at = :updated_at")
+                    params["updated_at"] = now_utc
+
+                sql = f"UPDATE djmdHistory SET {', '.join(set_clauses)} WHERE ID = :id"
+                conn.execute(text(sql), params)
             else:
-                conn.execute(
-                    text("UPDATE djmdHistory SET Name = :name WHERE ID = :id"),
-                    {"name": new_name, "id": record["id"]},
-                )
+                set_clauses = ["Name = :name"]
+                params = {"name": new_name, "id": record["id"]}
+
+                if target_parent_id and "ParentID" in cols:
+                    set_clauses.append("ParentID = :parent_id")
+                    params["parent_id"] = target_parent_id
+
+                if "updated_at" in cols:
+                    set_clauses.append("updated_at = :updated_at")
+                    params["updated_at"] = now_utc
+
+                sql = f"UPDATE djmdHistory SET {', '.join(set_clauses)} WHERE ID = :id"
+                conn.execute(text(sql), params)
+
         elif record["table"] == "history":
             conn.execute(
                 text("UPDATE history SET name = :name WHERE history_id = :id"),
                 {"name": new_name, "id": int(record["id"])},
             )
+
+    return target_parent_id
 
 
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
@@ -241,7 +385,17 @@ def run_interactive_session(engine: Engine, table_format: str, db_path: str) -> 
         choices = []
         for r in records:
             date_str = f" [{r['date']}]" if r["date"] else ""
-            title = f"{r['name']}{date_str} (ID: {r['id']})"
+            ey, em = parse_year_month(r["date"])
+            expected_folder = f"{ey}{em:02d}" if ey and em else None
+            mismatch = (
+                r.get("parent_id") is not None
+                and expected_folder is not None
+                and r["parent_id"] != expected_folder
+            )
+            if mismatch:
+                title = f"⚠️  {r['name']}{date_str} (ID: {r['id']}) [Folder: {r['parent_id']} ➔ {expected_folder}]"
+            else:
+                title = f"{r['name']}{date_str} (ID: {r['id']})"
             choices.append(questionary.Choice(title=title, value=r["id"]))
 
         choices.append(questionary.Separator())
@@ -279,31 +433,47 @@ def run_interactive_session(engine: Engine, table_format: str, db_path: str) -> 
         # Prefill date if table supports date (djmdHistory)
         new_date = None
         if selected_rec["table"] == "djmdHistory":
-            new_date = questionary.text(
+            user_date = questionary.text(
                 "Edit history Date (DateCreated):",
                 default=current_date,
             ).ask()
-            if new_date is None:
+            if user_date is None:
                 print("Cancelled.")
                 return
+            new_date = normalize_date_input(user_date, current_date)
 
-        # Check if modified
+        # Check if modified or if parent folder needs realignment
         changed = False
         if new_name != current_name:
             changed = True
         if new_date is not None and new_date != current_date:
             changed = True
 
+        target_y, target_m = parse_year_month(new_date or current_date)
+        expected_parent = f"{target_y}{target_m:02d}" if target_y and target_m else None
+        if (
+            selected_rec["table"] == "djmdHistory"
+            and selected_rec.get("parent_id")
+            and expected_parent
+            and selected_rec["parent_id"] != expected_parent
+        ):
+            changed = True
+
         if not changed:
             print("ℹ️  No changes made.")
         else:
             try:
-                update_history_record(engine, selected_rec, new_name, new_date)
+                new_parent_id = update_history_record(engine, selected_rec, new_name, new_date)
                 print(f"\n✅ Successfully updated history (ID: {selected_id})!")
                 if current_name != new_name:
                     print(f"   Name: '{current_name}' ➔ '{new_name}'")
                 if new_date is not None and current_date != new_date:
                     print(f"   Date: '{current_date}' ➔ '{new_date}'")
+                old_parent = selected_rec.get("parent_id")
+                if new_parent_id and old_parent and new_parent_id != old_parent:
+                    print(f"   Folder: '{old_parent}' ➔ '{new_parent_id}' (tree hierarchy updated)")
+                elif new_parent_id and not old_parent:
+                    print(f"   Folder: '{new_parent_id}'")
             except Exception as e:
                 print(f"\n❌ Failed to save changes: {e}")
                 return
