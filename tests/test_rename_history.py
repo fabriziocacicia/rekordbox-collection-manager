@@ -70,11 +70,11 @@ class TestRenameHistory(unittest.TestCase):
         self.assertEqual(records[0]["id"], "100")
         self.assertEqual(records[0]["name"], "HISTORY 2026-09-14")
 
-        update_history_record(engine, records[0], "HISTORY 2026-09-13")
+        update_history_record(engine, records[0], "HISTORY 2026-09-13", "2026-09-13")
 
         updated_records = fetch_history_records(engine, "djmdHistory")
         self.assertEqual(updated_records[0]["name"], "HISTORY 2026-09-13")
-        self.assertEqual(updated_records[0]["date"], "2026-09-14")
+        self.assertEqual(updated_records[0]["date"], "2026-09-13")
 
     def test_fetch_and_update_device_history(self):
         engine = create_engine("sqlite:///:memory:")
@@ -122,16 +122,20 @@ class TestRenameHistory(unittest.TestCase):
              patch("questionary.confirm") as mock_confirm:
 
             mock_select.return_value.ask.return_value = "42"
-            mock_text.return_value.ask.return_value = "HISTORY 2026-09-13"
+            mock_text.side_effect = [
+                MagicMock(ask=MagicMock(return_value="HISTORY 2026-09-13")),
+                MagicMock(ask=MagicMock(return_value="2026-09-13")),
+            ]
             mock_confirm.return_value.ask.return_value = False
 
             run_interactive_session(engine, "djmdHistory", "dummy.db")
 
-            self.assertEqual(mock_text.call_args[1]["default"], "HISTORY 2026-09-14")
+            self.assertEqual(mock_text.call_args_list[0][1]["default"], "HISTORY 2026-09-14")
+            self.assertEqual(mock_text.call_args_list[1][1]["default"], "2026-09-14")
 
         records = fetch_history_records(engine, "djmdHistory")
         self.assertEqual(records[0]["name"], "HISTORY 2026-09-13")
-        self.assertEqual(records[0]["date"], "2026-09-14")
+        self.assertEqual(records[0]["date"], "2026-09-13")
 
 
 if __name__ == "__main__":

@@ -118,14 +118,23 @@ def update_history_record(
     engine: Engine,
     record: Dict[str, Any],
     new_name: str,
+    new_date: Optional[str] = None,
 ) -> None:
     """Update a history entry in place in the database."""
     with engine.begin() as conn:
         if record["table"] == "djmdHistory":
-            conn.execute(
-                text("UPDATE djmdHistory SET Name = :name WHERE ID = :id"),
-                {"name": new_name, "id": record["id"]},
-            )
+            if new_date is not None:
+                conn.execute(
+                    text(
+                        "UPDATE djmdHistory SET Name = :name, DateCreated = :date WHERE ID = :id"
+                    ),
+                    {"name": new_name, "date": new_date, "id": record["id"]},
+                )
+            else:
+                conn.execute(
+                    text("UPDATE djmdHistory SET Name = :name WHERE ID = :id"),
+                    {"name": new_name, "id": record["id"]},
+                )
         elif record["table"] == "history":
             conn.execute(
                 text("UPDATE history SET name = :name WHERE history_id = :id"),
@@ -247,6 +256,7 @@ def run_interactive_session(engine: Engine, table_format: str, db_path: str) -> 
             return
 
         current_name = selected_rec["name"]
+        current_date = selected_rec["date"]
 
         # Prefill name in terminal buffer for editing
         new_name = questionary.text(
@@ -258,13 +268,34 @@ def run_interactive_session(engine: Engine, table_format: str, db_path: str) -> 
             print("Cancelled.")
             return
 
-        if new_name == current_name:
+        # Prefill date if table supports date (djmdHistory)
+        new_date = None
+        if selected_rec["table"] == "djmdHistory":
+            new_date = questionary.text(
+                "Edit history Date (DateCreated):",
+                default=current_date,
+            ).ask()
+            if new_date is None:
+                print("Cancelled.")
+                return
+
+        # Check if modified
+        changed = False
+        if new_name != current_name:
+            changed = True
+        if new_date is not None and new_date != current_date:
+            changed = True
+
+        if not changed:
             print("ℹ️  No changes made.")
         else:
             try:
-                update_history_record(engine, selected_rec, new_name)
+                update_history_record(engine, selected_rec, new_name, new_date)
                 print(f"\n✅ Successfully updated history (ID: {selected_id})!")
-                print(f"   Name: '{current_name}' ➔ '{new_name}'")
+                if current_name != new_name:
+                    print(f"   Name: '{current_name}' ➔ '{new_name}'")
+                if new_date is not None and current_date != new_date:
+                    print(f"   Date: '{current_date}' ➔ '{new_date}'")
             except Exception as e:
                 print(f"\n❌ Failed to save changes: {e}")
                 return
