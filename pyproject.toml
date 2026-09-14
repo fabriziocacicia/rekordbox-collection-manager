@@ -1,0 +1,20 @@
+[project]
+name = "rekordbox-collection-fixer"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Fabrizio", email = "mail@fabriziocacicia.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "pyrekordbox>=0.4.4",
+    "questionary>=2.1.1",
+]
+
+[project.scripts]
+rename-history = "rekordbox_collection_fixer.rename_history:main"
+
+[build-system]
+requires = ["uv_build>=0.12.5,<0.13.0"]
+build-backend = "uv_build"
