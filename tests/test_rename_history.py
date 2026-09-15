@@ -237,15 +237,19 @@ class TestRenameHistory(unittest.TestCase):
 
             mock_select.return_value.ask.return_value = "42"
             mock_text.side_effect = [
-                MagicMock(ask=MagicMock(return_value="HISTORY 2026-09-13")),
-                MagicMock(ask=MagicMock(return_value="2026-09-13")),
+                MagicMock(ask=MagicMock(return_value="HISTORY 2026-09-13")),  # Base
+                MagicMock(ask=MagicMock(return_value="")),                    # Location
+                MagicMock(ask=MagicMock(return_value="")),                    # Artist
+                MagicMock(ask=MagicMock(return_value="2026-09-13")),          # Date
             ]
             mock_confirm.return_value.ask.return_value = False
 
             run_interactive_session(engine, "djmdHistory", "dummy.db")
 
             self.assertEqual(mock_text.call_args_list[0][1]["default"], "HISTORY 2026-09-14")
-            self.assertEqual(mock_text.call_args_list[1][1]["default"], "2026-09-13")
+            self.assertEqual(mock_text.call_args_list[1][1]["default"], "")
+            self.assertEqual(mock_text.call_args_list[2][1]["default"], "")
+            self.assertEqual(mock_text.call_args_list[3][1]["default"], "2026-09-13")
 
         records = fetch_history_records(engine, "djmdHistory")
         self.assertEqual(records[0]["name"], "HISTORY 2026-09-13")
@@ -283,8 +287,10 @@ class TestRenameHistory(unittest.TestCase):
             mock_select.return_value.ask.return_value = "42"
             # User simply confirms the existing name and date
             mock_text.side_effect = [
-                MagicMock(ask=MagicMock(return_value="HISTORY 2026-08-31")),
-                MagicMock(ask=MagicMock(return_value="2026-08-31 22:00:00")),
+                MagicMock(ask=MagicMock(return_value="HISTORY 2026-08-31")),  # Base
+                MagicMock(ask=MagicMock(return_value="")),                    # Location
+                MagicMock(ask=MagicMock(return_value="")),                    # Artist
+                MagicMock(ask=MagicMock(return_value="2026-08-31 22:00:00")), # Date
             ]
             mock_confirm.return_value.ask.return_value = False
 
@@ -299,6 +305,88 @@ class TestRenameHistory(unittest.TestCase):
         with engine.connect() as conn:
             session = conn.exec_driver_sql("SELECT ParentID FROM djmdHistory WHERE ID = '42'").mappings().first()
             self.assertEqual(session["ParentID"], "202608")
+
+    def test_interactive_session_custom_schema_location_and_artist(self):
+        engine = create_engine("sqlite:///:memory:")
+        with engine.begin() as conn:
+            conn.exec_driver_sql("""
+                CREATE TABLE djmdHistory (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    Name VARCHAR(255),
+                    DateCreated VARCHAR(255),
+                    Attribute INTEGER,
+                    ParentID VARCHAR(255)
+                );
+            """)
+            conn.exec_driver_sql("""
+                INSERT INTO djmdHistory (ID, Name, DateCreated, Attribute, ParentID) 
+                VALUES ('99', 'HISTORY 2026-07-24 (1) @ Space w Carl Cox', '2026-07-24 23:00:00', 0, '202607');
+            """)
+
+        with patch("questionary.select") as mock_select, \
+             patch("questionary.text") as mock_text, \
+             patch("questionary.confirm") as mock_confirm:
+
+            mock_select.return_value.ask.return_value = "99"
+            mock_text.side_effect = [
+                MagicMock(ask=MagicMock(return_value="HISTORY 2026-07-25 (2)")),  # Base
+                MagicMock(ask=MagicMock(return_value="Amnesia")),                 # Location
+                MagicMock(ask=MagicMock(return_value="Marco Carola")),            # Artist
+                MagicMock(ask=MagicMock(return_value="2026-07-25 23:00:00")),     # Date
+            ]
+            mock_confirm.return_value.ask.return_value = False
+
+            run_interactive_session(engine, "djmdHistory", "dummy.db")
+
+            # Check that defaults were pre-filled correctly by parsing existing name
+            self.assertEqual(mock_text.call_args_list[0][1]["default"], "HISTORY 2026-07-24 (1)")
+            self.assertEqual(mock_text.call_args_list[1][1]["default"], "Space")
+            self.assertEqual(mock_text.call_args_list[2][1]["default"], "Carl Cox")
+
+        records = fetch_history_records(engine, "djmdHistory")
+        self.assertEqual(records[0]["name"], "HISTORY 2026-07-25 (2) @ Amnesia w Marco Carola")
+        self.assertEqual(records[0]["date"], "2026-07-25 23:00:00")
+
+    def test_interactive_session_clear_location_add_artist(self):
+        engine = create_engine("sqlite:///:memory:")
+        with engine.begin() as conn:
+            conn.exec_driver_sql("""
+                CREATE TABLE djmdHistory (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    Name VARCHAR(255),
+                    DateCreated VARCHAR(255),
+                    Attribute INTEGER,
+                    ParentID VARCHAR(255)
+                );
+            """)
+            conn.exec_driver_sql("""
+                INSERT INTO djmdHistory (ID, Name, DateCreated, Attribute, ParentID) 
+                VALUES ('101', 'HISTORY 2026-07-24 @ Fabric', '2026-07-24 23:00:00', 0, '202607');
+            """)
+
+        with patch("questionary.select") as mock_select, \
+             patch("questionary.text") as mock_text, \
+             patch("questionary.confirm") as mock_confirm:
+
+            mock_select.return_value.ask.return_value = "101"
+            # User leaves base unchanged, clears location, and fills artist
+            mock_text.side_effect = [
+                MagicMock(ask=MagicMock(return_value="HISTORY 2026-07-24")),  # Base
+                MagicMock(ask=MagicMock(return_value="")),                    # Cleared location
+                MagicMock(ask=MagicMock(return_value="Carl Cox")),            # Added artist
+                MagicMock(ask=MagicMock(return_value="2026-07-24 23:00:00")), # Date
+            ]
+            mock_confirm.return_value.ask.return_value = False
+
+            run_interactive_session(engine, "djmdHistory", "dummy.db")
+
+            # Check prefilled defaults
+            self.assertEqual(mock_text.call_args_list[0][1]["default"], "HISTORY 2026-07-24")
+            self.assertEqual(mock_text.call_args_list[1][1]["default"], "Fabric")
+            self.assertEqual(mock_text.call_args_list[2][1]["default"], "")
+
+        records = fetch_history_records(engine, "djmdHistory")
+        self.assertEqual(records[0]["name"], "HISTORY 2026-07-24 w Carl Cox")
 
     def test_main_aborts_when_rekordbox_running(self):
         with patch("rekordbox_collection_fixer.rename_history.ensure_rekordbox_not_running", side_effect=SystemExit(1)):

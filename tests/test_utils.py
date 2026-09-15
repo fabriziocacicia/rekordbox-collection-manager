@@ -11,6 +11,7 @@ from sqlalchemy import create_engine
 from rekordbox_collection_fixer.utils import (
     MONTH_NAME_TO_INT,
     clean_session_name,
+    compose_history_name,
     detect_content_table,
     ensure_rekordbox_not_running,
     extract_date_from_name,
@@ -19,6 +20,7 @@ from rekordbox_collection_fixer.utils import (
     is_rekordbox_running,
     natural_sort_key,
     normalize_date_input,
+    parse_history_name,
     parse_month_number,
     parse_session_paren_number,
     parse_year_month,
@@ -231,7 +233,82 @@ class TestUtils(unittest.TestCase):
         self.assertEqual(clean_session_name(None), "")
         self.assertEqual(clean_session_name(""), "")
 
+    def test_parse_history_name(self):
+        # 1. Base names only
+        self.assertEqual(parse_history_name("HISTORY 2026-07-24"), ("HISTORY 2026-07-24", "", ""))
+        self.assertEqual(parse_history_name("HISTORY 2026-07-24 (1)"), ("HISTORY 2026-07-24 (1)", "", ""))
+        self.assertEqual(parse_history_name("Sunset Live"), ("Sunset Live", "", ""))
+
+        # 2. Location only (@)
+        self.assertEqual(parse_history_name("HISTORY 2026-07-24 @ Fabric"), ("HISTORY 2026-07-24", "Fabric", ""))
+        self.assertEqual(parse_history_name("HISTORY 2026-07-24 (1) @ Fabric"), ("HISTORY 2026-07-24 (1)", "Fabric", ""))
+        self.assertEqual(parse_history_name("Club Night @ Space Ibiza"), ("Club Night", "Space Ibiza", ""))
+
+        # 3. Artist only (w)
+        self.assertEqual(parse_history_name("HISTORY 2026-07-24 w Carl Cox"), ("HISTORY 2026-07-24", "", "Carl Cox"))
+        self.assertEqual(parse_history_name("HISTORY 2026-07-24 (1) w Carl Cox"), ("HISTORY 2026-07-24 (1)", "", "Carl Cox"))
+        self.assertEqual(parse_history_name("HISTORY 2026-07-24 w/ Carl Cox"), ("HISTORY 2026-07-24", "", "Carl Cox"))
+
+        # 4. Location AND Artist (@ and w)
+        self.assertEqual(
+            parse_history_name("HISTORY 2026-07-24 @ Fabric w Carl Cox"),
+            ("HISTORY 2026-07-24", "Fabric", "Carl Cox"),
+        )
+        self.assertEqual(
+            parse_history_name("HISTORY 2026-07-24 (1) @ Fabric w Carl Cox"),
+            ("HISTORY 2026-07-24 (1)", "Fabric", "Carl Cox"),
+        )
+        self.assertEqual(
+            parse_history_name("HISTORY 2026-07-24 @ Space w/ Carl Cox & Friends"),
+            ("HISTORY 2026-07-24", "Space", "Carl Cox & Friends"),
+        )
+        # Location with word starting with W
+        self.assertEqual(
+            parse_history_name("HISTORY 2026-07-24 @ Warehouse Project w Bicep"),
+            ("HISTORY 2026-07-24", "Warehouse Project", "Bicep"),
+        )
+
+        # 5. Empty and edge cases
+        self.assertEqual(parse_history_name(""), ("", "", ""))
+        self.assertEqual(parse_history_name(None), ("", "", ""))
+        self.assertEqual(parse_history_name("HISTORY 2026-07-24 @"), ("HISTORY 2026-07-24", "", ""))
+        self.assertEqual(parse_history_name("HISTORY 2026-07-24 @ Club w"), ("HISTORY 2026-07-24", "Club", ""))
+
+    def test_compose_history_name(self):
+        # 1. Base only
+        self.assertEqual(compose_history_name("HISTORY 2026-07-24"), "HISTORY 2026-07-24")
+        self.assertEqual(compose_history_name("HISTORY 2026-07-24 (1)", "", ""), "HISTORY 2026-07-24 (1)")
+
+        # 2. Base + Location
+        self.assertEqual(compose_history_name("HISTORY 2026-07-24", location="Fabric"), "HISTORY 2026-07-24 @ Fabric")
+        self.assertEqual(compose_history_name("HISTORY 2026-07-24 (1)", location="@ Fabric"), "HISTORY 2026-07-24 (1) @ Fabric")
+
+        # 3. Base + Artist
+        self.assertEqual(compose_history_name("HISTORY 2026-07-24", artist="Carl Cox"), "HISTORY 2026-07-24 w Carl Cox")
+        self.assertEqual(compose_history_name("HISTORY 2026-07-24", artist="w Carl Cox"), "HISTORY 2026-07-24 w Carl Cox")
+        self.assertEqual(compose_history_name("HISTORY 2026-07-24", artist="w/ Carl Cox"), "HISTORY 2026-07-24 w Carl Cox")
+
+        # 4. Base + Location + Artist
+        self.assertEqual(
+            compose_history_name("HISTORY 2026-07-24", location="Fabric", artist="Carl Cox"),
+            "HISTORY 2026-07-24 @ Fabric w Carl Cox",
+        )
+        self.assertEqual(
+            compose_history_name("HISTORY 2026-07-24 (1)", location="@ Amnesia", artist="w Marco Carola"),
+            "HISTORY 2026-07-24 (1) @ Amnesia w Marco Carola",
+        )
+
+        # 5. Redundant base parsing cleanup
+        self.assertEqual(
+            compose_history_name("HISTORY 2026-07-24 @ OldClub", location="NewClub"),
+            "HISTORY 2026-07-24 @ NewClub",
+        )
+        self.assertEqual(
+            compose_history_name("HISTORY 2026-07-24 w OldDJ", artist="NewDJ"),
+            "HISTORY 2026-07-24 w NewDJ",
+        )
 
 
 if __name__ == "__main__":
     unittest.main()
+

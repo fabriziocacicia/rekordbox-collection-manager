@@ -19,6 +19,7 @@ from rekordbox_collection_fixer.utils import (
     DEVICE_LIBRARY_PLUS_KEY,
     MONTH_NAME_TO_INT,
     clean_session_name,
+    compose_history_name,
     ensure_rekordbox_not_running,
     extract_date_from_name,
     extract_year_month_from_name_or_date,
@@ -28,6 +29,7 @@ from rekordbox_collection_fixer.utils import (
     natural_sort_key,
     normalize_date_input,
     open_database,
+    parse_history_name,
     parse_month_number,
     parse_session_paren_number,
     parse_year_month,
@@ -502,15 +504,44 @@ def run_interactive_session(engine: Engine, table_format: str, db_path: str) -> 
         current_name = selected_rec["name"]
         current_date = selected_rec["date"]
 
-        # Prefill name in terminal buffer for editing
-        new_name = questionary.text(
-            "Edit history Name:",
-            default=current_name,
-        ).ask()
+        # Parse current name into base, location (@), and artist (w)
+        current_base, current_loc, current_art = parse_history_name(current_name)
 
-        if new_name is None:
+        # 1. Base name prompt
+        new_base = questionary.text(
+            "Edit history Name (base):",
+            default=current_base,
+        ).ask()
+        if new_base is None:
             print("Cancelled.")
             return
+
+        # 2. Location prompt (@)
+        new_loc = questionary.text(
+            "Edit Location (@, optional):",
+            default=current_loc,
+        ).ask()
+        if new_loc is None:
+            print("Cancelled.")
+            return
+
+        # 3. Artist prompt (w)
+        new_art = questionary.text(
+            "Edit Artist(s) (w, optional):",
+            default=current_art,
+        ).ask()
+        if new_art is None:
+            print("Cancelled.")
+            return
+
+        # If user cleared base name but kept other parts, fallback safely
+        if not new_base.strip() and not new_loc.strip() and not new_art.strip():
+            print("❌ History name cannot be empty.")
+            return
+        if not new_base.strip():
+            new_base = current_base or "(Untitled)"
+
+        new_name = compose_history_name(new_base, new_loc, new_art)
 
         # Prefill date if table supports date (djmdHistory)
         new_date = None

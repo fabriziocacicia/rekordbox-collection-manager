@@ -435,3 +435,108 @@ def clean_session_name(name: Optional[str]) -> str:
         return ""
     return re.sub(r"\s+", " ", re.sub(r"\s*\(\s*\d+\s*\)", " ", str(name))).strip()
 
+
+def parse_history_name(name: Optional[str]) -> Tuple[str, str, str]:
+    """Parse history session name into (base_name, location, artist).
+
+    Recognizes the custom schema:
+        <Base Name> [@ <Location>] [w <Artist(s)>]
+
+    Examples:
+        - "HISTORY 2026-07-24" -> ("HISTORY 2026-07-24", "", "")
+        - "HISTORY 2026-07-24 (1)" -> ("HISTORY 2026-07-24 (1)", "", "")
+        - "HISTORY 2026-07-24 @ Fabric" -> ("HISTORY 2026-07-24", "Fabric", "")
+        - "HISTORY 2026-07-24 w Carl Cox" -> ("HISTORY 2026-07-24", "", "Carl Cox")
+        - "HISTORY 2026-07-24 @ Fabric w Carl Cox" -> ("HISTORY 2026-07-24", "Fabric", "Carl Cox")
+        - "HISTORY 2026-07-24 (1) @ Fabric w Carl Cox" -> ("HISTORY 2026-07-24 (1)", "Fabric", "Carl Cox")
+        - "HISTORY 2026-07-24 @ Fabric w/ Carl Cox" -> ("HISTORY 2026-07-24", "Fabric", "Carl Cox")
+
+    Returns:
+        Tuple of (base_name, location, artist) strings (defaults to empty strings if absent).
+    """
+    if not name:
+        return ("", "", "")
+
+    name_str = str(name).strip()
+
+    # Case 1: Location present marked by '@'
+    if "@" in name_str:
+        base_part, rest = name_str.split("@", 1)
+        base_name = base_part.strip()
+
+        # Check if rest contains ' w ' or ' w/ ' indicating artist(s)
+        match = re.search(r"\s+[wW](?:/)?(?:\s+|$)", rest)
+        if match:
+            location = rest[:match.start()].strip()
+            artist = rest[match.end():].strip()
+        else:
+            location = rest.strip()
+            artist = ""
+    else:
+        # Case 2: No '@', but artist may be present with ' w ' or ' w/ '
+        match = re.search(r"\s+[wW](?:/)?(?:\s+|$)", name_str)
+        if match:
+            base_name = name_str[:match.start()].strip()
+            location = ""
+            artist = name_str[match.end():].strip()
+        else:
+            base_name = name_str
+            location = ""
+            artist = ""
+
+    return (base_name, location, artist)
+
+
+def compose_history_name(
+    base_name: str,
+    location: Optional[str] = None,
+    artist: Optional[str] = None,
+) -> str:
+    """Compose full history session name from base name, optional location, and optional artist.
+
+    Schema:
+        <Base Name> [@ <Location>] [w <Artist(s)>]
+
+    Automatically strips accidental duplicate '@' or 'w' / 'w/' from location and artist inputs.
+    If base_name already contains '@' or 'w' sections and location/artist are provided,
+    cleans up redundancies.
+
+    Examples:
+        compose_history_name("HISTORY 2026-07-24")
+        -> "HISTORY 2026-07-24"
+        compose_history_name("HISTORY 2026-07-24", location="Fabric")
+        -> "HISTORY 2026-07-24 @ Fabric"
+        compose_history_name("HISTORY 2026-07-24", artist="Carl Cox")
+        -> "HISTORY 2026-07-24 w Carl Cox"
+        compose_history_name("HISTORY 2026-07-24 (1)", location="Fabric", artist="Carl Cox")
+        -> "HISTORY 2026-07-24 (1) @ Fabric w Carl Cox"
+    """
+    clean_base = str(base_name or "").strip()
+
+    clean_loc = str(location or "").strip()
+    if clean_loc.startswith("@"):
+        clean_loc = clean_loc.lstrip("@").strip()
+
+    clean_art = str(artist or "").strip()
+    clean_art = re.sub(r"^[wW](?:/|\s+)", "", clean_art).strip()
+
+    # If the user included '@' or 'w' inside clean_base, parse it to prevent duplication
+    parsed_base, parsed_loc, parsed_art = parse_history_name(clean_base)
+    if parsed_loc or parsed_art:
+        clean_base = parsed_base
+        if not clean_loc and parsed_loc:
+            clean_loc = parsed_loc
+        if not clean_art and parsed_art:
+            clean_art = parsed_art
+
+    parts = []
+    if clean_base:
+        parts.append(clean_base)
+    if clean_loc:
+        parts.append(f"@ {clean_loc}")
+    if clean_art:
+        parts.append(f"w {clean_art}")
+
+    return " ".join(parts)
+
+
