@@ -11,10 +11,12 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from rekordbox_collection_fixer.utils import (
+    detect_content_table,
     ensure_rekordbox_not_running,
+    get_rekordbox_timestamp,
     is_rekordbox_running,
     open_database,
-    resolve_db_path as utils_resolve_db_path,
+    resolve_db_path,
 )
 
 
@@ -61,24 +63,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def resolve_db_path(args: argparse.Namespace) -> str:
-    """Resolve database path from arguments or prompt."""
-    candidate = getattr(args, "db_path", None)
-    return utils_resolve_db_path(candidate)
 
-
-def detect_content_table(engine: Engine) -> str:
-    """Detect whether database uses djmdContent or content table."""
-    with engine.connect() as conn:
-        res = conn.exec_driver_sql(
-            "SELECT name FROM sqlite_master WHERE type='table';"
-        ).fetchall()
-        table_names = {r[0] for r in res}
-        if "djmdContent" in table_names:
-            return "djmdContent"
-        elif "content" in table_names:
-            return "content"
-    return "djmdContent"
 
 
 def search_tracks(
@@ -221,7 +206,7 @@ def update_track_play_count(
     if table_name is None:
         table_name = detect_content_table(engine)
 
-    now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3] + " +00:00"
+    now_utc = get_rekordbox_timestamp()
 
     with engine.begin() as conn:
         cols = {

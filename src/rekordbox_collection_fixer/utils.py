@@ -1,14 +1,28 @@
-"""Shared utilities for Rekordbox collection fixer tools."""
+"""Shared utilities for Rekordbox collection fixer tools.
 
+Organized into:
+1. Process & System Utilities
+2. Database & Path Resolution Utilities
+3. Date, Text & Sorting Utilities
+"""
+
+import argparse
 import os
+import re
 import shutil
 import subprocess
 import sys
-from typing import Optional, Tuple
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import questionary
 from pyrekordbox.db6.database import get_rekordbox_pid
+from sqlalchemy.engine import Engine
 
+
+# ==============================================================================
+# 1. Process & System Utilities
+# ==============================================================================
 
 def is_rekordbox_running() -> bool:
     """Check if Rekordbox application is currently running.
@@ -89,7 +103,16 @@ def ensure_rekordbox_not_running(force: bool = False, exit_on_running: bool = Tr
     return False
 
 
+# ==============================================================================
+# 2. Database & Path Resolution Utilities
+# ==============================================================================
+
 DEVICE_LIBRARY_PLUS_KEY = "r8gddnr4k847830ar6cqzbkk0el6qytmb3trbbx805jm74vez64i5o8fnrqryqls"
+
+
+def get_rekordbox_timestamp() -> str:
+    """Generate a UTC timestamp formatted for Rekordbox databases (e.g. '2026-09-15 13:48:00.123 +00:00')."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3] + " +00:00"
 
 
 def get_default_master_db_path() -> Optional[str]:
@@ -162,11 +185,31 @@ def open_database(db_path: str):
     )
 
 
+def detect_content_table(engine: Engine) -> str:
+    """Detect whether database uses djmdContent or content table."""
+    with engine.connect() as conn:
+        res = conn.exec_driver_sql(
+            "SELECT name FROM sqlite_master WHERE type='table';"
+        ).fetchall()
+        table_names = {r[0] for r in res}
+        if "djmdContent" in table_names:
+            return "djmdContent"
+        elif "content" in table_names:
+            return "content"
+    return "djmdContent"
+
+
 def resolve_db_path(
-    candidate: Optional[str] = None,
+    candidate_or_args: Any = None,
     prompt_message: str = "Enter path to Rekordbox database (master.db or exportLibrary.db):",
 ) -> str:
-    """Determine database path from candidate string, local exportLibrary.db, default master.db, or prompt."""
+    """Determine database path from candidate string, argparse.Namespace, local exportLibrary.db, default master.db, or prompt."""
+    candidate: Optional[str] = None
+    if isinstance(candidate_or_args, str):
+        candidate = candidate_or_args
+    elif candidate_or_args is not None:
+        candidate = getattr(candidate_or_args, "db_path_flag", None) or getattr(candidate_or_args, "db_path", None)
+
     if candidate:
         resolved = os.path.abspath(os.path.expanduser(candidate))
         if os.path.exists(resolved):
@@ -199,3 +242,169 @@ def resolve_db_path(
     return resolved
 
 
+# ==============================================================================
+# 3. Date, Text & Sorting Utilities
+# ==============================================================================
+
+MONTH_NAME_TO_INT: Dict[str, int] = {
+    # English
+    "january": 1,
+    "jan": 1,
+    "february": 2,
+    "feb": 2,
+    "march": 3,
+    "mar": 3,
+    "april": 4,
+    "apr": 4,
+    "may": 5,
+    "june": 6,
+    "jun": 6,
+    "july": 7,
+    "jul": 7,
+    "august": 8,
+    "aug": 8,
+    "september": 9,
+    "sep": 9,
+    "sept": 9,
+    "october": 10,
+    "oct": 10,
+    "november": 11,
+    "nov": 11,
+    "december": 12,
+    "dec": 12,
+    # Italian
+    "gennaio": 1,
+    "gen": 1,
+    "febbraio": 2,
+    "febbr": 2,
+    "marzo": 3,
+    "aprile": 4,
+    "apr": 4,
+    "maggio": 5,
+    "mag": 5,
+    "giugno": 6,
+    "giu": 6,
+    "luglio": 7,
+    "lug": 7,
+    "agosto": 8,
+    "ago": 8,
+    "settembre": 9,
+    "set": 9,
+    "ottobre": 10,
+    "ott": 10,
+    "novembre": 11,
+    "dicembre": 12,
+    "dic": 12,
+}
+
+
+def parse_year_month(date_str: Optional[str]) -> Tuple[Optional[int], Optional[int]]:
+    """Extract (year, month) tuple from a date string (e.g. '2026-08-31 23:00:00')."""
+    if not date_str:
+        return None, None
+    m = re.search(r"(\d{4})[-/.]?(\d{2})", date_str.strip())
+    if m:
+        try:
+            y = int(m.group(1))
+            mon = int(m.group(2))
+            if 1900 <= y <= 2100 and 1 <= mon <= 12:
+                return y, mon
+        except ValueError:
+            pass
+    return None, None
+
+
+def extract_date_from_name(name: Optional[str]) -> Optional[str]:
+    """Extract YYYY-MM-DD date string from history/track/file name if present."""
+    if not name:
+        return None
+    m = re.search(r"(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})", name.strip())
+    if m:
+        try:
+            y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            if 1900 <= y <= 2100 and 1 <= mo <= 12 and 1 <= d <= 31:
+                return f"{y:04d}-{mo:02d}-{d:02d}"
+        except ValueError:
+            pass
+    return None
+
+
+def extract_year_month_from_name_or_date(
+    name: Optional[str],
+    date_str: Optional[str] = None,
+) -> Tuple[Optional[int], Optional[int]]:
+    """Extract (year, month) tuple prioritizing date in Name over DateCreated string."""
+    date_in_name = extract_date_from_name(name)
+    if date_in_name:
+        y, m = parse_year_month(date_in_name)
+        if y and m:
+            return y, m
+    if date_str:
+        y, m = parse_year_month(date_str)
+        if y and m:
+            return y, m
+    return None, None
+
+
+def normalize_date_input(new_date: str, current_date: Optional[str] = None) -> str:
+    """Normalize user date input: if user inputs only YYYY-MM-DD and current_date had a time part, preserve it."""
+    cleaned = new_date.strip()
+    if re.match(r"^\d{4}-\d{2}-\d{2}$", cleaned):
+        if current_date and " " in current_date.strip():
+            time_part = current_date.strip().split(" ", 1)[1]
+            if time_part:
+                return f"{cleaned} {time_part}"
+    return cleaned
+
+
+def parse_month_number(
+    name: Optional[str],
+    id_val: Optional[str] = None,
+    date_created: Optional[str] = None,
+) -> int:
+    """Extract chronological month number (1..12) from month folder name, ID, or DateCreated."""
+    # 1. Check ID (e.g. '202608' -> 8, '202612' -> 12)
+    if id_val and re.match(r"^\d{6}$", str(id_val).strip()):
+        try:
+            m = int(str(id_val).strip()[4:6])
+            if 1 <= m <= 12:
+                return m
+        except ValueError:
+            pass
+
+    # 2. Check Name if integer (e.g. '8', '08', '12')
+    cleaned_name = (name or "").strip().lower()
+    if cleaned_name.isdigit():
+        try:
+            m = int(cleaned_name)
+            if 1 <= m <= 12:
+                return m
+        except ValueError:
+            pass
+
+    # 3. Check Name against English / Italian month names
+    if cleaned_name in MONTH_NAME_TO_INT:
+        return MONTH_NAME_TO_INT[cleaned_name]
+
+    # 4. Check DateCreated if available
+    if date_created:
+        _, m = parse_year_month(date_created)
+        if m:
+            return m
+
+    # 5. Check if Name contains a 4-digit year + 2-digit month
+    _, m = parse_year_month(cleaned_name)
+    if m:
+        return m
+
+    return 99
+
+
+def natural_sort_key(text: Optional[str]) -> List[Any]:
+    """Sort strings containing numbers in natural human order.
+
+    e.g. 'HISTORY 2026-08-01 (2)' -> ['history ', 2026, '-', 8, '-', 1, ' (', 2, ')']
+    """
+    if not text:
+        return []
+    return [int(c) if c.isdigit() else c.lower() for c in re.split(r"(\d+)", str(text))]
