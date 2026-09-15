@@ -10,6 +10,7 @@ from sqlalchemy import create_engine
 
 from rekordbox_collection_fixer.utils import (
     MONTH_NAME_TO_INT,
+    clean_session_name,
     detect_content_table,
     ensure_rekordbox_not_running,
     extract_date_from_name,
@@ -19,6 +20,7 @@ from rekordbox_collection_fixer.utils import (
     natural_sort_key,
     normalize_date_input,
     parse_month_number,
+    parse_session_paren_number,
     parse_year_month,
     resolve_db_path,
 )
@@ -208,6 +210,27 @@ class TestUtils(unittest.TestCase):
             ],
         )
         self.assertEqual(natural_sort_key(None), [])
+
+    def test_parse_session_paren_number(self):
+        self.assertEqual(parse_session_paren_number("HISTORY 2026-07-08"), -1)
+        self.assertEqual(parse_session_paren_number("HISTORY 2026-07-08 @ OZeta"), -1)
+        self.assertEqual(parse_session_paren_number("HISTORY 2026-07-08 (0)"), 0)
+        self.assertEqual(parse_session_paren_number("HISTORY 2026-07-08 (1)"), 1)
+        self.assertEqual(parse_session_paren_number("HISTORY 2026-07-08 (2) @ OZeta"), 2)
+        self.assertEqual(parse_session_paren_number("HISTORY 2026-07-08 ( 3 )"), 3)
+        self.assertEqual(parse_session_paren_number("Session (Live)"), -1)
+        self.assertEqual(parse_session_paren_number(None), -1)
+        self.assertEqual(parse_session_paren_number(""), -1)
+
+    def test_clean_session_name(self):
+        self.assertEqual(clean_session_name("HISTORY 2026-07-08"), "HISTORY 2026-07-08")
+        self.assertEqual(clean_session_name("HISTORY 2026-07-08 (1)"), "HISTORY 2026-07-08")
+        self.assertEqual(clean_session_name("HISTORY 2026-07-08 (1) @ OZeta"), "HISTORY 2026-07-08 @ OZeta")
+        self.assertEqual(clean_session_name("HISTORY 2026-07-08 @ OZeta"), "HISTORY 2026-07-08 @ OZeta")
+        self.assertEqual(clean_session_name("Session (Live)"), "Session (Live)")
+        self.assertEqual(clean_session_name(None), "")
+        self.assertEqual(clean_session_name(""), "")
+
 
 
 if __name__ == "__main__":

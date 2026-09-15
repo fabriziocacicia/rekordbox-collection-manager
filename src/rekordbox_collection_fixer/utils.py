@@ -408,3 +408,30 @@ def natural_sort_key(text: Optional[str]) -> List[Any]:
     if not text:
         return []
     return [int(c) if c.isdigit() else c.lower() for c in re.split(r"(\d+)", str(text))]
+
+
+def parse_session_paren_number(name: Optional[str]) -> int:
+    """Extract session repetition number from parentheses in a session name.
+
+    Returns:
+        - -1 if the name has no parenthesized number (e.g. 'HISTORY 2026-07-08' or 'HISTORY 2026-07-08 @ OZeta')
+          so that entries without () sort first.
+        - int(N) if the name contains (N), e.g. (0) -> 0, (1) -> 1, (2) -> 2.
+    """
+    if not name:
+        return -1
+    m = re.search(r"\(\s*(\d+)\s*\)", str(name))
+    if m:
+        return int(m.group(1))
+    return -1
+
+
+def clean_session_name(name: Optional[str]) -> str:
+    """Remove parenthesized session repetition numbers like (1), (2) from session name.
+
+    e.g. 'HISTORY 2026-07-08 (1) @ OZeta' -> 'HISTORY 2026-07-08 @ OZeta'
+    """
+    if not name:
+        return ""
+    return re.sub(r"\s+", " ", re.sub(r"\s*\(\s*\d+\s*\)", " ", str(name))).strip()
+

@@ -380,6 +380,26 @@ class TestRenameHistory(unittest.TestCase):
         ]
         self.assertEqual(sorted_names, expected_order)
 
+    def test_history_session_sort_key_entries_without_parens_first(self):
+        """Ensure that on the same date, entries without () sort first, then (0), (1), (2) etc."""
+        rows = [
+            {"ID": "1", "Name": "HISTORY 2026-07-08 (1)", "DateCreated": "2026-07-08 17:06:45"},
+            {"ID": "2", "Name": "HISTORY 2026-07-08 (1) @ OZeta", "DateCreated": "2026-07-08 17:51:12"},
+            {"ID": "3", "Name": "HISTORY 2026-07-08 @ OZeta", "DateCreated": "2026-07-08 17:51:12"},
+            {"ID": "4", "Name": "HISTORY 2026-07-08 (2) @ OZeta", "DateCreated": "2026-07-08 17:55:00"},
+        ]
+
+        sorted_rows = sorted(rows, key=history_session_sort_key)
+        sorted_names = [r["Name"] for r in sorted_rows]
+
+        expected_order = [
+            "HISTORY 2026-07-08 @ OZeta",
+            "HISTORY 2026-07-08 (1)",
+            "HISTORY 2026-07-08 (1) @ OZeta",
+            "HISTORY 2026-07-08 (2) @ OZeta",
+        ]
+        self.assertEqual(sorted_names, expected_order)
+
     def test_year_sort_key(self):
         years = [
             {"ID": "2026", "Name": "2026"},

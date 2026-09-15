@@ -18,6 +18,7 @@ from sqlcipher3 import dbapi2 as sqlcipher_driver
 from rekordbox_collection_fixer.utils import (
     DEVICE_LIBRARY_PLUS_KEY,
     MONTH_NAME_TO_INT,
+    clean_session_name,
     ensure_rekordbox_not_running,
     extract_date_from_name,
     extract_year_month_from_name_or_date,
@@ -28,6 +29,7 @@ from rekordbox_collection_fixer.utils import (
     normalize_date_input,
     open_database,
     parse_month_number,
+    parse_session_paren_number,
     parse_year_month,
     resolve_db_path,
 )
@@ -38,7 +40,9 @@ def history_session_sort_key(row_dict: Dict[str, Any]) -> Tuple:
 
     Orders chronologically: day 01 at top, day 31 at bottom.
     Extracts date from Name if formatted as YYYY-MM-DD (or YYYY/MM/DD),
-    falling back to DateCreated, then uses natural_sort_key for tie-breaking.
+    falling back to DateCreated.
+    Within the same date, entries without () sort first (-1), followed by (0), (1), (2)...
+    Then uses natural_sort_key on the cleaned name, DateCreated, and ID for tie-breaking.
     """
     name = row_dict.get("Name") or ""
     date_created = row_dict.get("DateCreated") or ""
@@ -54,7 +58,11 @@ def history_session_sort_key(row_dict: Dict[str, Any]) -> Tuple:
     else:
         extracted_date = "9999-99-99"
 
-    return (extracted_date, natural_sort_key(name), date_created, id_val)
+    paren_num = parse_session_paren_number(name)
+    cleaned_name = clean_session_name(name)
+
+    return (extracted_date, paren_num, natural_sort_key(cleaned_name), date_created, id_val)
+
 
 
 def year_sort_key(row_dict: Dict[str, Any]) -> Tuple:
