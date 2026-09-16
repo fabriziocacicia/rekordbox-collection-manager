@@ -88,6 +88,48 @@ class TestRenameHistory(unittest.TestCase):
         self.assertEqual(updated_records[0]["name"], "HISTORY 2026-09-13")
         self.assertEqual(updated_records[0]["date"], "2026-09-13")
 
+    def test_fetch_and_realign_ignores_soft_deleted(self):
+        engine = create_engine("sqlite:///:memory:")
+        with engine.begin() as conn:
+            conn.exec_driver_sql("""
+                CREATE TABLE djmdHistory (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    Seq INTEGER,
+                    Name VARCHAR(255),
+                    DateCreated VARCHAR(255),
+                    Attribute INTEGER,
+                    ParentID VARCHAR(255),
+                    rb_local_deleted INTEGER DEFAULT 0
+                );
+            """)
+            conn.exec_driver_sql("""
+                INSERT INTO djmdHistory (ID, Seq, Name, DateCreated, Attribute, ParentID, rb_local_deleted) 
+                VALUES ('1', 1, 'HISTORY 2026-07-05', '2026-07-05 11:00:00', 0, '202607', 0);
+            """)
+            conn.exec_driver_sql("""
+                INSERT INTO djmdHistory (ID, Seq, Name, DateCreated, Attribute, ParentID, rb_local_deleted) 
+                VALUES ('2', 2, 'HISTORY 2026-07-05 (1)', '2026-07-05 11:00:00', 0, '202607', 1);
+            """)
+            conn.exec_driver_sql("""
+                INSERT INTO djmdHistory (ID, Seq, Name, DateCreated, Attribute, ParentID, rb_local_deleted) 
+                VALUES ('3', 3, 'HISTORY 2026-07-06', '2026-07-06 11:00:00', 0, '202607', 0);
+            """)
+
+        records = fetch_history_records(engine, "djmdHistory")
+        self.assertEqual(len(records), 2)
+        record_ids = {r["id"] for r in records}
+        self.assertIn("1", record_ids)
+        self.assertIn("3", record_ids)
+        self.assertNotIn("2", record_ids)
+
+        # Test realign_history_order ignores ID 2 and sequences ID 1 as Seq=1, ID 3 as Seq=2
+        realign_history_order(engine)
+        with engine.connect() as conn:
+            row1 = conn.exec_driver_sql("SELECT Seq FROM djmdHistory WHERE ID = '1';").fetchone()
+            row3 = conn.exec_driver_sql("SELECT Seq FROM djmdHistory WHERE ID = '3';").fetchone()
+            self.assertEqual(row1[0], 1)
+            self.assertEqual(row3[0], 2)
+
     def test_parse_year_month(self):
         self.assertEqual(parse_year_month("2026-08-31 23:00:00"), (2026, 8))
         self.assertEqual(parse_year_month("2026-08-31"), (2026, 8))

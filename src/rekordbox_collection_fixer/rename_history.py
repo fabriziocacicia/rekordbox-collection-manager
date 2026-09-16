@@ -96,11 +96,12 @@ def realign_history_order(engine: Engine) -> Dict[str, int]:
             return stats
 
         has_updated_at = "updated_at" in cols
+        del_filter = "AND (rb_local_deleted = 0 OR rb_local_deleted IS NULL)" if "rb_local_deleted" in cols else ""
 
         # 1. Realign any history sessions whose ParentID does not match the date in their Name
         if "ParentID" in cols and "Name" in cols:
             session_rows = conn.execute(
-                text("SELECT ID, Name, ParentID, DateCreated FROM djmdHistory WHERE Attribute = 0 OR Attribute IS NULL;")
+                text(f"SELECT ID, Name, ParentID, DateCreated FROM djmdHistory WHERE (Attribute = 0 OR Attribute IS NULL) {del_filter};")
             ).mappings().fetchall()
 
             for s in session_rows:
@@ -136,15 +137,15 @@ def realign_history_order(engine: Engine) -> Dict[str, int]:
 
         # 2. Fetch all distinct ParentIDs to sort their children
         parent_rows = conn.exec_driver_sql(
-            "SELECT DISTINCT ParentID FROM djmdHistory WHERE ParentID IS NOT NULL;"
+            f"SELECT DISTINCT ParentID FROM djmdHistory WHERE ParentID IS NOT NULL {del_filter};"
         ).fetchall()
         parent_ids = [r[0] for r in parent_rows if r[0] is not None]
 
         for parent_id in parent_ids:
-            query = """
+            query = f"""
                 SELECT ID, Name, Attribute, ParentID, DateCreated, Seq
                 FROM djmdHistory
-                WHERE ParentID = :parent_id
+                WHERE ParentID = :parent_id {del_filter}
             """
             rows = conn.execute(text(query), {"parent_id": parent_id}).mappings().fetchall()
             if not rows:
@@ -233,6 +234,11 @@ def ensure_djmd_history_folders(
             text(f"INSERT INTO djmdHistory ({col_names}) VALUES ({placeholders})"),
             {k: year_data[k] for k in insert_cols},
         )
+    elif "rb_local_deleted" in cols:
+        conn.execute(
+            text("UPDATE djmdHistory SET rb_local_deleted = 0 WHERE ID = :id AND rb_local_deleted != 0"),
+            {"id": year_id},
+        )
 
     # 2. Check and create Month folder if missing
     has_month = conn.exec_driver_sql(
@@ -262,6 +268,11 @@ def ensure_djmd_history_folders(
             text(f"INSERT INTO djmdHistory ({col_names}) VALUES ({placeholders})"),
             {k: month_data[k] for k in insert_cols},
         )
+    elif "rb_local_deleted" in cols:
+        conn.execute(
+            text("UPDATE djmdHistory SET rb_local_deleted = 0 WHERE ID = :id AND rb_local_deleted != 0"),
+            {"id": month_id},
+        )
 
     return month_id
 
@@ -274,10 +285,11 @@ def fetch_history_records(engine: Engine, table_format: str) -> List[Dict[str, A
             cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(djmdHistory);").fetchall()}
             has_parent = "ParentID" in cols
             select_parent = ", ParentID" if has_parent else ""
+            del_filter = "AND (rb_local_deleted = 0 OR rb_local_deleted IS NULL)" if "rb_local_deleted" in cols else ""
             query = f"""
                 SELECT ID, Name, DateCreated, Attribute{select_parent}
                 FROM djmdHistory 
-                WHERE Attribute = 0 OR Attribute IS NULL
+                WHERE (Attribute = 0 OR Attribute IS NULL) {del_filter}
                 ORDER BY rowid DESC;
             """
             rows = conn.exec_driver_sql(query).fetchall()
@@ -290,10 +302,12 @@ def fetch_history_records(engine: Engine, table_format: str) -> List[Dict[str, A
                     "table": "djmdHistory",
                 })
         elif table_format == "history":
-            query = """
+            cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(history);").fetchall()}
+            del_filter = "AND (rb_local_deleted = 0 OR rb_local_deleted IS NULL)" if "rb_local_deleted" in cols else ""
+            query = f"""
                 SELECT history_id, name, attribute 
                 FROM history 
-                WHERE attribute = 0 OR attribute IS NULL
+                WHERE (attribute = 0 OR attribute IS NULL) {del_filter}
                 ORDER BY history_id DESC;
             """
             rows = conn.exec_driver_sql(query).fetchall()
