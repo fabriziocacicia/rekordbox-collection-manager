@@ -282,7 +282,6 @@ class TestRenameHistory(unittest.TestCase):
                 MagicMock(ask=MagicMock(return_value="HISTORY 2026-09-13")),  # Base
                 MagicMock(ask=MagicMock(return_value="")),                    # Location
                 MagicMock(ask=MagicMock(return_value="")),                    # Artist
-                MagicMock(ask=MagicMock(return_value="2026-09-13")),          # Date
             ]
             mock_confirm.return_value.ask.return_value = False
 
@@ -291,11 +290,11 @@ class TestRenameHistory(unittest.TestCase):
             self.assertEqual(mock_text.call_args_list[0][1]["default"], "HISTORY 2026-09-14")
             self.assertEqual(mock_text.call_args_list[1][1]["default"], "")
             self.assertEqual(mock_text.call_args_list[2][1]["default"], "")
-            self.assertEqual(mock_text.call_args_list[3][1]["default"], "2026-09-13")
 
         records = fetch_history_records(engine, "djmdHistory")
         self.assertEqual(records[0]["name"], "HISTORY 2026-09-13")
-        self.assertEqual(records[0]["date"], "2026-09-13")
+        # DateCreated is untouched
+        self.assertEqual(records[0]["date"], "2026-09-14")
 
     def test_interactive_session_detects_mismatch_and_updates_parent(self):
         engine = create_engine("sqlite:///:memory:")
@@ -327,12 +326,11 @@ class TestRenameHistory(unittest.TestCase):
              patch("questionary.confirm") as mock_confirm:
 
             mock_select.return_value.ask.return_value = "42"
-            # User simply confirms the existing name and date
+            # User simply confirms the existing name
             mock_text.side_effect = [
                 MagicMock(ask=MagicMock(return_value="HISTORY 2026-08-31")),  # Base
                 MagicMock(ask=MagicMock(return_value="")),                    # Location
                 MagicMock(ask=MagicMock(return_value="")),                    # Artist
-                MagicMock(ask=MagicMock(return_value="2026-08-31 22:00:00")), # Date
             ]
             mock_confirm.return_value.ask.return_value = False
 
@@ -374,7 +372,6 @@ class TestRenameHistory(unittest.TestCase):
                 MagicMock(ask=MagicMock(return_value="HISTORY 2026-07-25 (2)")),  # Base
                 MagicMock(ask=MagicMock(return_value="Amnesia")),                 # Location
                 MagicMock(ask=MagicMock(return_value="Marco Carola")),            # Artist
-                MagicMock(ask=MagicMock(return_value="2026-07-25 23:00:00")),     # Date
             ]
             mock_confirm.return_value.ask.return_value = False
 
@@ -387,7 +384,8 @@ class TestRenameHistory(unittest.TestCase):
 
         records = fetch_history_records(engine, "djmdHistory")
         self.assertEqual(records[0]["name"], "HISTORY 2026-07-25 (2) @ Amnesia w Marco Carola")
-        self.assertEqual(records[0]["date"], "2026-07-25 23:00:00")
+        # DateCreated remains untouched
+        self.assertEqual(records[0]["date"], "2026-07-24 23:00:00")
 
     def test_interactive_session_clear_location_add_artist(self):
         engine = create_engine("sqlite:///:memory:")
@@ -416,7 +414,6 @@ class TestRenameHistory(unittest.TestCase):
                 MagicMock(ask=MagicMock(return_value="HISTORY 2026-07-24")),  # Base
                 MagicMock(ask=MagicMock(return_value="")),                    # Cleared location
                 MagicMock(ask=MagicMock(return_value="Carl Cox")),            # Added artist
-                MagicMock(ask=MagicMock(return_value="2026-07-24 23:00:00")), # Date
             ]
             mock_confirm.return_value.ask.return_value = False
 
@@ -710,7 +707,8 @@ class TestRenameHistory(unittest.TestCase):
             session = conn.exec_driver_sql("SELECT ParentID, Name, DateCreated FROM djmdHistory WHERE ID = 's1'").mappings().first()
             self.assertEqual(session["ParentID"], "202607")
             self.assertEqual(session["Name"], "HISTORY 2026-07-29")
-            self.assertEqual(session["DateCreated"], "2026-07-29 17:13:20")
+            # DateCreated remains original (untouched)
+            self.assertEqual(session["DateCreated"], "2026-08-01 17:13:20")
 
     def test_realign_history_order_moves_sessions_matching_name_date(self):
         # Reproducing user exact situation:
@@ -745,7 +743,8 @@ class TestRenameHistory(unittest.TestCase):
             # a1 should have moved to 202607!
             a1 = conn.exec_driver_sql("SELECT ParentID, DateCreated, Seq FROM djmdHistory WHERE ID = 'a1'").mappings().first()
             self.assertEqual(a1["ParentID"], "202607")
-            self.assertEqual(a1["DateCreated"], "2026-07-29 17:13:20")
+            # DateCreated remains original (untouched)
+            self.assertEqual(a1["DateCreated"], "2026-08-01 17:13:20")
             self.assertEqual(a1["Seq"], 2)  # after j1 (July 10)
 
             # August should only contain a2

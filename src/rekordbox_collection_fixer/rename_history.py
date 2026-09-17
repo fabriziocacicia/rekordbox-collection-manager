@@ -115,16 +115,8 @@ def realign_history_order(engine: Engine) -> Dict[str, int]:
                         date_str = s_date or f"{y:04d}-{m:02d}-01"
                         ensure_djmd_history_folders(conn, y, m, date_str, cols)
 
-                        # Sync DateCreated date part if Name contains a specific date
-                        name_date = extract_date_from_name(s_name)
-                        time_part = s_date.strip().split(" ", 1)[1] if " " in s_date.strip() else ""
-                        new_s_date = f"{name_date} {time_part}".strip() if name_date else s_date
-
                         update_fields = ["ParentID = :parent_id"]
                         params: Dict[str, Any] = {"parent_id": expected_parent, "id": s["ID"]}
-                        if new_s_date and new_s_date != s_date:
-                            update_fields.append("DateCreated = :date_created")
-                            params["date_created"] = new_s_date
                         if has_updated_at:
                             update_fields.append("updated_at = :updated_at")
                             params["updated_at"] = now_utc
@@ -348,45 +340,23 @@ def update_history_record(
             if y and m and "ParentID" in cols:
                 target_parent_id = ensure_djmd_history_folders(conn, y, m, date_for_folder, cols)
 
-            # Sync DateCreated date part with date in Name if user didn't explicitly override it
-            final_date = new_date
-            name_date = extract_date_from_name(new_name)
-            if name_date:
-                curr_d = new_date if new_date is not None else (record.get("date") or "")
-                time_part = curr_d.strip().split(" ", 1)[1] if " " in curr_d.strip() else ""
-                synced_date = f"{name_date} {time_part}".strip()
-                old_record_date = record.get("date") or ""
-                if new_date is None or (new_date == old_record_date and not new_date.startswith(name_date)):
-                    final_date = synced_date
+            set_clauses = ["Name = :name"]
+            params: Dict[str, Any] = {"name": new_name, "id": record["id"]}
 
-            if final_date is not None:
-                set_clauses = ["Name = :name", "DateCreated = :date"]
-                params: Dict[str, Any] = {"name": new_name, "date": final_date, "id": record["id"]}
+            if new_date is not None:
+                set_clauses.append("DateCreated = :date")
+                params["date"] = new_date
 
-                if target_parent_id and "ParentID" in cols:
-                    set_clauses.append("ParentID = :parent_id")
-                    params["parent_id"] = target_parent_id
+            if target_parent_id and "ParentID" in cols:
+                set_clauses.append("ParentID = :parent_id")
+                params["parent_id"] = target_parent_id
 
-                if "updated_at" in cols:
-                    set_clauses.append("updated_at = :updated_at")
-                    params["updated_at"] = now_utc
+            if "updated_at" in cols:
+                set_clauses.append("updated_at = :updated_at")
+                params["updated_at"] = now_utc
 
-                sql = f"UPDATE djmdHistory SET {', '.join(set_clauses)} WHERE ID = :id"
-                conn.execute(text(sql), params)
-            else:
-                set_clauses = ["Name = :name"]
-                params = {"name": new_name, "id": record["id"]}
-
-                if target_parent_id and "ParentID" in cols:
-                    set_clauses.append("ParentID = :parent_id")
-                    params["parent_id"] = target_parent_id
-
-                if "updated_at" in cols:
-                    set_clauses.append("updated_at = :updated_at")
-                    params["updated_at"] = now_utc
-
-                sql = f"UPDATE djmdHistory SET {', '.join(set_clauses)} WHERE ID = :id"
-                conn.execute(text(sql), params)
+            sql = f"UPDATE djmdHistory SET {', '.join(set_clauses)} WHERE ID = :id"
+            conn.execute(text(sql), params)
 
         elif record["table"] == "history":
             conn.execute(
@@ -557,32 +527,12 @@ def run_interactive_session(engine: Engine, table_format: str, db_path: str) -> 
 
         new_name = compose_history_name(new_base, new_loc, new_art)
 
-        # Prefill date if table supports date (djmdHistory)
-        new_date = None
-        if selected_rec["table"] == "djmdHistory":
-            date_default = current_date
-            name_date = extract_date_from_name(new_name)
-            if name_date:
-                time_part = current_date.strip().split(" ", 1)[1] if " " in current_date.strip() else ""
-                date_default = f"{name_date} {time_part}".strip()
-
-            user_date = questionary.text(
-                "Edit history Date (DateCreated):",
-                default=date_default,
-            ).ask()
-            if user_date is None:
-                print("Cancelled.")
-                return
-            new_date = normalize_date_input(user_date, date_default)
-
         # Check if modified or if parent folder needs realignment
         changed = False
         if new_name != current_name:
             changed = True
-        if new_date is not None and new_date != current_date:
-            changed = True
 
-        target_y, target_m = extract_year_month_from_name_or_date(new_name, new_date or current_date)
+        target_y, target_m = extract_year_month_from_name_or_date(new_name, current_date)
         expected_parent = f"{target_y}{target_m:02d}" if target_y and target_m else None
         if (
             selected_rec["table"] == "djmdHistory"
@@ -596,12 +546,10 @@ def run_interactive_session(engine: Engine, table_format: str, db_path: str) -> 
             print("ℹ️  No changes made.")
         else:
             try:
-                new_parent_id = update_history_record(engine, selected_rec, new_name, new_date)
+                new_parent_id = update_history_record(engine, selected_rec, new_name)
                 print(f"\n✅ Successfully updated history (ID: {selected_id})!")
                 if current_name != new_name:
                     print(f"   Name: '{current_name}' ➔ '{new_name}'")
-                if new_date is not None and current_date != new_date:
-                    print(f"   Date: '{current_date}' ➔ '{new_date}'")
                 old_parent = selected_rec.get("parent_id")
                 if new_parent_id and old_parent and new_parent_id != old_parent:
                     print(f"   Folder: '{old_parent}' ➔ '{new_parent_id}' (tree hierarchy updated)")
