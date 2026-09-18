@@ -270,5 +270,65 @@ class TestAssets(unittest.TestCase):
         update_macos_menu_title("Rekordbox Collection Manager")
 
 
+class TestMainWindowSidebar(unittest.TestCase):
+    def setUp(self):
+        from rekordbox_collection_fixer.gui.main_window import MainWindow
+
+        with patch.object(MainWindow, "load_database"), patch.object(MainWindow, "_check_rekordbox_status"):
+            self.window = MainWindow(initial_db_path=None)
+
+    def tearDown(self):
+        self.window.safety_timer.stop()
+        self.window.close()
+
+    def test_sidebar_initial_state(self):
+        self.assertFalse(self.window.is_sidebar_collapsed)
+        self.assertEqual(self.window.sidebar_frame.width(), 200)
+        self.assertEqual(self.window.btn_history.text(), "🕒  History Sessions")
+        self.assertEqual(self.window.btn_play_count.text(), "🔢  Play Counts")
+        self.assertEqual(self.window.btn_info.text(), "ℹ️  Collection Info")
+        self.assertFalse(self.window.sidebar_section_label.isHidden())
+        self.assertFalse(self.window.app_ver.isHidden())
+        self.assertEqual(self.window.btn_collapse_sidebar.text(), "◀")
+
+    def test_sidebar_collapse(self):
+        self.window.set_sidebar_collapsed(True, animate=False)
+        self.assertTrue(self.window.is_sidebar_collapsed)
+        self.assertEqual(self.window.sidebar_frame.width(), 60)
+        self.assertEqual(self.window.btn_history.text(), "🕒")
+        self.assertEqual(self.window.btn_play_count.text(), "🔢")
+        self.assertEqual(self.window.btn_info.text(), "ℹ️")
+        self.assertTrue(self.window.sidebar_section_label.isHidden())
+        self.assertTrue(self.window.app_ver.isHidden())
+        self.assertEqual(self.window.btn_collapse_sidebar.text(), "▶")
+        self.assertEqual(self.window.btn_history.toolTip(), "History Sessions")
+        self.assertEqual(self.window.btn_play_count.toolTip(), "Play Counts")
+        self.assertEqual(self.window.btn_info.toolTip(), "Collection Info")
+
+    def test_sidebar_expand(self):
+        self.window.set_sidebar_collapsed(True, animate=False)
+        self.window.set_sidebar_collapsed(False, animate=False)
+        self.assertFalse(self.window.is_sidebar_collapsed)
+        self.assertEqual(self.window.sidebar_frame.width(), 200)
+        self.assertEqual(self.window.btn_history.text(), "🕒  History Sessions")
+        self.assertFalse(self.window.sidebar_section_label.isHidden())
+        self.assertFalse(self.window.app_ver.isHidden())
+        self.assertEqual(self.window.btn_collapse_sidebar.text(), "◀")
+
+    def test_sidebar_toggle(self):
+        self.window.toggle_sidebar()
+        self.assertTrue(self.window.is_sidebar_collapsed)
+        self.window.toggle_sidebar()
+        self.assertFalse(self.window.is_sidebar_collapsed)
+
+    def test_nav_page_switching_while_collapsed(self):
+        self.window.set_sidebar_collapsed(True, animate=False)
+        self.assertEqual(self.window.stacked_widget.currentIndex(), 0)
+        self.window.btn_play_count.click()
+        self.assertEqual(self.window.stacked_widget.currentIndex(), 1)
+        self.window.btn_info.click()
+        self.assertEqual(self.window.stacked_widget.currentIndex(), 2)
+
+
 if __name__ == "__main__":
     unittest.main()

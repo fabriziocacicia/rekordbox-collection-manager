@@ -5,8 +5,8 @@ import shutil
 import sys
 from datetime import datetime
 from typing import Any, Dict, List, Optional
-from PySide6.QtCore import QSize, QTimer, Qt
-from PySide6.QtGui import QPixmap
+from PySide6.QtCore import Property, QEasingCurve, QPropertyAnimation, QSize, QTimer, Qt
+from PySide6.QtGui import QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QButtonGroup,
     QFileDialog,
@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QStackedWidget,
     QStatusBar,
     QTextEdit,
@@ -39,6 +40,23 @@ from rekordbox_collection_fixer.utils import (
     get_default_master_db_path,
     is_rekordbox_running,
 )
+
+
+class CollapsibleSidebarFrame(QFrame):
+    """Custom sidebar QFrame supporting smooth width property animation."""
+
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.setObjectName("sidebarFrame")
+        self.setFixedWidth(200)
+
+    def _get_sidebar_width(self) -> int:
+        return self.width()
+
+    def _set_sidebar_width(self, width: int) -> None:
+        self.setFixedWidth(width)
+
+    sidebarWidth = Property(int, _get_sidebar_width, _set_sidebar_width)
 
 
 class InfoView(QWidget):
@@ -88,6 +106,25 @@ class MainWindow(QMainWindow):
         self.table_format: str = "djmdHistory"
         self.history_records: List[Dict[str, Any]] = []
         self.total_tracks: int = 0
+        self.is_sidebar_collapsed: bool = False
+
+        self.nav_items = [
+            {
+                "id": 0,
+                "icon": "🕒",
+                "title": "History Sessions",
+            },
+            {
+                "id": 1,
+                "icon": "🔢",
+                "title": "Play Counts",
+            },
+            {
+                "id": 2,
+                "icon": "ℹ️",
+                "title": "Collection Info",
+            },
+        ]
 
         # Safety monitor timer (checks every 3 seconds)
         self.safety_timer = QTimer(self)
@@ -115,6 +152,14 @@ class MainWindow(QMainWindow):
         header_layout = QHBoxLayout(header_frame)
         header_layout.setContentsMargins(16, 12, 16, 12)
         header_layout.setSpacing(14)
+
+        # Sidebar Toggle Button (Header hamburger)
+        self.btn_toggle_sidebar = QPushButton("☰")
+        self.btn_toggle_sidebar.setObjectName("sidebarToggleBtn")
+        self.btn_toggle_sidebar.setToolTip("Toggle Sidebar (Cmd+B / Ctrl+B)")
+        self.btn_toggle_sidebar.setFixedSize(30, 30)
+        self.btn_toggle_sidebar.clicked.connect(self.toggle_sidebar)
+        header_layout.addWidget(self.btn_toggle_sidebar)
 
         # Brand Logo & Title
         icon_path = get_asset_path("icon.png")
@@ -171,43 +216,70 @@ class MainWindow(QMainWindow):
         body_layout.setSpacing(0)
 
         # Sidebar Frame
-        sidebar_frame = QFrame()
-        sidebar_frame.setObjectName("sidebarFrame")
-        sidebar_frame.setFixedWidth(200)
-        sidebar_layout = QVBoxLayout(sidebar_frame)
-        sidebar_layout.setContentsMargins(0, 12, 0, 12)
+        self.sidebar_frame = CollapsibleSidebarFrame()
+        sidebar_layout = QVBoxLayout(self.sidebar_frame)
+        sidebar_layout.setContentsMargins(0, 8, 0, 8)
         sidebar_layout.setSpacing(4)
+
+        # Sidebar Header Row (Section label + collapse arrow)
+        self.sidebar_header = QWidget()
+        self.sidebar_header_layout = QHBoxLayout(self.sidebar_header)
+        self.sidebar_header_layout.setContentsMargins(14, 2, 8, 6)
+        self.sidebar_header_layout.setSpacing(4)
+
+        self.sidebar_section_label = QLabel("NAVIGATION")
+        self.sidebar_section_label.setStyleSheet(
+            f"color: {COLOR_TEXT_MUTED}; font-size: 10px; font-weight: 700; letter-spacing: 0.8px;"
+        )
+        self.sidebar_header_layout.addWidget(self.sidebar_section_label, stretch=1)
+
+        self.btn_collapse_sidebar = QPushButton("◀")
+        self.btn_collapse_sidebar.setObjectName("sidebarCollapseBtn")
+        self.btn_collapse_sidebar.setToolTip("Collapse sidebar (Cmd+B / Ctrl+B)")
+        self.btn_collapse_sidebar.setFixedSize(26, 26)
+        self.btn_collapse_sidebar.clicked.connect(self.toggle_sidebar)
+        self.sidebar_header_layout.addWidget(self.btn_collapse_sidebar)
+
+        sidebar_layout.addWidget(self.sidebar_header)
 
         self.nav_group = QButtonGroup(self)
         self.nav_group.setExclusive(True)
 
-        self.btn_history = QPushButton("🕒 History Sessions")
-        self.btn_history.setObjectName("navButton")
-        self.btn_history.setCheckable(True)
-        self.btn_history.setChecked(True)
-        self.nav_group.addButton(self.btn_history, 0)
-        sidebar_layout.addWidget(self.btn_history)
+        self.nav_buttons: List[QPushButton] = []
+        for item in self.nav_items:
+            btn = QPushButton(f"{item['icon']}  {item['title']}")
+            btn.setObjectName("navButton")
+            btn.setCheckable(True)
+            btn.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+            btn.setToolTip(item["title"])
+            if item["id"] == 0:
+                btn.setChecked(True)
+            self.nav_group.addButton(btn, item["id"])
+            sidebar_layout.addWidget(btn)
+            self.nav_buttons.append(btn)
 
-        self.btn_play_count = QPushButton("🔢 Play Counts")
-        self.btn_play_count.setObjectName("navButton")
-        self.btn_play_count.setCheckable(True)
-        self.nav_group.addButton(self.btn_play_count, 1)
-        sidebar_layout.addWidget(self.btn_play_count)
-
-        self.btn_info = QPushButton("ℹ️ Collection Info")
-        self.btn_info.setObjectName("navButton")
-        self.btn_info.setCheckable(True)
-        self.nav_group.addButton(self.btn_info, 2)
-        sidebar_layout.addWidget(self.btn_info)
+        self.btn_history = self.nav_buttons[0]
+        self.btn_play_count = self.nav_buttons[1]
+        self.btn_info = self.nav_buttons[2]
 
         sidebar_layout.addStretch(1)
 
-        app_ver = QLabel("v0.1.0 • Python 3.12")
-        app_ver.setStyleSheet(f"color: {COLOR_TEXT_MUTED}; font-size: 11px; padding: 12px;")
-        sidebar_layout.addWidget(app_ver)
+        self.app_ver = QLabel("v0.1.0 • Python 3.12")
+        self.app_ver.setStyleSheet(f"color: {COLOR_TEXT_MUTED}; font-size: 11px; padding: 12px;")
+        sidebar_layout.addWidget(self.app_ver)
 
         self.nav_group.idClicked.connect(self._on_nav_clicked)
-        body_layout.addWidget(sidebar_frame)
+        body_layout.addWidget(self.sidebar_frame)
+
+        # Global Shortcut for toggling sidebar
+        self.sidebar_shortcut = QShortcut(QKeySequence("Ctrl+B"), self)
+        self.sidebar_shortcut.activated.connect(self.toggle_sidebar)
+
+        # Smooth sidebar width animation (drives both min and max width simultaneously)
+        self.sidebar_anim = QPropertyAnimation(self.sidebar_frame, b"sidebarWidth", self)
+        self.sidebar_anim.setDuration(150)
+        self.sidebar_anim.setEasingCurve(QEasingCurve.Type.InOutQuad)
+        self.sidebar_anim.finished.connect(self._on_sidebar_anim_finished)
 
         # Stacked Pages
         self.stacked_widget = QStackedWidget()
@@ -234,6 +306,79 @@ class MainWindow(QMainWindow):
 
     def _on_nav_clicked(self, page_id: int) -> None:
         self.stacked_widget.setCurrentIndex(page_id)
+
+    def toggle_sidebar(self) -> None:
+        """Toggle sidebar between expanded and collapsed icon-only mode."""
+        self.set_sidebar_collapsed(not self.is_sidebar_collapsed)
+
+    def set_sidebar_collapsed(self, collapsed: bool, animate: bool = True) -> None:
+        """Set whether sidebar is collapsed to icon-only mode with smooth animation."""
+        self.is_sidebar_collapsed = collapsed
+        target_width = 60 if collapsed else 200
+        start_width = self.sidebar_frame.width()
+
+        if animate and self.isVisible():
+            self.sidebar_anim.stop()
+
+            if collapsed:
+                # Prepare UI for closing: hide labels and switch to icons immediately
+                # so the width can shrink with zero text layout reflow or clipping.
+                self._apply_collapsed_ui()
+            else:
+                # Prepare UI for opening: update buttons, expand with icons first
+                self.btn_collapse_sidebar.setText("◀")
+                self.btn_collapse_sidebar.setToolTip("Collapse sidebar (Cmd+B / Ctrl+B)")
+                self.btn_toggle_sidebar.setToolTip("Collapse sidebar (Cmd+B / Ctrl+B)")
+
+            self.sidebar_anim.setStartValue(start_width)
+            self.sidebar_anim.setEndValue(target_width)
+            self.sidebar_anim.start()
+        else:
+            self.sidebar_frame.setFixedWidth(target_width)
+            if collapsed:
+                self._apply_collapsed_ui()
+            else:
+                self._apply_expanded_ui()
+
+    def _on_sidebar_anim_finished(self) -> None:
+        """Finalize UI once animation completes."""
+        target_width = 60 if self.is_sidebar_collapsed else 200
+        self.sidebar_frame.setFixedWidth(target_width)
+
+        if self.is_sidebar_collapsed:
+            self._apply_collapsed_ui()
+        else:
+            self._apply_expanded_ui()
+
+    def _apply_collapsed_ui(self) -> None:
+        """Switch navigation to compact icon-only mode."""
+        self.btn_collapse_sidebar.setText("▶")
+        self.btn_collapse_sidebar.setToolTip("Expand sidebar (Cmd+B / Ctrl+B)")
+        self.btn_toggle_sidebar.setToolTip("Expand sidebar (Cmd+B / Ctrl+B)")
+        self.sidebar_section_label.setVisible(False)
+        self.sidebar_header_layout.setContentsMargins(0, 2, 0, 4)
+        self.sidebar_header_layout.setAlignment(self.btn_collapse_sidebar, Qt.AlignmentFlag.AlignCenter)
+        self.app_ver.setVisible(False)
+
+        for btn, item in zip(self.nav_buttons, self.nav_items):
+            btn.setText(item["icon"])
+            btn.setToolTip(item["title"])
+            btn.setStyleSheet("text-align: center; padding: 11px 0px; font-size: 15px;")
+
+    def _apply_expanded_ui(self) -> None:
+        """Switch navigation to full expanded mode."""
+        self.btn_collapse_sidebar.setText("◀")
+        self.btn_collapse_sidebar.setToolTip("Collapse sidebar (Cmd+B / Ctrl+B)")
+        self.btn_toggle_sidebar.setToolTip("Collapse sidebar (Cmd+B / Ctrl+B)")
+        self.sidebar_section_label.setVisible(True)
+        self.sidebar_header_layout.setContentsMargins(14, 2, 8, 6)
+        self.sidebar_header_layout.setAlignment(self.btn_collapse_sidebar, Qt.AlignmentFlag.AlignRight)
+        self.app_ver.setVisible(True)
+
+        for btn, item in zip(self.nav_buttons, self.nav_items):
+            btn.setText(f"{item['icon']}  {item['title']}")
+            btn.setToolTip(item["title"])
+            btn.setStyleSheet("")
 
     def _check_rekordbox_status(self) -> None:
         """Periodic safety check to verify if Rekordbox application is running."""

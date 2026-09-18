@@ -4,8 +4,17 @@ Inspired by modern DJ applications (Rekordbox, CDJ/XDJ interfaces) featuring
 a deep dark slate aesthetic with electric blue and amber accents.
 """
 
+import sys
 from PySide6.QtGui import QColor, QFont, QPalette
 from PySide6.QtWidgets import QApplication
+
+# Platform-appropriate default font family (avoids missing font warnings on macOS/Linux)
+if sys.platform == "darwin":
+    FONT_FAMILY = '".AppleSystemUIFont", "Helvetica Neue", Arial, sans-serif'
+elif sys.platform == "win32":
+    FONT_FAMILY = '"Segoe UI", "Helvetica Neue", Arial, sans-serif'
+else:
+    FONT_FAMILY = '"Ubuntu", "DejaVu Sans", Arial, sans-serif'
 
 # Color Palette Constants
 COLOR_BG_DARK = "#121215"
@@ -45,7 +54,7 @@ MODERN_DARK_QSS = f"""
 QMainWindow, QWidget {{
     background-color: {COLOR_BG_DARK};
     color: {COLOR_TEXT_PRIMARY};
-    font-family: ".AppleSystemUIFont", "Helvetica Neue", "Segoe UI", Arial, sans-serif;
+    font-family: {FONT_FAMILY};
     font-size: 13px;
 }}
 
@@ -66,6 +75,42 @@ QFrame#cardFrame {{
     background-color: {COLOR_BG_CARD};
     border: 1px solid {COLOR_BORDER};
     border-radius: 8px;
+}}
+
+/* Sidebar Toggle & Header Buttons */
+QPushButton#sidebarToggleBtn {{
+    background-color: transparent;
+    color: {COLOR_TEXT_SECONDARY};
+    border: 1px solid transparent;
+    border-radius: 6px;
+    font-size: 15px;
+    padding: 4px;
+}}
+
+QPushButton#sidebarToggleBtn:hover {{
+    background-color: {COLOR_BG_HOVER};
+    color: {COLOR_TEXT_PRIMARY};
+    border-color: {COLOR_BORDER};
+}}
+
+QPushButton#sidebarToggleBtn:pressed {{
+    background-color: {COLOR_BG_DARK};
+}}
+
+QPushButton#sidebarCollapseBtn {{
+    background-color: transparent;
+    color: {COLOR_TEXT_MUTED};
+    border: 1px solid transparent;
+    border-radius: 6px;
+    font-size: 12px;
+    padding: 6px 8px;
+    font-weight: 500;
+}}
+
+QPushButton#sidebarCollapseBtn:hover {{
+    background-color: {COLOR_BG_HOVER};
+    color: {COLOR_TEXT_PRIMARY};
+    border-color: {COLOR_BORDER};
 }}
 
 /* Sidebar Navigation Buttons */
@@ -90,6 +135,25 @@ QPushButton#navButton:checked {{
     color: {COLOR_BLUE};
     border-left: 3px solid {COLOR_BLUE};
     font-weight: 600;
+}}
+
+/* Collapsed Navigation Button State (Icon-only) */
+QPushButton#navButton[collapsed="true"] {{
+    text-align: center;
+    padding: 12px 0px;
+    font-size: 16px;
+    border-left: 3px solid transparent;
+}}
+
+QPushButton#navButton[collapsed="true"]:hover {{
+    background-color: {COLOR_BG_HOVER};
+    color: {COLOR_TEXT_PRIMARY};
+}}
+
+QPushButton#navButton[collapsed="true"]:checked {{
+    background-color: {COLOR_BG_HOVER};
+    color: {COLOR_BLUE};
+    border-left: 3px solid {COLOR_BLUE};
 }}
 
 /* Standard Buttons */
