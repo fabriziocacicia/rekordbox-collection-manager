@@ -1,6 +1,6 @@
-# Rekordbox Collection Fixer
+# Rekordbox Collection Manager
 
-A collection of standalone utilities and tools for managing, inspecting, and fixing Pioneer / AlphaTheta Rekordbox databases (`master.db` and DeviceSQL `exportLibrary.db`).
+A native macOS desktop application and collection of standalone utilities for managing, inspecting, and fixing Pioneer / AlphaTheta Rekordbox databases (`master.db` and DeviceSQL `exportLibrary.db`).
 
 ## Tools
 
@@ -81,9 +81,9 @@ uv run python -m rekordbox_collection_fixer.edit_play_count
 
 ---
 
-### 3. Desktop GUI Application (`rekordbox-gui`)
+### 3. Desktop Application (`rekordbox-manager` / `rekordbox-gui`)
 
-A native macOS desktop application built with **PySide6 (Qt6)** featuring a Pioneer DJ-inspired dark theme. It combines all tools into a single desktop interface with live Rekordbox safety detection.
+**Rekordbox Collection Manager** is a native macOS desktop application built with **PySide6 (Qt6)** featuring a Pioneer DJ-inspired dark theme. It combines all tools into a single desktop interface with live Rekordbox safety detection.
 
 Features:
 - **Safety Guard Banner**: Live process monitor warns if Rekordbox is running and safely locks write transactions to prevent database conflicts.
@@ -102,13 +102,29 @@ Features:
   - Multi-select batch actions (+1, -1, reset to 0, or set custom value).
 - **Quick Backup**: One-click desktop snapshot of your database file.
 
-#### Launching the GUI
+#### Launching the Desktop App
+
+You can launch the app from the terminal or build a native macOS `.app` bundle:
+
+**Option A: Native macOS App (Dock & Applications)**
+```bash
+# Build the native macOS .app bundle
+./scripts/build_app.sh
+
+# Open the native macOS app
+open "dist/Rekordbox Collection Manager.app"
+```
+> **Tip:** You can drag `dist/Rekordbox Collection Manager.app` to your **Applications** folder or Dock to keep it permanently with its native icon and title!
+
+**Option B: From Terminal**
 ```bash
 # Launch with default master.db
+uv run rekordbox-manager
+# or
 uv run rekordbox-gui
 
 # Launch with custom database (e.g. USB exportLibrary.db)
-uv run rekordbox-gui -d /Volumes/USB/PIONEER/exportLibrary.db
+uv run rekordbox-manager -d /Volumes/USB/PIONEER/exportLibrary.db
 ```
 
 ---

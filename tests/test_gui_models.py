@@ -255,6 +255,20 @@ class TestAssets(unittest.TestCase):
         icon = get_app_icon()
         self.assertFalse(icon.isNull())
 
+    def test_macos_metadata(self):
+        from rekordbox_collection_fixer.gui.assets import get_asset_path
+        from rekordbox_collection_fixer.gui.macos import (
+            setup_macos_app_metadata,
+            update_macos_menu_title,
+        )
+
+        # Should execute safely without throwing exceptions
+        setup_macos_app_metadata(
+            app_name="Rekordbox Collection Manager",
+            icon_path=get_asset_path("icon.png"),
+        )
+        update_macos_menu_title("Rekordbox Collection Manager")
+
 
 if __name__ == "__main__":
     unittest.main()

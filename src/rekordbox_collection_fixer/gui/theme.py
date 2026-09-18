@@ -45,7 +45,7 @@ MODERN_DARK_QSS = f"""
 QMainWindow, QWidget {{
     background-color: {COLOR_BG_DARK};
     color: {COLOR_TEXT_PRIMARY};
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-family: ".AppleSystemUIFont", "Helvetica Neue", "Segoe UI", Arial, sans-serif;
     font-size: 13px;
 }}
 

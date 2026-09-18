@@ -35,7 +35,7 @@ class DatabaseLoaderWorker(QThread):
 
     def run(self) -> None:
         try:
-            resolved_path = resolve_db_path(self.db_path)
+            resolved_path = resolve_db_path(self.db_path, allow_prompt=False)
             engine, _ = open_database(resolved_path)
 
             history_table = detect_history_table(engine)

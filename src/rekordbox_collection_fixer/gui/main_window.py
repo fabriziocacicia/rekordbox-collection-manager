@@ -74,7 +74,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self, initial_db_path: Optional[str] = None):
         super().__init__()
-        self.setWindowTitle("Rekordbox Collection Fixer")
+        self.setWindowTitle("Rekordbox Collection Manager")
         self.resize(1180, 780)
         self.setMinimumSize(960, 600)
 
@@ -129,7 +129,7 @@ class MainWindow(QMainWindow):
             logo_label.setPixmap(pix)
             header_layout.addWidget(logo_label)
 
-        brand_label = QLabel("Rekordbox Collection Fixer")
+        brand_label = QLabel("Rekordbox Collection Manager")
         brand_label.setStyleSheet("font-size: 15px; font-weight: 700; color: #ffffff; letter-spacing: -0.2px;")
         header_layout.addWidget(brand_label)
 
@@ -230,7 +230,7 @@ class MainWindow(QMainWindow):
         # 3. Status Bar
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
-        self.status_bar.showMessage("Initializing Rekordbox Collection Fixer...")
+        self.status_bar.showMessage("Initializing Rekordbox Collection Manager...")
 
     def _on_nav_clicked(self, page_id: int) -> None:
         self.stacked_widget.setCurrentIndex(page_id)
@@ -286,7 +286,7 @@ class MainWindow(QMainWindow):
         self.db_label.setToolTip(path)
 
         # Update window title with active database
-        self.setWindowTitle(f"Rekordbox Collection Fixer — {db_filename}")
+        self.setWindowTitle(f"Rekordbox Collection Manager — {db_filename}")
         if sys.platform == "darwin":
             try:
                 self.setWindowFilePath(path)
@@ -312,7 +312,7 @@ class MainWindow(QMainWindow):
         )
 
     def _on_db_error(self, err_msg: str) -> None:
-        self.setWindowTitle("Rekordbox Collection Fixer")
+        self.setWindowTitle("Rekordbox Collection Manager")
         self.status_bar.showMessage(f"❌ Database load error: {err_msg}")
         self.db_label.setText("Database: Error")
         QMessageBox.critical(

@@ -216,6 +216,7 @@ def detect_history_table(engine: Engine) -> str:
 def resolve_db_path(
     candidate_or_args: Any = None,
     prompt_message: str = "Enter path to Rekordbox database (master.db or exportLibrary.db):",
+    allow_prompt: bool = True,
 ) -> str:
     """Determine database path from candidate string, argparse.Namespace, local exportLibrary.db, default master.db, or prompt."""
     candidate: Optional[str] = None
@@ -228,6 +229,8 @@ def resolve_db_path(
         resolved = os.path.abspath(os.path.expanduser(candidate))
         if os.path.exists(resolved):
             return resolved
+        if not allow_prompt:
+            raise FileNotFoundError(f"Specified database file not found: {resolved}")
         print(f"⚠️  Specified database file not found: {resolved}")
 
     # If exportLibrary.db is in the current working directory, use it
@@ -237,6 +240,11 @@ def resolve_db_path(
 
     # Try default Rekordbox master.db
     master_path = get_default_master_db_path()
+    if not allow_prompt:
+        if master_path and os.path.exists(master_path):
+            return master_path
+        raise FileNotFoundError("Could not find default Rekordbox master.db. Please specify a path.")
+
     default_prompt_path = master_path or "exportLibrary.db"
 
     user_entered = questionary.path(
