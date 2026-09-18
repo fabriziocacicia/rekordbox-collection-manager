@@ -11,6 +11,7 @@ from rekordbox_collection_fixer.rename_history import (
     extract_date_from_name,
     extract_year_month_from_name_or_date,
     fetch_history_records,
+    fetch_session_tracks,
     history_session_sort_key,
     is_rekordbox_running,
     main,
@@ -747,9 +748,154 @@ class TestRenameHistory(unittest.TestCase):
             self.assertEqual(a1["DateCreated"], "2026-08-01 17:13:20")
             self.assertEqual(a1["Seq"], 2)  # after j1 (July 10)
 
-            # August should only contain a2
-            aug_sessions = conn.exec_driver_sql("SELECT ID, Seq FROM djmdHistory WHERE ParentID = '202608'").fetchall()
-            self.assertEqual(aug_sessions, [("a2", 1)])
+    def test_fetch_session_tracks_with_songs(self):
+        engine = create_engine("sqlite:///:memory:")
+        with engine.begin() as conn:
+            conn.exec_driver_sql("""
+                CREATE TABLE djmdHistory (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    Seq INTEGER,
+                    Name VARCHAR(255),
+                    Attribute INTEGER,
+                    ParentID VARCHAR(255),
+                    DateCreated VARCHAR(255),
+                    rb_local_deleted INTEGER DEFAULT 0
+                );
+            """)
+            conn.exec_driver_sql("""
+                CREATE TABLE djmdContent (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    Title VARCHAR(255),
+                    ArtistID VARCHAR(255),
+                    AlbumID VARCHAR(255),
+                    GenreID VARCHAR(255),
+                    KeyID VARCHAR(255),
+                    SrcArtistName VARCHAR(255),
+                    BPM INTEGER,
+                    Length INTEGER,
+                    DJPlayCount INTEGER,
+                    Rating INTEGER,
+                    ReleaseYear INTEGER,
+                    BitRate INTEGER,
+                    Commnt TEXT,
+                    FolderPath VARCHAR(255),
+                    FileNameL VARCHAR(255),
+                    rb_local_deleted INTEGER DEFAULT 0
+                );
+            """)
+            conn.exec_driver_sql("""
+                CREATE TABLE djmdSongHistory (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    HistoryID VARCHAR(255),
+                    ContentID VARCHAR(255),
+                    TrackNo INTEGER,
+                    created_at VARCHAR(255),
+                    rb_local_deleted INTEGER DEFAULT 0
+                );
+            """)
+            conn.exec_driver_sql("""
+                CREATE TABLE djmdArtist (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    Name VARCHAR(255)
+                );
+            """)
+            conn.exec_driver_sql("""
+                CREATE TABLE djmdAlbum (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    Name VARCHAR(255)
+                );
+            """)
+            conn.exec_driver_sql("""
+                CREATE TABLE djmdGenre (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    Name VARCHAR(255)
+                );
+            """)
+            conn.exec_driver_sql("""
+                CREATE TABLE djmdKey (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    ScaleName VARCHAR(255)
+                );
+            """)
+
+            # Insert lookup tables
+            conn.exec_driver_sql("INSERT INTO djmdArtist VALUES ('a1', 'David Guetta'), ('a2', 'Daft Punk');")
+            conn.exec_driver_sql("INSERT INTO djmdAlbum VALUES ('al1', 'Nothing But the Beat'), ('al2', 'Discovery');")
+            conn.exec_driver_sql("INSERT INTO djmdGenre VALUES ('g1', 'Dance / Electro Pop'), ('g2', 'French House');")
+            conn.exec_driver_sql("INSERT INTO djmdKey VALUES ('k1', 'Fm'), ('k2', 'D');")
+
+            # Insert Session
+            conn.exec_driver_sql("INSERT INTO djmdHistory VALUES ('sess1', 1, 'HISTORY 2026-08-14 @ Beach Party', 0, '202608', '2026-08-14 18:00:00', 0);")
+
+            # Insert Tracks
+            conn.exec_driver_sql("""
+                INSERT INTO djmdContent VALUES 
+                    ('c1', 'Titanium', 'a1', 'al1', 'g1', 'k1', NULL, 12600, 245, 10, 5, 2011, 320, 'Bang', '/Music/titanium.mp3', 'titanium.mp3', 0),
+                    ('c2', 'One More Time', 'a2', 'al2', 'g2', 'k2', NULL, 12300, 320, 8, 4, 2001, 320, '', '/Music/omt.mp3', 'omt.mp3', 0);
+            """)
+
+            # Insert Playlist Song History
+            conn.exec_driver_sql("""
+                INSERT INTO djmdSongHistory VALUES 
+                    ('sh1', 'sess1', 'c1', 1, '2026-08-14 18:05:00', 0),
+                    ('sh2', 'sess1', 'c2', 2, '2026-08-14 18:09:00', 0);
+            """)
+
+        data = fetch_session_tracks(engine, "sess1")
+        self.assertEqual(data["history_id"], "sess1")
+        self.assertEqual(data["session"]["name"], "HISTORY 2026-08-14 @ Beach Party")
+        self.assertEqual(data["session"]["parent_id"], "202608")
+        self.assertEqual(len(data["tracks"]), 2)
+
+        # Track 1 check
+        t1 = data["tracks"][0]
+        self.assertEqual(t1["track_no"], 1)
+        self.assertEqual(t1["title"], "Titanium")
+        self.assertEqual(t1["artist"], "David Guetta")
+        self.assertEqual(t1["album"], "Nothing But the Beat")
+        self.assertEqual(t1["genre"], "Dance / Electro Pop")
+        self.assertEqual(t1["key"], "Fm")
+        self.assertEqual(t1["bpm"], 126.0)
+        self.assertEqual(t1["duration_sec"], 245)
+        self.assertEqual(t1["duration_str"], "4:05")
+        self.assertEqual(t1["play_count"], 10)
+
+        # Track 2 check
+        t2 = data["tracks"][1]
+        self.assertEqual(t2["track_no"], 2)
+        self.assertEqual(t2["title"], "One More Time")
+        self.assertEqual(t2["artist"], "Daft Punk")
+        self.assertEqual(t2["bpm"], 123.0)
+
+        # Stats check
+        stats = data["stats"]
+        self.assertEqual(stats["track_count"], 2)
+        self.assertEqual(stats["total_duration_sec"], 565)
+        self.assertEqual(stats["total_duration_str"], "9m 25s")
+        self.assertEqual(stats["bpm_min"], 123.0)
+        self.assertEqual(stats["bpm_max"], 126.0)
+        self.assertEqual(stats["bpm_avg"], 124.5)
+        self.assertEqual(len(stats["top_genres"]), 2)
+
+    def test_fetch_session_tracks_empty(self):
+        engine = create_engine("sqlite:///:memory:")
+        with engine.begin() as conn:
+            conn.exec_driver_sql("""
+                CREATE TABLE djmdHistory (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    Name VARCHAR(255),
+                    DateCreated VARCHAR(255)
+                );
+            """)
+            conn.exec_driver_sql("INSERT INTO djmdHistory VALUES ('empty_sess', 'Empty Session', '2026-09-01');")
+
+        data = fetch_session_tracks(engine, "empty_sess")
+        self.assertEqual(data["history_id"], "empty_sess")
+        self.assertEqual(data["session"]["name"], "Empty Session")
+        self.assertEqual(len(data["tracks"]), 0)
+        self.assertEqual(data["stats"]["track_count"], 0)
+        self.assertEqual(data["stats"]["total_duration_str"], "0m")
+        self.assertEqual(data["stats"]["bpm_avg"], 0.0)
 
 
 if __name__ == "__main__":

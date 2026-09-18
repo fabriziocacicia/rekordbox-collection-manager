@@ -220,6 +220,31 @@ QPushButton#stepperButton:disabled {{
     border-color: {COLOR_BORDER};
 }}
 
+/* History Session Detail Action Button */
+QPushButton#detailActionBtn {{
+    background-color: {COLOR_BG_CARD};
+    color: {COLOR_TEXT_PRIMARY};
+    border: 1px solid {COLOR_BORDER_LIGHT};
+    border-radius: 5px;
+    padding: 1px 10px;
+    font-size: 11px;
+    font-weight: 600;
+    min-height: 20px;
+    max-height: 20px;
+}}
+
+QPushButton#detailActionBtn:hover {{
+    background-color: {COLOR_BLUE};
+    color: #ffffff;
+    border-color: {COLOR_BLUE};
+}}
+
+QPushButton#detailActionBtn:pressed {{
+    background-color: {COLOR_BLUE_PRESSED};
+    color: #ffffff;
+    border-color: {COLOR_BLUE_PRESSED};
+}}
+
 /* Inputs, SpinBoxes & ComboBoxes */
 QLineEdit, QSpinBox, QComboBox {{
     background-color: {COLOR_BG_INPUT};

@@ -314,6 +314,176 @@ def fetch_history_records(engine: Engine, table_format: str) -> List[Dict[str, A
     return records
 
 
+def fetch_session_tracks(engine: Engine, history_id: str) -> Dict[str, Any]:
+    """Fetch session metadata, track list, and aggregate statistics for a history session."""
+    session_info: Dict[str, Any] = {"id": history_id, "name": "", "date": "", "parent_id": None}
+    tracks: List[Dict[str, Any]] = []
+
+    with engine.connect() as conn:
+        tables_res = conn.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table';").fetchall()
+        existing_tables = {r[0] for r in tables_res}
+
+        # 1. Fetch Session Info
+        if "djmdHistory" in existing_tables:
+            cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(djmdHistory);").fetchall()}
+            has_parent = "ParentID" in cols
+            select_parent = ", ParentID" if has_parent else ""
+            h_row = conn.execute(
+                text(f"SELECT ID, Name, DateCreated{select_parent} FROM djmdHistory WHERE ID = :hid;"),
+                {"hid": history_id},
+            ).fetchone()
+            if h_row:
+                session_info["id"] = str(h_row[0])
+                session_info["name"] = h_row[1] or "(Untitled)"
+                session_info["date"] = h_row[2] or ""
+                if has_parent and len(h_row) > 3:
+                    session_info["parent_id"] = str(h_row[3]) if h_row[3] is not None else None
+        elif "history" in existing_tables:
+            h_row = conn.execute(
+                text("SELECT history_id, name FROM history WHERE history_id = :hid;"),
+                {"hid": history_id},
+            ).fetchone()
+            if h_row:
+                session_info["id"] = str(h_row[0])
+                session_info["name"] = h_row[1] or "(Untitled)"
+
+        # 2. Fetch Tracks
+        if "djmdSongHistory" in existing_tables and "djmdContent" in existing_tables:
+            sh_cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(djmdSongHistory);").fetchall()}
+            c_cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(djmdContent);").fetchall()}
+
+            sh_del = "AND (sh.rb_local_deleted = 0 OR sh.rb_local_deleted IS NULL)" if "rb_local_deleted" in sh_cols else ""
+            c_del = "AND (c.rb_local_deleted = 0 OR c.rb_local_deleted IS NULL)" if "rb_local_deleted" in c_cols else ""
+
+            # Check optional join tables
+            join_artist = "LEFT JOIN djmdArtist a ON c.ArtistID = a.ID" if "djmdArtist" in existing_tables else ""
+            artist_name_expr = "COALESCE(a.Name, c.SrcArtistName, 'Unknown Artist')" if "djmdArtist" in existing_tables else "COALESCE(c.SrcArtistName, 'Unknown Artist')"
+
+            join_album = "LEFT JOIN djmdAlbum al ON c.AlbumID = al.ID" if "djmdAlbum" in existing_tables else ""
+            album_expr = "al.Name" if "djmdAlbum" in existing_tables else "NULL"
+
+            join_genre = "LEFT JOIN djmdGenre g ON c.GenreID = g.ID" if "djmdGenre" in existing_tables else ""
+            genre_expr = "g.Name" if "djmdGenre" in existing_tables else "NULL"
+
+            join_key = "LEFT JOIN djmdKey k ON c.KeyID = k.ID" if "djmdKey" in existing_tables else ""
+            key_expr = "k.ScaleName" if "djmdKey" in existing_tables else "NULL"
+
+            query = f"""
+                SELECT 
+                    sh.TrackNo,
+                    sh.created_at AS PlayedAt,
+                    c.ID AS ContentID,
+                    c.Title,
+                    {artist_name_expr} AS ArtistName,
+                    {album_expr} AS AlbumName,
+                    {genre_expr} AS GenreName,
+                    {key_expr} AS KeyName,
+                    c.BPM,
+                    c.Length,
+                    c.DJPlayCount,
+                    c.Rating,
+                    c.ReleaseYear,
+                    c.BitRate,
+                    c.Commnt,
+                    c.FolderPath,
+                    c.FileNameL
+                FROM djmdSongHistory sh
+                JOIN djmdContent c ON sh.ContentID = c.ID
+                {join_artist}
+                {join_album}
+                {join_genre}
+                {join_key}
+                WHERE sh.HistoryID = :hid
+                  {sh_del}
+                  {c_del}
+                ORDER BY sh.TrackNo ASC;
+            """
+            rows = conn.execute(text(query), {"hid": history_id}).mappings().fetchall()
+            for r in rows:
+                bpm_raw = r.get("BPM")
+                bpm_val = round(float(bpm_raw) / 100.0, 1) if bpm_raw and bpm_raw > 0 else 0.0
+
+                duration_sec = int(r.get("Length") or 0)
+                if duration_sec > 0:
+                    mins = duration_sec // 60
+                    secs = duration_sec % 60
+                    dur_str = f"{mins}:{secs:02d}"
+                else:
+                    dur_str = "--:--"
+
+                tracks.append({
+                    "track_no": int(r.get("TrackNo") or 0),
+                    "content_id": str(r.get("ContentID") or ""),
+                    "title": r.get("Title") or "(Untitled)",
+                    "artist": r.get("ArtistName") or "Unknown Artist",
+                    "album": r.get("AlbumName") or "",
+                    "genre": r.get("GenreName") or "",
+                    "key": r.get("KeyName") or "",
+                    "bpm": bpm_val,
+                    "duration_sec": duration_sec,
+                    "duration_str": dur_str,
+                    "play_count": int(r.get("DJPlayCount") or 0),
+                    "rating": int(r.get("Rating") or 0),
+                    "year": int(r.get("ReleaseYear") or 0),
+                    "bitrate": int(r.get("BitRate") or 0),
+                    "comment": r.get("Commnt") or "",
+                    "folder_path": r.get("FolderPath") or "",
+                    "filename": r.get("FileNameL") or "",
+                    "played_at": str(r.get("PlayedAt") or ""),
+                })
+
+    # 3. Compute Aggregate Stats
+    total_tracks = len(tracks)
+    total_duration_sec = sum(t["duration_sec"] for t in tracks)
+    if total_duration_sec >= 3600:
+        hrs = total_duration_sec // 3600
+        mins = (total_duration_sec % 3600) // 60
+        total_duration_str = f"{hrs}h {mins:02d}m"
+    elif total_duration_sec > 0:
+        mins = total_duration_sec // 60
+        secs = total_duration_sec % 60
+        total_duration_str = f"{mins}m {secs:02d}s"
+    else:
+        total_duration_str = "0m"
+
+    bpms = [t["bpm"] for t in tracks if t["bpm"] > 0]
+    if bpms:
+        bpm_min = round(min(bpms), 1)
+        bpm_max = round(max(bpms), 1)
+        bpm_avg = round(sum(bpms) / len(bpms), 1)
+    else:
+        bpm_min, bpm_max, bpm_avg = 0.0, 0.0, 0.0
+
+    genre_counts: Dict[str, int] = {}
+    key_counts: Dict[str, int] = {}
+    for t in tracks:
+        if t["genre"]:
+            genre_counts[t["genre"]] = genre_counts.get(t["genre"], 0) + 1
+        if t["key"]:
+            key_counts[t["key"]] = key_counts.get(t["key"], 0) + 1
+
+    top_genres = sorted(genre_counts.items(), key=lambda x: x[1], reverse=True)[:3]
+    top_keys = sorted(key_counts.items(), key=lambda x: x[1], reverse=True)[:5]
+
+    stats = {
+        "track_count": total_tracks,
+        "total_duration_sec": total_duration_sec,
+        "total_duration_str": total_duration_str,
+        "bpm_min": bpm_min,
+        "bpm_max": bpm_max,
+        "bpm_avg": bpm_avg,
+        "top_genres": top_genres,
+        "top_keys": top_keys,
+    }
+
+    return {
+        "history_id": history_id,
+        "session": session_info,
+        "tracks": tracks,
+        "stats": stats,
+    }
+
+
 def update_history_record(
     engine: Engine,
     record: Dict[str, Any],

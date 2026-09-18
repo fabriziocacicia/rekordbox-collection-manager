@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QSplitter,
+    QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
     QTreeWidget,
@@ -20,6 +21,7 @@ from PySide6.QtWidgets import (
 )
 from sqlalchemy.engine import Engine
 
+from rekordbox_collection_fixer.gui.history_detail_view import HistoryDetailView
 from rekordbox_collection_fixer.gui.theme import (
     COLOR_AMBER,
     COLOR_AMBER_BG,
@@ -55,13 +57,26 @@ class HistoryView(QWidget):
         self.staged_edits: Dict[str, Dict[str, Any]] = {}
         self.active_folder_filter: Optional[str] = None  # None for All, or 'YYYYMM' or 'YYYY'
         self.search_filter_text: str = ""
+        self.active_session_ids_in_table: List[str] = []
+        self.current_detail_id: Optional[str] = None
 
         self._init_ui()
 
     def _init_ui(self) -> None:
-        main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(16, 16, 16, 16)
-        main_layout.setSpacing(12)
+        root_layout = QVBoxLayout(self)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
+
+        self.stack = QStackedWidget(self)
+        root_layout.addWidget(self.stack)
+
+        # ----------------------------------------------------------------------
+        # Page 0: Sessions List & Batch Edit Screen
+        # ----------------------------------------------------------------------
+        self.sessions_widget = QWidget()
+        sessions_layout = QVBoxLayout(self.sessions_widget)
+        sessions_layout.setContentsMargins(16, 16, 16, 16)
+        sessions_layout.setSpacing(12)
 
         # 1. Top Action Toolbar
         top_bar = QHBoxLayout()
@@ -78,7 +93,7 @@ class HistoryView(QWidget):
         self.realign_btn.clicked.connect(self._on_realign_chronology)
         top_bar.addWidget(self.realign_btn)
 
-        main_layout.addLayout(top_bar)
+        sessions_layout.addLayout(top_bar)
 
         # 2. Main Content Splitter (Left: Folder Tree, Right: Session Table)
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -107,26 +122,35 @@ class HistoryView(QWidget):
         table_layout.setContentsMargins(0, 0, 0, 0)
         table_layout.setSpacing(6)
 
-        table_header = QLabel("SESSION SESSIONS (Double-click cells to edit)")
+        table_header = QLabel("HISTORY SESSIONS (Double-click name/date to edit • Click Details to view tracks)")
         table_header.setStyleSheet(f"color: {COLOR_TEXT_MUTED}; font-size: 11px; font-weight: 600; padding: 4px;")
         table_layout.addWidget(table_header)
 
         self.table = QTableWidget()
-        self.table.setColumnCount(5)
-        self.table.setHorizontalHeaderLabels(["Status", "Date", "Session Name", "Target Folder", "Created At"])
+        self.table.setColumnCount(6)
+        self.table.setHorizontalHeaderLabels(["Status", "Date", "Session Name", "Target Folder", "Created At", "Actions"])
         self.table.setAlternatingRowColors(True)
+        self.table.verticalHeader().setDefaultSectionSize(42)
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
+        self.table.setColumnWidth(5, 110)
+
+        actions_hdr = self.table.horizontalHeaderItem(5)
+        if actions_hdr:
+            actions_hdr.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+
         self.table.cellChanged.connect(self._on_cell_changed)
+        self.table.cellDoubleClicked.connect(self._on_cell_double_clicked)
         table_layout.addWidget(self.table)
 
         splitter.addWidget(table_container)
         splitter.setSizes([220, 780])
 
-        main_layout.addWidget(splitter, stretch=1)
+        sessions_layout.addWidget(splitter, stretch=1)
 
         # 3. Bottom Action Bar
         bottom_bar = QHBoxLayout()
@@ -147,7 +171,18 @@ class HistoryView(QWidget):
         self.save_btn.clicked.connect(self._on_save_all_changes)
         bottom_bar.addWidget(self.save_btn)
 
-        main_layout.addLayout(bottom_bar)
+        sessions_layout.addLayout(bottom_bar)
+        self.stack.addWidget(self.sessions_widget)
+
+        # ----------------------------------------------------------------------
+        # Page 1: History Session Detail View Screen
+        # ----------------------------------------------------------------------
+        self.detail_view = HistoryDetailView(self)
+        self.detail_view.back_clicked.connect(self._on_back_from_detail)
+        self.detail_view.prev_session_requested.connect(self._on_prev_session)
+        self.detail_view.next_session_requested.connect(self._on_next_session)
+        self.detail_view.notify_status.connect(self.notify_status.emit)
+        self.stack.addWidget(self.detail_view)
 
     def set_data(self, engine: Engine, records: List[Dict[str, Any]]) -> None:
         """Populate the view with records loaded from database."""
@@ -157,6 +192,13 @@ class HistoryView(QWidget):
         self._update_folder_tree()
         self._refresh_table()
         self._update_status_bar()
+
+        if self.current_detail_id:
+            matching = next((r for r in records if r["id"] == self.current_detail_id), None)
+            if matching:
+                self._open_session_detail(self.current_detail_id)
+            else:
+                self._on_back_from_detail()
 
     def _update_folder_tree(self) -> None:
         """Rebuild Year/Month folder tree from current records."""
@@ -220,6 +262,7 @@ class HistoryView(QWidget):
         """Render session records in the table according to active filters."""
         self.table.blockSignals(True)
         self.table.setRowCount(0)
+        self.active_session_ids_in_table.clear()
 
         for r in self.original_records:
             rec_id = r["id"]
@@ -253,6 +296,7 @@ class HistoryView(QWidget):
             # Insert Row
             row_idx = self.table.rowCount()
             self.table.insertRow(row_idx)
+            self.active_session_ids_in_table.append(rec_id)
 
             # Col 0: Status badge
             status_item = QTableWidgetItem()
@@ -295,8 +339,87 @@ class HistoryView(QWidget):
             created_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
             self.table.setItem(row_idx, 4, created_item)
 
+            # Col 5: Actions (View Details)
+            action_widget = QWidget()
+            action_widget.setStyleSheet("background: transparent;")
+            action_layout = QHBoxLayout(action_widget)
+            action_layout.setContentsMargins(0, 0, 0, 0)
+            action_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+            detail_btn = QPushButton("🔍 Details")
+            detail_btn.setObjectName("detailActionBtn")
+            detail_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            detail_btn.setToolTip("View session details and full tracklist")
+            detail_btn.clicked.connect(lambda _, rid=rec_id: self._open_session_detail(rid))
+            action_layout.addWidget(detail_btn)
+
+            self.table.setCellWidget(row_idx, 5, action_widget)
+
         self.table.blockSignals(False)
         self._update_status_bar()
+
+    def _on_cell_double_clicked(self, row: int, column: int) -> None:
+        """Double clicking non-editable columns (0, 3, 4, 5) opens detail view."""
+        if column in (1, 2):
+            return
+        item = self.table.item(row, 1) or self.table.item(row, 2)
+        if item:
+            rec_id = item.data(Qt.ItemDataRole.UserRole)
+            if rec_id:
+                self._open_session_detail(rec_id)
+
+    def _open_session_detail(self, rec_id: str) -> None:
+        """Open the HistoryDetailView for a given session ID."""
+        if not self.engine:
+            return
+        self.current_detail_id = rec_id
+        record = next((r for r in self.original_records if r["id"] == rec_id), None)
+        if not record:
+            return
+
+        is_staged = rec_id in self.staged_edits
+        name = self.staged_edits[rec_id]["name"] if is_staged else record.get("name", "")
+        date = self.staged_edits[rec_id]["date"] if is_staged else record.get("date", "")
+
+        has_prev = False
+        has_next = False
+        if rec_id in self.active_session_ids_in_table:
+            idx = self.active_session_ids_in_table.index(rec_id)
+            has_prev = idx > 0
+            has_next = idx < len(self.active_session_ids_in_table) - 1
+
+        self.detail_view.load_session(
+            self.engine,
+            rec_id,
+            session_title=name,
+            session_date=date,
+            has_prev=has_prev,
+            has_next=has_next,
+        )
+        self.stack.setCurrentIndex(1)
+
+    def _on_back_from_detail(self) -> None:
+        """Return from detail view to main sessions list."""
+        self.stack.setCurrentIndex(0)
+        self.current_detail_id = None
+
+    def _on_prev_session(self) -> None:
+        """Navigate to previous session in current list."""
+        if not self.current_detail_id or self.current_detail_id not in self.active_session_ids_in_table:
+            return
+        idx = self.active_session_ids_in_table.index(self.current_detail_id)
+        if idx > 0:
+            prev_id = self.active_session_ids_in_table[idx - 1]
+            self._open_session_detail(prev_id)
+
+    def _on_next_session(self) -> None:
+        """Navigate to next session in current list."""
+        if not self.current_detail_id or self.current_detail_id not in self.active_session_ids_in_table:
+            return
+        idx = self.active_session_ids_in_table.index(self.current_detail_id)
+        if idx < len(self.active_session_ids_in_table) - 1:
+            next_id = self.active_session_ids_in_table[idx + 1]
+            self._open_session_detail(next_id)
 
     def _on_cell_changed(self, row: int, column: int) -> None:
         """Handle inline editing of Date (col 1) or Name (col 2)."""

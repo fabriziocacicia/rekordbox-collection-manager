@@ -17,6 +17,7 @@ from rekordbox_collection_fixer.edit_play_count import (
     set_track_play_count,
     update_track_play_count,
 )
+from rekordbox_collection_fixer.gui.history_detail_view import HistoryDetailView
 from rekordbox_collection_fixer.gui.history_view import HistoryView
 from rekordbox_collection_fixer.gui.play_count_view import PlayCountView
 from rekordbox_collection_fixer.rename_history import (
@@ -423,5 +424,208 @@ class TestMainWindowSidebar(unittest.TestCase):
         self.assertEqual(self.window.stacked_widget.currentIndex(), 2)
 
 
+class TestHistoryDetailView(unittest.TestCase):
+    """Tests for the HistoryDetailView component."""
+
+    def setUp(self):
+        self.detail_view = HistoryDetailView()
+        self.mock_data = {
+            "history_id": "sess_101",
+            "session": {
+                "id": "sess_101",
+                "name": "HISTORY 2026-08-14 @ Space Terrace",
+                "date": "2026-08-14 18:30:00",
+                "parent_id": "202608",
+            },
+            "tracks": [
+                {
+                    "track_no": 1,
+                    "content_id": "c1",
+                    "title": "Glue",
+                    "artist": "Bicep",
+                    "album": "Bicep",
+                    "genre": "Breakbeat",
+                    "key": "Am",
+                    "bpm": 130.0,
+                    "duration_sec": 269,
+                    "duration_str": "4:29",
+                    "play_count": 12,
+                    "rating": 5,
+                    "year": 2017,
+                    "bitrate": 320,
+                    "comment": "",
+                    "folder_path": "/Music/bicep-glue.mp3",
+                    "filename": "bicep-glue.mp3",
+                    "played_at": "2026-08-14 18:35:00",
+                },
+                {
+                    "track_no": 2,
+                    "content_id": "c2",
+                    "title": "Opal (Four Tet Remix)",
+                    "artist": "Bicep",
+                    "album": "Opal",
+                    "genre": "Electronic",
+                    "key": "Fm",
+                    "bpm": 127.0,
+                    "duration_sec": 494,
+                    "duration_str": "8:14",
+                    "play_count": 7,
+                    "rating": 4,
+                    "year": 2018,
+                    "bitrate": 320,
+                    "comment": "",
+                    "folder_path": "/Music/opal.mp3",
+                    "filename": "opal.mp3",
+                    "played_at": "2026-08-14 18:40:00",
+                },
+            ],
+            "stats": {
+                "track_count": 2,
+                "total_duration_sec": 763,
+                "total_duration_str": "12m 43s",
+                "bpm_min": 127.0,
+                "bpm_max": 130.0,
+                "bpm_avg": 128.5,
+                "top_genres": [("Breakbeat", 1), ("Electronic", 1)],
+                "top_keys": [("Am", 1), ("Fm", 1)],
+            },
+        }
+
+    def test_detail_view_rendering(self):
+        self.detail_view._on_data_loaded(self.mock_data)
+
+        self.assertEqual(self.detail_view.session_title_label.text(), "HISTORY 2026-08-14 @ Space Terrace")
+        self.assertEqual(self.detail_view.kpi_tracks.val_lbl.text(), "2 tracks")
+        self.assertEqual(self.detail_view.kpi_runtime.val_lbl.text(), "12m 43s")
+        self.assertIn("127.0", self.detail_view.kpi_bpm.val_lbl.text())
+        self.assertIn("130.0", self.detail_view.kpi_bpm.val_lbl.text())
+        self.assertEqual(self.detail_view.table.rowCount(), 2)
+        self.assertEqual(self.detail_view.table.columnCount(), 10)
+
+        # Check column 1 (Title)
+        self.assertEqual(self.detail_view.table.item(0, 1).text(), "Glue")
+        self.assertEqual(self.detail_view.table.item(1, 1).text(), "Opal (Four Tet Remix)")
+
+        # Check column 2 (Artist)
+        self.assertEqual(self.detail_view.table.item(0, 2).text(), "Bicep")
+
+        # Check column 4 (Key)
+        self.assertEqual(self.detail_view.table.item(0, 4).text(), "Am")
+        self.assertEqual(self.detail_view.table.item(1, 4).text(), "Fm")
+
+        # Check column 8 (Bitrate)
+        self.assertEqual(self.detail_view.table.item(0, 8).text(), "320 kbps")
+
+    def test_detail_view_filtering(self):
+        self.detail_view._on_data_loaded(self.mock_data)
+        self.assertEqual(self.detail_view.table.rowCount(), 2)
+
+        # Filter for "Glue"
+        self.detail_view.search_input.setText("Glue")
+        self.assertEqual(self.detail_view.table.rowCount(), 1)
+        self.assertEqual(self.detail_view.table.item(0, 1).text(), "Glue")
+
+        # Clear filter
+        self.detail_view.search_input.setText("")
+        self.assertEqual(self.detail_view.table.rowCount(), 2)
+
+    def test_detail_view_copy_tracklist(self):
+        self.detail_view._on_data_loaded(self.mock_data)
+
+        # Call copy tracklist
+        self.detail_view._on_copy_tracklist()
+        clipboard = QApplication.clipboard()
+        if clipboard:
+            text = clipboard.text()
+            self.assertIn("01. Bicep - Glue", text)
+            self.assertIn("02. Bicep - Opal (Four Tet Remix)", text)
+
+    def test_detail_view_back_button(self):
+        back_called = False
+
+        def on_back():
+            nonlocal back_called
+            back_called = True
+
+        self.detail_view.back_clicked.connect(on_back)
+        self.detail_view.back_btn.click()
+        self.assertTrue(back_called)
+
+
+class TestHistoryViewDetailIntegration(unittest.TestCase):
+    """Tests for HistoryView table actions and detail view integration."""
+
+    def setUp(self):
+        self.engine = create_engine("sqlite:///:memory:")
+        with self.engine.begin() as conn:
+            conn.exec_driver_sql("""
+                CREATE TABLE djmdHistory (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    Seq INTEGER,
+                    Name VARCHAR(255),
+                    Attribute INTEGER,
+                    ParentID VARCHAR(255),
+                    DateCreated VARCHAR(255),
+                    rb_local_deleted INTEGER DEFAULT 0
+                );
+            """)
+            conn.exec_driver_sql("""
+                INSERT INTO djmdHistory VALUES 
+                    ('h1', 1, 'HISTORY 2026-08-10', 0, '202608', '2026-08-10 12:00:00', 0),
+                    ('h2', 2, 'HISTORY 2026-08-20', 0, '202608', '2026-08-20 12:00:00', 0);
+            """)
+
+        self.records = [
+            {"id": "h1", "name": "HISTORY 2026-08-10", "date": "2026-08-10 12:00:00", "parent_id": "202608", "table": "djmdHistory"},
+            {"id": "h2", "name": "HISTORY 2026-08-20", "date": "2026-08-20 12:00:00", "parent_id": "202608", "table": "djmdHistory"},
+        ]
+        self.history_view = HistoryView()
+        self.patcher = patch.object(self.history_view.detail_view, "load_session")
+        self.patcher.start()
+        self.history_view.set_data(self.engine, self.records)
+
+    def tearDown(self):
+        self.patcher.stop()
+
+    def test_table_has_six_columns_including_actions(self):
+        self.assertEqual(self.history_view.table.columnCount(), 6)
+        self.assertEqual(self.history_view.table.horizontalHeaderItem(5).text(), "Actions")
+        self.assertEqual(self.history_view.table.rowCount(), 2)
+
+    def test_open_session_detail_and_back(self):
+        # Initial page is 0 (Sessions list)
+        self.assertEqual(self.history_view.stack.currentIndex(), 0)
+
+        # Open detail for h1
+        self.history_view._open_session_detail("h1")
+        self.assertEqual(self.history_view.stack.currentIndex(), 1)
+        self.assertEqual(self.history_view.current_detail_id, "h1")
+
+        # Go back to sessions
+        self.history_view._on_back_from_detail()
+        self.assertEqual(self.history_view.stack.currentIndex(), 0)
+        self.assertIsNone(self.history_view.current_detail_id)
+
+    def test_double_click_row_opens_detail(self):
+        # Double clicking column 0 (Status) should open detail view
+        self.assertEqual(self.history_view.stack.currentIndex(), 0)
+        self.history_view._on_cell_double_clicked(0, 0)
+        self.assertEqual(self.history_view.stack.currentIndex(), 1)
+        self.assertEqual(self.history_view.current_detail_id, "h1")
+
+    def test_prev_next_session_navigation(self):
+        self.history_view._open_session_detail("h1")
+        self.assertEqual(self.history_view.current_detail_id, "h1")
+
+        # Next session
+        self.history_view._on_next_session()
+        self.assertEqual(self.history_view.current_detail_id, "h2")
+
+        # Prev session
+        self.history_view._on_prev_session()
+        self.assertEqual(self.history_view.current_detail_id, "h1")
+
+
 if __name__ == "__main__":
     unittest.main()
+

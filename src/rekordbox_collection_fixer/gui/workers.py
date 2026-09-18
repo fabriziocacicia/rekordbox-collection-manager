@@ -14,6 +14,7 @@ from rekordbox_collection_fixer.edit_play_count import (
 from rekordbox_collection_fixer.rename_history import (
     batch_update_history_records,
     fetch_history_records,
+    fetch_session_tracks,
     realign_history_order,
 )
 from rekordbox_collection_fixer.utils import (
@@ -116,9 +117,7 @@ class HistoryBatchSaveWorker(QThread):
     def run(self) -> None:
         try:
             stats = batch_update_history_records(
-                self.engine,
-                self.updates,
-                auto_realign=self.auto_realign,
+                self.engine, self.updates, auto_realign=self.auto_realign
             )
             self.success.emit(stats)
         except Exception as e:
@@ -126,9 +125,9 @@ class HistoryBatchSaveWorker(QThread):
 
 
 class HistoryRealignWorker(QThread):
-    """Worker to realign sequence order of history sessions."""
+    """Worker to run history realignment without UI freeze."""
 
-    success = Signal(dict)  # stats
+    success = Signal(dict)
     error = Signal(str)
 
     def __init__(self, engine: Engine, parent: Optional[Any] = None):
@@ -143,8 +142,8 @@ class HistoryRealignWorker(QThread):
             self.error.emit(str(e))
 
 
-class TrackPlayCountWorker(QThread):
-    """Worker to update or set play counts."""
+class PlayCountUpdateWorker(QThread):
+    """Worker to update a single track's play count in background."""
 
     success = Signal(str, int, int)  # track_id, old_count, new_count
     error = Signal(str, str)  # track_id, error_message
@@ -203,3 +202,26 @@ class PlayCountBatchSaveWorker(QThread):
         except Exception as e:
             self.error.emit(str(e))
 
+
+class HistorySessionDetailWorker(QThread):
+    """Worker to fetch session tracks and aggregate metrics without blocking the UI."""
+
+    success = Signal(dict)  # session details & tracks dictionary
+    error = Signal(str)
+
+    def __init__(
+        self,
+        engine: Engine,
+        history_id: str,
+        parent: Optional[Any] = None,
+    ):
+        super().__init__(parent)
+        self.engine = engine
+        self.history_id = history_id
+
+    def run(self) -> None:
+        try:
+            data = fetch_session_tracks(self.engine, self.history_id)
+            self.success.emit(data)
+        except Exception as e:
+            self.error.emit(str(e))
