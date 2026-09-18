@@ -131,6 +131,17 @@ class TestEditPlayCount(unittest.TestCase):
         results = search_tracks(self.engine, "Nonexistent Song Name XYZ")
         self.assertEqual(len(results), 0)
 
+    def test_search_tracks_sorting(self):
+        # Sort by play count desc
+        res = search_tracks(self.engine, "", sort_by="play_count", sort_order="desc")
+        self.assertGreaterEqual(res[0]["play_count"], res[-1]["play_count"])
+        self.assertEqual(res[0]["play_count"], 5)
+        self.assertEqual(res[0]["title"], "Titanium")
+
+        # Sort by title desc
+        res_title = search_tracks(self.engine, "", sort_by="title", sort_order="desc")
+        self.assertEqual(res_title[0]["title"], "Zero Plays Song")
+
     def test_update_track_play_count_increment(self):
         old_count, new_count = update_track_play_count(self.engine, "1", delta=1)
         self.assertEqual(old_count, 5)

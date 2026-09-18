@@ -10,6 +10,7 @@ os.environ["QT_QPA_PLATFORM"] = "offscreen"
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QMessageBox
 from sqlalchemy import create_engine
+from sqlalchemy.pool import StaticPool
 
 from rekordbox_collection_fixer.edit_play_count import (
     search_tracks,
@@ -175,7 +176,11 @@ class TestHistoryView(unittest.TestCase):
 
 class TestPlayCountView(unittest.TestCase):
     def setUp(self):
-        self.engine = create_engine("sqlite:///:memory:")
+        self.engine = create_engine(
+            "sqlite:///:memory:",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
         with self.engine.begin() as conn:
             conn.exec_driver_sql("""
                 CREATE TABLE djmdContent (
@@ -281,6 +286,55 @@ class TestPlayCountView(unittest.TestCase):
         row_idx = self._find_row_by_track_id("1")
         count_item = self.view.table.item(row_idx, 3)
         self.assertFalse(bool(count_item.flags() & Qt.ItemFlag.ItemIsEditable))
+
+    def _click_header_and_wait(self, col: int) -> None:
+        self.view._on_header_section_clicked(col)
+        if self.view.active_search_worker:
+            self.view.active_search_worker.wait(2000)
+            app.processEvents()
+
+    def test_header_sort_by_play_count(self):
+        # Initial: track 1 has 5 plays, track 2 has 0 plays
+        # First click on Play Count (col 3) -> Descending (highest plays first)
+        self._click_header_and_wait(3)
+        self.assertEqual(self.view.table.item(0, 1).text(), "Titanium")
+        self.assertEqual(self.view.table.item(0, 3).text(), "5")
+        self.assertEqual(self.view.table.item(1, 1).text(), "One More Time")
+        self.assertEqual(self.view.table.item(1, 3).text(), "0")
+
+        # Second click -> Ascending (lowest plays first)
+        self._click_header_and_wait(3)
+        self.assertEqual(self.view.table.item(0, 1).text(), "One More Time")
+        self.assertEqual(self.view.table.item(0, 3).text(), "0")
+        self.assertEqual(self.view.table.item(1, 1).text(), "Titanium")
+        self.assertEqual(self.view.table.item(1, 3).text(), "5")
+
+    def test_header_sort_by_title_and_artist(self):
+        # Click Title (col 1) -> Ascending (One More Time before Titanium)
+        self._click_header_and_wait(1)
+        self.assertEqual(self.view.table.item(0, 1).text(), "One More Time")
+        self.assertEqual(self.view.table.item(1, 1).text(), "Titanium")
+
+        # Click Title again -> Descending
+        self._click_header_and_wait(1)
+        self.assertEqual(self.view.table.item(0, 1).text(), "Titanium")
+        self.assertEqual(self.view.table.item(1, 1).text(), "One More Time")
+
+        # Click Artist (col 2) -> Ascending (Daft Punk before David Guetta)
+        self._click_header_and_wait(2)
+        self.assertEqual(self.view.table.item(0, 2).text(), "Daft Punk")
+        self.assertEqual(self.view.table.item(1, 2).text(), "David Guetta")
+
+    def test_header_sort_by_status(self):
+        # Stage track 2
+        self.view._apply_track_delta("2", 1)
+        # Click Status (col 0) -> Staged first
+        self._click_header_and_wait(0)
+        self.assertEqual(self.view.table.item(0, 0).text(), "● Staged")
+        self.assertEqual(self.view.table.item(0, 1).text(), "One More Time")
+        self.assertEqual(self.view.table.item(1, 0).text(), "Clean")
+        self.assertEqual(self.view.table.item(1, 1).text(), "Titanium")
+
 
 
 class TestAssets(unittest.TestCase):

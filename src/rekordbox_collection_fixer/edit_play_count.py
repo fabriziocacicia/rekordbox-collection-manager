@@ -71,6 +71,8 @@ def search_tracks(
     query: str,
     limit: int = 50,
     table_name: Optional[str] = None,
+    sort_by: str = "title",
+    sort_order: str = "asc",
 ) -> List[Dict[str, Any]]:
     """Search for tracks matching query string in Title, SearchStr, or Artist Name."""
     if table_name is None:
@@ -79,6 +81,8 @@ def search_tracks(
     query_str = query.strip()
     pattern = f"%{query_str}%"
     starts_with = f"{query_str}%"
+    is_desc = str(sort_order).lower() == "desc"
+    order_dir = "DESC" if is_desc else "ASC"
 
     records = []
     with engine.connect() as conn:
@@ -102,6 +106,24 @@ def search_tracks(
 
             deleted_filter = "AND (c.rb_local_deleted = 0 OR c.rb_local_deleted IS NULL)" if "rb_local_deleted" in cols else ""
 
+            if sort_by == "play_count":
+                order_clause = f"c.DJPlayCount {order_dir}, c.Title ASC"
+            elif sort_by == "artist":
+                order_clause = f"{artist_col_expr} {order_dir}, c.Title ASC"
+            elif sort_by == "location":
+                order_clause = f"c.FileNameL {order_dir}, c.Title ASC"
+            elif sort_by == "title" and is_desc:
+                order_clause = "c.Title DESC"
+            else:
+                if query_str:
+                    order_clause = """CASE 
+                        WHEN lower(c.Title) = lower(:exact) THEN 1
+                        WHEN lower(c.Title) LIKE lower(:starts_with) THEN 2
+                        ELSE 3
+                    END, c.Title ASC"""
+                else:
+                    order_clause = "c.Title ASC"
+
             sql = f"""
                 SELECT 
                     c.ID, 
@@ -120,13 +142,7 @@ def search_tracks(
                       OR c.SrcArtistName LIKE :pattern
                       OR c.FileNameL LIKE :pattern
                   )
-                ORDER BY 
-                    CASE 
-                        WHEN lower(c.Title) = lower(:exact) THEN 1
-                        WHEN lower(c.Title) LIKE lower(:starts_with) THEN 2
-                        ELSE 3
-                    END,
-                    c.Title ASC
+                ORDER BY {order_clause}
                 LIMIT :limit;
             """
             rows = conn.execute(
@@ -161,11 +177,18 @@ def search_tracks(
             count_col = "DJPlayCount" if "DJPlayCount" in cols else ("PlayCount" if "PlayCount" in cols else None)
             count_expr = count_col if count_col else "0"
 
+            if sort_by == "play_count":
+                fallback_order = f"{count_expr} {order_dir}, Title ASC"
+            elif sort_by == "title" and is_desc:
+                fallback_order = "Title DESC"
+            else:
+                fallback_order = "Title ASC"
+
             sql = f"""
                 SELECT ID, Title, {count_expr}
                 FROM {table_name}
                 WHERE Title LIKE :pattern
-                ORDER BY Title ASC
+                ORDER BY {fallback_order}
                 LIMIT :limit;
             """
             rows = conn.execute(

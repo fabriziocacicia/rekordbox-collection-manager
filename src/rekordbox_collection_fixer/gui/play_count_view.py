@@ -95,6 +95,8 @@ class PlayCountView(QWidget):
         self.records: List[Dict[str, Any]] = []
         self.staged_edits: Dict[str, Dict[str, Any]] = {}
         self.active_search_worker: Optional[TrackSearchWorker] = None
+        self.current_sort_col: Optional[int] = None
+        self.current_sort_order: Qt.SortOrder = Qt.SortOrder.AscendingOrder
 
         # Debounce timer for search input
         self.search_debounce_timer = QTimer(self)
@@ -167,6 +169,24 @@ class PlayCountView(QWidget):
             if header_item:
                 header_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
 
+        # Interactive column header sorting
+        horizontal_header = self.table.horizontalHeader()
+        horizontal_header.setSectionsClickable(True)
+        horizontal_header.setSortIndicatorShown(True)
+        horizontal_header.sectionClicked.connect(self._on_header_section_clicked)
+
+        header_tooltips = {
+            0: "Click to sort by Status (Staged vs Clean)",
+            1: "Click to sort by Title (A-Z / Z-A)",
+            2: "Click to sort by Artist (A-Z / Z-A)",
+            3: "Click to sort by Play Count (Highest / Lowest)",
+            5: "Click to sort by File Location",
+        }
+        for col, tip in header_tooltips.items():
+            header_item = self.table.horizontalHeaderItem(col)
+            if header_item:
+                header_item.setToolTip(tip)
+
         self.table.shortcut_delta.connect(self._on_keyboard_shortcut)
         self.table.itemSelectionChanged.connect(self._on_selection_changed)
 
@@ -225,11 +245,27 @@ class PlayCountView(QWidget):
         limit_map = [50, 100, 250, 500]
         limit = limit_map[self.limit_combo.currentIndex()]
 
+        col_map = {
+            1: "title",
+            2: "artist",
+            3: "play_count",
+            5: "location",
+        }
+        sort_by = col_map.get(self.current_sort_col, "title")
+        sort_order = "desc" if self.current_sort_order == Qt.SortOrder.DescendingOrder else "asc"
+
         if self.active_search_worker and self.active_search_worker.isRunning():
             self.active_search_worker.terminate()
 
         self.status_label.setText("Searching tracks in database...")
-        self.active_search_worker = TrackSearchWorker(self.engine, query, limit=limit, parent=self)
+        self.active_search_worker = TrackSearchWorker(
+            self.engine,
+            query,
+            limit=limit,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            parent=self,
+        )
         self.active_search_worker.success.connect(self._on_search_success)
         self.active_search_worker.error.connect(self._on_search_error)
         self.active_search_worker.start()
@@ -252,6 +288,9 @@ class PlayCountView(QWidget):
             filtered.append(r)
 
         self.records = filtered
+        if self.current_sort_col is not None:
+            reverse = (self.current_sort_order == Qt.SortOrder.DescendingOrder)
+            self.records.sort(key=self._record_sort_key, reverse=reverse)
         self._populate_table()
         self._update_status_bar()
 
@@ -312,6 +351,10 @@ class PlayCountView(QWidget):
             self._apply_row_styling(row_idx, track_id, is_staged, orig_count, cur_count)
 
         self.table.blockSignals(False)
+        if self.current_sort_col is not None:
+            self.table.horizontalHeader().setSortIndicator(
+                self.current_sort_col, self.current_sort_order
+            )
         self._on_selection_changed()
 
     def _apply_row_styling(
@@ -479,6 +522,9 @@ class PlayCountView(QWidget):
             return
 
         self.staged_edits.clear()
+        if self.current_sort_col is not None:
+            reverse = (self.current_sort_order == Qt.SortOrder.DescendingOrder)
+            self.records.sort(key=self._record_sort_key, reverse=reverse)
         self._populate_table()
         self._update_status_bar()
         self.notify_status.emit("Staged play count changes discarded.")
@@ -534,6 +580,9 @@ class PlayCountView(QWidget):
                     r["play_count"] = new_count
 
         self.staged_edits.clear()
+        if self.current_sort_col is not None:
+            reverse = (self.current_sort_order == Qt.SortOrder.DescendingOrder)
+            self.records.sort(key=self._record_sort_key, reverse=reverse)
         self._populate_table()
         self._update_status_bar()
         self.notify_status.emit(f"✅ Successfully saved play count updates for {updated_count} tracks.")
@@ -547,3 +596,63 @@ class PlayCountView(QWidget):
         self._update_status_bar()
         self.notify_status.emit(f"❌ Save failed: {err_msg}")
         QMessageBox.critical(self, "Save Failed", f"Database error while saving changes:\n{err_msg}")
+
+    def _record_sort_key(self, r: Dict[str, Any]) -> Any:
+        track_id = str(r["id"])
+        is_staged = track_id in self.staged_edits
+
+        if self.current_sort_col == 0:  # Status: staged first vs clean
+            return (1 if is_staged else 0, (r.get("title") or "").lower())
+        elif self.current_sort_col == 1:  # Title (alphabetical)
+            return ((r.get("title") or "").lower(), (r.get("artist") or "").lower())
+        elif self.current_sort_col == 2:  # Artist (alphabetical)
+            return ((r.get("artist") or "").lower(), (r.get("title") or "").lower())
+        elif self.current_sort_col == 3:  # Play Count (numerical)
+            count = (
+                self.staged_edits[track_id]["new_count"]
+                if is_staged
+                else int(r.get("play_count", 0))
+            )
+            return (count, (r.get("title") or "").lower())
+        elif self.current_sort_col == 5:  # Location
+            return (r.get("filename") or r.get("folder_path") or "").lower()
+        return 0
+
+    def _on_header_section_clicked(self, logical_index: int) -> None:
+        """Handle header column click to sort table records."""
+        if logical_index == 4:  # Quick Adjust column - no sort
+            return
+
+        if self.current_sort_col == logical_index:
+            self.current_sort_order = (
+                Qt.SortOrder.DescendingOrder
+                if self.current_sort_order == Qt.SortOrder.AscendingOrder
+                else Qt.SortOrder.AscendingOrder
+            )
+        else:
+            self.current_sort_col = logical_index
+            # Default to Descending for Play Count (highest first) and Status (staged first)
+            if logical_index in (0, 3):
+                self.current_sort_order = Qt.SortOrder.DescendingOrder
+            else:
+                self.current_sort_order = Qt.SortOrder.AscendingOrder
+
+        self.table.horizontalHeader().setSortIndicator(
+            self.current_sort_col, self.current_sort_order
+        )
+
+        if self.engine and logical_index in (1, 2, 3, 5):
+            # Database-backed columns: re-query database to fetch top/bottom across entire collection
+            self._execute_search()
+        else:
+            self._sort_and_refresh()
+
+    def _sort_and_refresh(self) -> None:
+        """Sort records according to active sort column and order, then refresh table."""
+        if self.current_sort_col is None:
+            return
+
+        reverse = (self.current_sort_order == Qt.SortOrder.DescendingOrder)
+        self.records.sort(key=self._record_sort_key, reverse=reverse)
+        self._populate_table()
+

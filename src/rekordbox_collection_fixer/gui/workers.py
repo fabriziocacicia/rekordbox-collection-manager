@@ -70,16 +70,26 @@ class TrackSearchWorker(QThread):
         engine: Engine,
         query: str,
         limit: int = 150,
+        sort_by: str = "title",
+        sort_order: str = "asc",
         parent: Optional[Any] = None,
     ):
         super().__init__(parent)
         self.engine = engine
         self.query = query
         self.limit = limit
+        self.sort_by = sort_by
+        self.sort_order = sort_order
 
     def run(self) -> None:
         try:
-            records = search_tracks(self.engine, self.query, limit=self.limit)
+            records = search_tracks(
+                self.engine,
+                self.query,
+                limit=self.limit,
+                sort_by=self.sort_by,
+                sort_order=self.sort_order,
+            )
             self.success.emit(self.query, records)
         except Exception as e:
             self.error.emit(str(e))
