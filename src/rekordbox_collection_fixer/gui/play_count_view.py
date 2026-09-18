@@ -8,7 +8,6 @@ from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
     QHeaderView,
-    QInputDialog,
     QLabel,
     QLineEdit,
     QMessageBox,
@@ -155,7 +154,6 @@ class PlayCountView(QWidget):
             if header_item:
                 header_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        self.table.cellChanged.connect(self._on_cell_changed)
         self.table.shortcut_delta.connect(self._on_keyboard_shortcut)
         self.table.itemSelectionChanged.connect(self._on_selection_changed)
 
@@ -182,16 +180,6 @@ class PlayCountView(QWidget):
         self.batch_dec_btn.setEnabled(False)
         self.batch_dec_btn.clicked.connect(lambda: self._apply_batch_delta(-1))
         bottom_bar.addWidget(self.batch_dec_btn)
-
-        self.batch_zero_btn = QPushButton("Reset to 0")
-        self.batch_zero_btn.setEnabled(False)
-        self.batch_zero_btn.clicked.connect(self._apply_batch_zero)
-        bottom_bar.addWidget(self.batch_zero_btn)
-
-        self.batch_set_btn = QPushButton("Set Value...")
-        self.batch_set_btn.setEnabled(False)
-        self.batch_set_btn.clicked.connect(self._apply_batch_custom)
-        bottom_bar.addWidget(self.batch_set_btn)
 
         main_layout.addLayout(bottom_bar)
 
@@ -266,11 +254,12 @@ class PlayCountView(QWidget):
             artist_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
             self.table.setItem(row_idx, 1, artist_item)
 
-            # Col 2: Play Count (Editable)
+            # Col 2: Play Count (Read-only visual info)
             count = int(r.get("play_count", 0))
             count_item = QTableWidgetItem(str(count))
             count_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             count_item.setData(Qt.ItemDataRole.UserRole, track_id)
+            count_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
             self.table.setItem(row_idx, 2, count_item)
 
             # Col 3: Quick Stepper Buttons [-] and [+]
@@ -295,8 +284,6 @@ class PlayCountView(QWidget):
         has_selection = count > 0
         self.batch_inc_btn.setEnabled(has_selection)
         self.batch_dec_btn.setEnabled(has_selection)
-        self.batch_zero_btn.setEnabled(has_selection)
-        self.batch_set_btn.setEnabled(has_selection)
 
     def _check_rekordbox_safety(self) -> bool:
         if is_rekordbox_running():
@@ -356,59 +343,13 @@ class PlayCountView(QWidget):
         worker.error.connect(self._on_play_count_error)
         worker.start()
 
-    def _on_cell_changed(self, row: int, column: int) -> None:
-        """Directly edit Play Count cell (column 2)."""
-        if column != 2:
-            return
-
-        item = self.table.item(row, 2)
-        if not item:
-            return
-
-        track_id = self.table.item(row, 0).data(Qt.ItemDataRole.UserRole)
-        if not track_id:
-            return
-
-        try:
-            val = int(item.text().strip())
-            new_count = max(0, val)
-        except ValueError:
-            # Revert to current record value
-            record = next((r for r in self.records if r["id"] == track_id), None)
-            cur = record.get("play_count", 0) if record else 0
-            self.table.blockSignals(True)
-            item.setText(str(cur))
-            self.table.blockSignals(False)
-            return
-
-        if not self._check_rekordbox_safety():
-            # Revert
-            record = next((r for r in self.records if r["id"] == track_id), None)
-            cur = record.get("play_count", 0) if record else 0
-            self.table.blockSignals(True)
-            item.setText(str(cur))
-            self.table.blockSignals(False)
-            return
-
-        # Update record
-        record = next((r for r in self.records if r["id"] == track_id), None)
-        if record:
-            record["play_count"] = new_count
-
-        self.table.blockSignals(True)
-        item.setText(str(new_count))
-        self.table.blockSignals(False)
-
-        worker = TrackPlayCountWorker(self.engine, track_id, absolute=new_count, parent=self)
-        worker.success.connect(self._on_play_count_saved)
-        worker.error.connect(self._on_play_count_error)
-        worker.start()
-
     def _on_play_count_saved(self, track_id: str, old_count: int, new_count: int) -> None:
         self.notify_status.emit(f"Updated play count: {old_count} ➔ {new_count}")
+        self.status_label.setText(f"✓ Saved to database: play count updated ({old_count} ➔ {new_count})")
 
     def _on_play_count_error(self, track_id: str, err_msg: str) -> None:
         self.notify_status.emit(f"❌ Error updating play count: {err_msg}")
+        self.status_label.setText(f"❌ Error saving to database: {err_msg}")
         QMessageBox.warning(self, "Update Error", f"Failed to update play count:\n{err_msg}")
 
     # Batch Operations
@@ -420,61 +361,3 @@ class PlayCountView(QWidget):
             track_id = self.table.item(row, 0).data(Qt.ItemDataRole.UserRole)
             if track_id:
                 self._apply_track_delta(track_id, delta)
-
-    def _apply_batch_zero(self) -> None:
-        if not self._check_rekordbox_safety():
-            return
-        selected_rows = set(index.row() for index in self.table.selectedIndexes())
-        res = QMessageBox.question(
-            self,
-            "Reset Play Count",
-            f"Are you sure you want to reset play counts to 0 for {len(selected_rows)} selected tracks?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-        )
-        if res == QMessageBox.StandardButton.Yes:
-            for row in selected_rows:
-                track_id = self.table.item(row, 0).data(Qt.ItemDataRole.UserRole)
-                if track_id:
-                    self._set_track_absolute(track_id, 0)
-
-    def _apply_batch_custom(self) -> None:
-        if not self._check_rekordbox_safety():
-            return
-        selected_rows = set(index.row() for index in self.table.selectedIndexes())
-        val, ok = QInputDialog.getInt(
-            self,
-            "Set Play Count",
-            f"Set play count for {len(selected_rows)} selected tracks:",
-            0,
-            0,
-            99999,
-            1,
-        )
-        if ok:
-            for row in selected_rows:
-                track_id = self.table.item(row, 0).data(Qt.ItemDataRole.UserRole)
-                if track_id:
-                    self._set_track_absolute(track_id, val)
-
-    def _set_track_absolute(self, track_id: str, new_count: int) -> None:
-        if not self.engine:
-            return
-
-        record = next((r for r in self.records if r["id"] == track_id), None)
-        if record:
-            record["play_count"] = new_count
-
-        for row in range(self.table.rowCount()):
-            item = self.table.item(row, 0)
-            if item and item.data(Qt.ItemDataRole.UserRole) == track_id:
-                count_item = self.table.item(row, 2)
-                if count_item:
-                    self.table.blockSignals(True)
-                    count_item.setText(str(new_count))
-                    self.table.blockSignals(False)
-                break
-
-        worker = TrackPlayCountWorker(self.engine, track_id, absolute=new_count, parent=self)
-        worker.success.connect(self._on_play_count_saved)
-        worker.error.connect(self._on_play_count_error)
-        worker.start()
