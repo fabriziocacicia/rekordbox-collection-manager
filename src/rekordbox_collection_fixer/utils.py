@@ -199,6 +199,20 @@ def detect_content_table(engine: Engine) -> str:
     return "djmdContent"
 
 
+def detect_history_table(engine: Engine) -> str:
+    """Detect whether database uses djmdHistory or history table."""
+    with engine.connect() as conn:
+        res = conn.exec_driver_sql(
+            "SELECT name FROM sqlite_master WHERE type='table';"
+        ).fetchall()
+        table_names = {r[0] for r in res}
+        if "djmdHistory" in table_names:
+            return "djmdHistory"
+        elif "history" in table_names:
+            return "history"
+    return "djmdHistory"
+
+
 def resolve_db_path(
     candidate_or_args: Any = None,
     prompt_message: str = "Enter path to Rekordbox database (master.db or exportLibrary.db):",
@@ -245,6 +259,21 @@ def resolve_db_path(
 # ==============================================================================
 # 3. Date, Text & Sorting Utilities
 # ==============================================================================
+
+MONTH_INT_TO_NAME: Dict[int, str] = {
+    1: "January",
+    2: "February",
+    3: "March",
+    4: "April",
+    5: "May",
+    6: "June",
+    7: "July",
+    8: "August",
+    9: "September",
+    10: "October",
+    11: "November",
+    12: "December",
+}
 
 MONTH_NAME_TO_INT: Dict[str, int] = {
     # English

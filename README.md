@@ -81,6 +81,38 @@ uv run python -m rekordbox_collection_fixer.edit_play_count
 
 ---
 
+### 3. Desktop GUI Application (`rekordbox-gui`)
+
+A native macOS desktop application built with **PySide6 (Qt6)** featuring a Pioneer DJ-inspired dark theme. It combines all tools into a single desktop interface with live Rekordbox safety detection.
+
+Features:
+- **Safety Guard Banner**: Live process monitor warns if Rekordbox is running and safely locks write transactions to prevent database conflicts.
+- **History Sessions View**:
+  - Full history hierarchy loaded at once.
+  - Year/Month folder tree filter.
+  - In-place editable cells for Date and Session Name.
+  - `● Staged` indicators showing modified items.
+  - One-click *Auto-Extract Dates from Names* and *Realign Chronology*.
+  - Atomic *Save All Changes* transaction.
+- **Play Count Manager View**:
+  - Instant as-you-type search across Track Title, Artist, Album, and Filename.
+  - In-line editable numeric play counts.
+  - Dedicated `[-]` and `[+]` quick stepper buttons on each row.
+  - Keyboard shortcuts (`+` and `-` keys adjust selected track).
+  - Multi-select batch actions (+1, -1, reset to 0, or set custom value).
+- **Quick Backup**: One-click desktop snapshot of your database file.
+
+#### Launching the GUI
+```bash
+# Launch with default master.db
+uv run rekordbox-gui
+
+# Launch with custom database (e.g. USB exportLibrary.db)
+uv run rekordbox-gui -d /Volumes/USB/PIONEER/exportLibrary.db
+```
+
+---
+
 
 ## Adding New Tools to this Repo
 

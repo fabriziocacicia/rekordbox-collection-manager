@@ -241,6 +241,54 @@ def update_track_play_count(
     return current_count, new_count
 
 
+def set_track_play_count(
+    engine: Engine,
+    track_id: str,
+    new_count: int,
+    table_name: Optional[str] = None,
+) -> Tuple[int, int]:
+    """Set the play count of a track to an exact value (minimum 0).
+
+    Returns (old_count, new_count).
+    Updates updated_at timestamp if column is present.
+    """
+    if table_name is None:
+        table_name = detect_content_table(engine)
+
+    now_utc = get_rekordbox_timestamp()
+    target_count = max(0, int(new_count))
+
+    with engine.begin() as conn:
+        cols = {
+            r[1]
+            for r in conn.exec_driver_sql(f"PRAGMA table_info({table_name});").fetchall()
+        }
+        play_count_col = "DJPlayCount" if "DJPlayCount" in cols else "PlayCount"
+
+        select_sql = f"SELECT {play_count_col} FROM {table_name} WHERE ID = :id;"
+        row = conn.execute(text(select_sql), {"id": track_id}).fetchone()
+        if not row:
+            raise ValueError(f"Track ID '{track_id}' not found in {table_name}.")
+
+        raw_count = row[0]
+        try:
+            current_count = int(raw_count) if raw_count is not None else 0
+        except (ValueError, TypeError):
+            current_count = 0
+
+        set_clauses = [f"{play_count_col} = :new_count"]
+        params: Dict[str, Any] = {"new_count": target_count, "id": track_id}
+
+        if "updated_at" in cols:
+            set_clauses.append("updated_at = :updated_at")
+            params["updated_at"] = now_utc
+
+        update_sql = f"UPDATE {table_name} SET {', '.join(set_clauses)} WHERE ID = :id;"
+        conn.execute(text(update_sql), params)
+
+    return current_count, target_count
+
+
 def prompt_action_mode(cli_inc: bool, cli_dec: bool) -> str:
     """Determine initial action mode ('increment', 'decrement', or 'ask')."""
     if cli_inc and not cli_dec:

@@ -370,6 +370,78 @@ def update_history_record(
     return target_parent_id
 
 
+def batch_update_history_records(
+    engine: Engine,
+    updates: List[Dict[str, Any]],
+    auto_realign: bool = True,
+) -> Dict[str, Any]:
+    """Batch update multiple history entries in a single atomic transaction.
+
+    Each item in `updates` is a dict with:
+      - 'record': Dict with 'id', 'table', 'date', etc.
+      - 'new_name': str
+      - 'new_date': Optional[str] (optional)
+
+    Returns dict with stats: {'updated_count': int, 'realign_stats': Dict[str, int]}.
+    """
+    stats = {"updated_count": 0, "realign_stats": {}}
+    if not updates:
+        return stats
+
+    now_utc = get_rekordbox_timestamp()
+    has_djmd = False
+
+    with engine.begin() as conn:
+        for item in updates:
+            record = item["record"]
+            new_name = item["new_name"]
+            new_date = item.get("new_date")
+            table = record.get("table", "djmdHistory")
+
+            if table == "djmdHistory":
+                has_djmd = True
+                cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(djmdHistory);").fetchall()}
+
+                curr_date = new_date if new_date is not None else record.get("date")
+                y, m = extract_year_month_from_name_or_date(new_name, curr_date)
+
+                target_parent_id = None
+                date_for_folder = curr_date or (f"{y:04d}-{m:02d}-01" if y and m else None)
+                if y and m and "ParentID" in cols:
+                    target_parent_id = ensure_djmd_history_folders(conn, y, m, date_for_folder, cols)
+
+                set_clauses = ["Name = :name"]
+                params: Dict[str, Any] = {"name": new_name, "id": record["id"]}
+
+                if new_date is not None:
+                    set_clauses.append("DateCreated = :date")
+                    params["date"] = new_date
+
+                if target_parent_id and "ParentID" in cols:
+                    set_clauses.append("ParentID = :parent_id")
+                    params["parent_id"] = target_parent_id
+
+                if "updated_at" in cols:
+                    set_clauses.append("updated_at = :updated_at")
+                    params["updated_at"] = now_utc
+
+                sql = f"UPDATE djmdHistory SET {', '.join(set_clauses)} WHERE ID = :id"
+                conn.execute(text(sql), params)
+                stats["updated_count"] += 1
+
+            elif table == "history":
+                conn.execute(
+                    text("UPDATE history SET name = :name WHERE history_id = :id"),
+                    {"name": new_name, "id": int(record["id"])},
+                )
+                stats["updated_count"] += 1
+
+    if has_djmd and auto_realign:
+        stats["realign_stats"] = realign_history_order(engine)
+
+    return stats
+
+
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
