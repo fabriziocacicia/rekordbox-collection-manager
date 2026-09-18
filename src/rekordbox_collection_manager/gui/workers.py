@@ -5,19 +5,19 @@ from PySide6.QtCore import QThread, Signal
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from rekordbox_collection_fixer.edit_play_count import (
+from rekordbox_collection_manager.edit_play_count import (
     batch_update_track_play_counts,
     search_tracks,
     set_track_play_count,
     update_track_play_count,
 )
-from rekordbox_collection_fixer.rename_history import (
+from rekordbox_collection_manager.rename_history import (
     batch_update_history_records,
     fetch_history_records,
     fetch_session_tracks,
     realign_history_order,
 )
-from rekordbox_collection_fixer.utils import (
+from rekordbox_collection_manager.utils import (
     detect_content_table,
     detect_history_table,
     open_database,

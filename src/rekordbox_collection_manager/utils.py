@@ -1,4 +1,4 @@
-"""Shared utilities for Rekordbox collection fixer tools.
+"""Shared utilities for Rekordbox collection manager tools.
 
 Organized into:
 1. Process & System Utilities

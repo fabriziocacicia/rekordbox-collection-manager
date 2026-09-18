@@ -1,4 +1,4 @@
-"""Asset management and path resolution for Rekordbox Collection Fixer GUI."""
+"""Asset management and path resolution for Rekordbox Collection Manager GUI."""
 
 import os
 import sys
@@ -24,7 +24,7 @@ def get_asset_path(filename: str = "icon.png") -> Optional[str]:
     candidates.append(pkg_dir.parent / "assets" / filename)
 
     # 3. Project root directory (during development)
-    # File is in src/rekordbox_collection_fixer/gui/assets.py -> parents[2] is root
+    # File is in src/rekordbox_collection_manager/gui/assets.py -> parents[2] is root
     if len(pkg_dir.parents) >= 3:
         project_root = pkg_dir.parents[2]
         candidates.append(project_root / "assets" / filename)

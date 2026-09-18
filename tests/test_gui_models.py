@@ -12,15 +12,15 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
-from rekordbox_collection_fixer.edit_play_count import (
+from rekordbox_collection_manager.edit_play_count import (
     search_tracks,
     set_track_play_count,
     update_track_play_count,
 )
-from rekordbox_collection_fixer.gui.history_detail_view import HistoryDetailView
-from rekordbox_collection_fixer.gui.history_view import HistoryView
-from rekordbox_collection_fixer.gui.play_count_view import PlayCountView
-from rekordbox_collection_fixer.rename_history import (
+from rekordbox_collection_manager.gui.history_detail_view import HistoryDetailView
+from rekordbox_collection_manager.gui.history_view import HistoryView
+from rekordbox_collection_manager.gui.play_count_view import PlayCountView
+from rekordbox_collection_manager.rename_history import (
     batch_update_history_records,
     fetch_history_records,
 )
@@ -266,7 +266,7 @@ class TestPlayCountView(unittest.TestCase):
         self.view._apply_track_delta("1", 3)
         self.assertEqual(self.view.staged_edits["1"]["new_count"], 8)
 
-        with patch("rekordbox_collection_fixer.gui.play_count_view.is_rekordbox_running", return_value=False), \
+        with patch("rekordbox_collection_manager.gui.play_count_view.is_rekordbox_running", return_value=False), \
              patch("PySide6.QtWidgets.QMessageBox.question", return_value=QMessageBox.StandardButton.Save), \
              patch("PySide6.QtWidgets.QMessageBox.information"):
             self.view._on_save_success(1)
@@ -340,7 +340,7 @@ class TestPlayCountView(unittest.TestCase):
 
 class TestAssets(unittest.TestCase):
     def test_asset_path_resolution(self):
-        from rekordbox_collection_fixer.gui.assets import get_app_icon, get_asset_path
+        from rekordbox_collection_manager.gui.assets import get_app_icon, get_asset_path
 
         icon_path = get_asset_path("icon.png")
         self.assertIsNotNone(icon_path)
@@ -350,8 +350,8 @@ class TestAssets(unittest.TestCase):
         self.assertFalse(icon.isNull())
 
     def test_macos_metadata(self):
-        from rekordbox_collection_fixer.gui.assets import get_asset_path
-        from rekordbox_collection_fixer.gui.macos import (
+        from rekordbox_collection_manager.gui.assets import get_asset_path
+        from rekordbox_collection_manager.gui.macos import (
             setup_macos_app_metadata,
             update_macos_menu_title,
         )
@@ -366,7 +366,7 @@ class TestAssets(unittest.TestCase):
 
 class TestMainWindowSidebar(unittest.TestCase):
     def setUp(self):
-        from rekordbox_collection_fixer.gui.main_window import MainWindow
+        from rekordbox_collection_manager.gui.main_window import MainWindow
 
         with patch.object(MainWindow, "load_database"), patch.object(MainWindow, "_check_rekordbox_status"):
             self.window = MainWindow(initial_db_path=None)
@@ -424,7 +424,7 @@ class TestMainWindowSidebar(unittest.TestCase):
         self.assertEqual(self.window.stacked_widget.currentIndex(), 2)
 
     def test_refresh_button_icon_and_action(self):
-        from rekordbox_collection_fixer.gui.assets import get_refresh_icon
+        from rekordbox_collection_manager.gui.assets import get_refresh_icon
 
         icon = get_refresh_icon()
         self.assertFalse(icon.isNull())

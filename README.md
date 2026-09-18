@@ -35,10 +35,10 @@ uv run rename-history -d /Volumes/USB/PIONEER/exportLibrary.db
 #### Run by Script
 ```bash
 # Direct script execution
-uv run python src/rekordbox_collection_fixer/rename_history.py
+uv run python src/rekordbox_collection_manager/rename_history.py
 
 # Or as a module
-uv run python -m rekordbox_collection_fixer.rename_history
+uv run python -m rekordbox_collection_manager.rename_history
 ```
 
 ---
@@ -74,9 +74,9 @@ uv run edit-play-count -d /Volumes/USB/PIONEER/exportLibrary.db
 
 #### Run by Script
 ```bash
-uv run python src/rekordbox_collection_fixer/edit_play_count.py
+uv run python src/rekordbox_collection_manager/edit_play_count.py
 # or
-uv run python -m rekordbox_collection_fixer.edit_play_count
+uv run python -m rekordbox_collection_manager.edit_play_count
 ```
 
 ---
@@ -132,14 +132,14 @@ uv run rekordbox-manager -d /Volumes/USB/PIONEER/exportLibrary.db
 
 ## Adding New Tools to this Repo
 
-Each tool is self-contained in a single file under `src/rekordbox_collection_fixer/`:
+Each tool is self-contained in a single file under `src/rekordbox_collection_manager/`:
 
-1. **Create the tool file**: `src/rekordbox_collection_fixer/<your_tool>.py` with a `main()` function and `if __name__ == "__main__": main()`.
+1. **Create the tool file**: `src/rekordbox_collection_manager/<your_tool>.py` with a `main()` function and `if __name__ == "__main__": main()`.
 2. **Register the tool by name**: In `pyproject.toml`, add an entry under `[project.scripts]`:
    ```toml
    [project.scripts]
-   rename-history = "rekordbox_collection_fixer.rename_history:main"
-   your-tool = "rekordbox_collection_fixer.your_tool:main"
+   rename-history = "rekordbox_collection_manager.rename_history:main"
+   your-tool = "rekordbox_collection_manager.your_tool:main"
    ```
 
 ## Development & Testing

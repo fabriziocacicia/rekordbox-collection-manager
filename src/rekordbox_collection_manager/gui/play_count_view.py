@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
 )
 from sqlalchemy.engine import Engine
 
-from rekordbox_collection_fixer.gui.theme import (
+from rekordbox_collection_manager.gui.theme import (
     COLOR_AMBER,
     COLOR_AMBER_BG,
     COLOR_BG_CARD,
@@ -28,11 +28,11 @@ from rekordbox_collection_fixer.gui.theme import (
     COLOR_TEXT_PRIMARY,
     COLOR_TEXT_SECONDARY,
 )
-from rekordbox_collection_fixer.gui.workers import (
+from rekordbox_collection_manager.gui.workers import (
     PlayCountBatchSaveWorker,
     TrackSearchWorker,
 )
-from rekordbox_collection_fixer.utils import is_rekordbox_running
+from rekordbox_collection_manager.utils import is_rekordbox_running
 
 COLOR_STAGED_ROW_BG = QColor(245, 158, 11, 30)
 

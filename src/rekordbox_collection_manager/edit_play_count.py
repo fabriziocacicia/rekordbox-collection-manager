@@ -10,7 +10,7 @@ import questionary
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from rekordbox_collection_fixer.utils import (
+from rekordbox_collection_manager.utils import (
     detect_content_table,
     ensure_rekordbox_not_running,
     get_rekordbox_timestamp,

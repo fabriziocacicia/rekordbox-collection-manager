@@ -1,4 +1,4 @@
-"""Visual theme and QSS styles for Rekordbox Collection Fixer.
+"""Visual theme and QSS styles for Rekordbox Collection Manager.
 
 Inspired by modern DJ applications (Rekordbox, CDJ/XDJ interfaces) featuring
 a deep dark slate aesthetic with electric blue and amber accents.

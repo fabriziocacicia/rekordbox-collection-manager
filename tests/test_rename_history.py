@@ -1,4 +1,4 @@
-"""Tests for rekordbox_collection_fixer.rename_history."""
+"""Tests for rekordbox_collection_manager.rename_history."""
 
 import sys
 import unittest
@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 from sqlalchemy import create_engine
 
-from rekordbox_collection_fixer.rename_history import (
+from rekordbox_collection_manager.rename_history import (
     ensure_djmd_history_folders,
     extract_date_from_name,
     extract_year_month_from_name_or_date,
@@ -429,16 +429,16 @@ class TestRenameHistory(unittest.TestCase):
         self.assertEqual(records[0]["name"], "HISTORY 2026-07-24 w Carl Cox")
 
     def test_main_aborts_when_rekordbox_running(self):
-        with patch("rekordbox_collection_fixer.rename_history.ensure_rekordbox_not_running", side_effect=SystemExit(1)):
+        with patch("rekordbox_collection_manager.rename_history.ensure_rekordbox_not_running", side_effect=SystemExit(1)):
             with self.assertRaises(SystemExit) as cm:
                 main(["dummy.db"])
             self.assertEqual(cm.exception.code, 1)
 
     def test_main_force_passes_flag_to_ensure_check(self):
-        with patch("rekordbox_collection_fixer.rename_history.ensure_rekordbox_not_running") as mock_ensure, \
-             patch("rekordbox_collection_fixer.rename_history.resolve_db_path", return_value="dummy.db"), \
-             patch("rekordbox_collection_fixer.rename_history.open_database", return_value=(MagicMock(), "djmdHistory")), \
-             patch("rekordbox_collection_fixer.rename_history.run_interactive_session") as mock_session:
+        with patch("rekordbox_collection_manager.rename_history.ensure_rekordbox_not_running") as mock_ensure, \
+             patch("rekordbox_collection_manager.rename_history.resolve_db_path", return_value="dummy.db"), \
+             patch("rekordbox_collection_manager.rename_history.open_database", return_value=(MagicMock(), "djmdHistory")), \
+             patch("rekordbox_collection_manager.rename_history.run_interactive_session") as mock_session:
             main(["--force", "dummy.db"])
             mock_ensure.assert_called_once_with(force=True)
             mock_session.assert_called_once()
@@ -626,11 +626,11 @@ class TestRenameHistory(unittest.TestCase):
             self.assertEqual(months, [("202601", 1), ("202609", 2)])
 
     def test_main_realign_flag(self):
-        with patch("rekordbox_collection_fixer.rename_history.ensure_rekordbox_not_running"), \
-             patch("rekordbox_collection_fixer.rename_history.resolve_db_path", return_value="dummy.db"), \
-             patch("rekordbox_collection_fixer.rename_history.open_database", return_value=(MagicMock(), "djmdHistory")), \
-             patch("rekordbox_collection_fixer.rename_history.realign_history_order", return_value={"updated_rows": 10, "parents_processed": 5}) as mock_realign, \
-             patch("rekordbox_collection_fixer.rename_history.run_interactive_session") as mock_session:
+        with patch("rekordbox_collection_manager.rename_history.ensure_rekordbox_not_running"), \
+             patch("rekordbox_collection_manager.rename_history.resolve_db_path", return_value="dummy.db"), \
+             patch("rekordbox_collection_manager.rename_history.open_database", return_value=(MagicMock(), "djmdHistory")), \
+             patch("rekordbox_collection_manager.rename_history.realign_history_order", return_value={"updated_rows": 10, "parents_processed": 5}) as mock_realign, \
+             patch("rekordbox_collection_manager.rename_history.run_interactive_session") as mock_session:
 
             main(["--sort", "dummy.db"])
             mock_realign.assert_called_once()
@@ -652,7 +652,7 @@ class TestRenameHistory(unittest.TestCase):
             conn.exec_driver_sql("INSERT INTO djmdHistory VALUES ('s1', 1, 'SESSION', '2026-01-01', 0, '202601');")
 
         with patch("questionary.select") as mock_select, \
-             patch("rekordbox_collection_fixer.rename_history.realign_history_order", return_value={"updated_rows": 2, "parents_processed": 1}) as mock_realign:
+             patch("rekordbox_collection_manager.rename_history.realign_history_order", return_value={"updated_rows": 2, "parents_processed": 1}) as mock_realign:
 
             # First loop: user chooses __REALIGN__, second loop: user cancels
             mock_select.return_value.ask.side_effect = ["__REALIGN__", "__CANCEL__"]

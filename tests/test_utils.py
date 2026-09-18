@@ -1,4 +1,4 @@
-"""Tests for rekordbox_collection_fixer.utils."""
+"""Tests for rekordbox_collection_manager.utils."""
 
 import argparse
 import os
@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 from sqlalchemy import create_engine
 
-from rekordbox_collection_fixer.utils import (
+from rekordbox_collection_manager.utils import (
     MONTH_NAME_TO_INT,
     clean_session_name,
     compose_history_name,
@@ -41,11 +41,11 @@ class TestUtils(unittest.TestCase):
         with patch("shutil.which", return_value="/usr/bin/pgrep"), \
              patch("subprocess.run") as mock_sub, \
              patch("psutil.process_iter", return_value=[]), \
-             patch("rekordbox_collection_fixer.utils.get_rekordbox_pid", return_value=0):
+             patch("rekordbox_collection_manager.utils.get_rekordbox_pid", return_value=0):
             current_pid = os.getpid()
             mock_sub.return_value = MagicMock(
                 returncode=0,
-                stdout=f"{current_pid} rekordbox\n9999 rekordbox-collection-fixer\n",
+                stdout=f"{current_pid} rekordbox\n9999 rekordbox-collection-manager\n",
             )
             self.assertFalse(is_rekordbox_running())
 
@@ -61,24 +61,24 @@ class TestUtils(unittest.TestCase):
         with patch("shutil.which", return_value="/usr/bin/pgrep"), \
              patch("subprocess.run") as mock_sub, \
              patch("psutil.process_iter", return_value=[]), \
-             patch("rekordbox_collection_fixer.utils.get_rekordbox_pid", return_value=0):
+             patch("rekordbox_collection_manager.utils.get_rekordbox_pid", return_value=0):
             mock_sub.return_value = MagicMock(returncode=1, stdout="")
             self.assertFalse(is_rekordbox_running())
 
     def test_ensure_rekordbox_not_running_exits(self):
-        with patch("rekordbox_collection_fixer.utils.is_rekordbox_running", return_value=True):
+        with patch("rekordbox_collection_manager.utils.is_rekordbox_running", return_value=True):
             with self.assertRaises(SystemExit) as cm:
                 ensure_rekordbox_not_running(force=False, exit_on_running=True)
             self.assertEqual(cm.exception.code, 1)
 
     def test_ensure_rekordbox_not_running_force_allowed(self):
-        with patch("rekordbox_collection_fixer.utils.is_rekordbox_running", return_value=True):
+        with patch("rekordbox_collection_manager.utils.is_rekordbox_running", return_value=True):
             # When force=True, it should not exit
             running = ensure_rekordbox_not_running(force=True, exit_on_running=True)
             self.assertTrue(running)
 
     def test_ensure_rekordbox_not_running_when_not_running(self):
-        with patch("rekordbox_collection_fixer.utils.is_rekordbox_running", return_value=False):
+        with patch("rekordbox_collection_manager.utils.is_rekordbox_running", return_value=False):
             running = ensure_rekordbox_not_running(force=False, exit_on_running=True)
             self.assertFalse(running)
 

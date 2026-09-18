@@ -15,7 +15,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 from sqlcipher3 import dbapi2 as sqlcipher_driver
 
-from rekordbox_collection_fixer.utils import (
+from rekordbox_collection_manager.utils import (
     DEVICE_LIBRARY_PLUS_KEY,
     MONTH_NAME_TO_INT,
     clean_session_name,

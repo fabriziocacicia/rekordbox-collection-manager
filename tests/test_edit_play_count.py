@@ -1,4 +1,4 @@
-"""Tests for rekordbox_collection_fixer.edit_play_count."""
+"""Tests for rekordbox_collection_manager.edit_play_count."""
 
 import sys
 import unittest
@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 from sqlalchemy import create_engine
 
-from rekordbox_collection_fixer.edit_play_count import (
+from rekordbox_collection_manager.edit_play_count import (
     batch_update_track_play_counts,
     detect_content_table,
     main,
@@ -253,9 +253,9 @@ class TestEditPlayCount(unittest.TestCase):
             self.assertEqual(c2, 0)
 
     def test_main_running_check(self):
-        with patch("rekordbox_collection_fixer.edit_play_count.ensure_rekordbox_not_running") as mock_check, \
-             patch("rekordbox_collection_fixer.edit_play_count.resolve_db_path", return_value="dummy.db"), \
-             patch("rekordbox_collection_fixer.edit_play_count.open_database") as mock_open:
+        with patch("rekordbox_collection_manager.edit_play_count.ensure_rekordbox_not_running") as mock_check, \
+             patch("rekordbox_collection_manager.edit_play_count.resolve_db_path", return_value="dummy.db"), \
+             patch("rekordbox_collection_manager.edit_play_count.open_database") as mock_open:
             mock_open.side_effect = SystemExit(0)
             with self.assertRaises(SystemExit):
                 main(["--force"])

@@ -72,12 +72,12 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 if [ -d "$SCRIPT_DIR/../../../.venv" ]; then
     PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 else
-    PROJECT_ROOT="/Users/fabriziocacicia/Projects/Personal/Music/rekordbox-collection-fixer"
+    PROJECT_ROOT="/Users/fabriziocacicia/Projects/Personal/Music/rekordbox-collection-manager"
 fi
 
 export PATH="$PROJECT_ROOT/.venv/bin:$PATH"
 cd "$PROJECT_ROOT"
-exec "$PROJECT_ROOT/.venv/bin/python" -m rekordbox_collection_fixer.gui.app "$@"
+exec "$PROJECT_ROOT/.venv/bin/python" -m rekordbox_collection_manager.gui.app "$@"
 EOF
 
 chmod +x "$APP_DIR/Contents/MacOS/Rekordbox Collection Manager"

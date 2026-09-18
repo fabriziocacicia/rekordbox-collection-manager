@@ -21,8 +21,8 @@ from PySide6.QtWidgets import (
 )
 from sqlalchemy.engine import Engine
 
-from rekordbox_collection_fixer.gui.history_detail_view import HistoryDetailView
-from rekordbox_collection_fixer.gui.theme import (
+from rekordbox_collection_manager.gui.history_detail_view import HistoryDetailView
+from rekordbox_collection_manager.gui.theme import (
     COLOR_AMBER,
     COLOR_AMBER_BG,
     COLOR_AMBER_BORDER,
@@ -31,11 +31,11 @@ from rekordbox_collection_fixer.gui.theme import (
     COLOR_TEXT_MUTED,
     COLOR_TEXT_SECONDARY,
 )
-from rekordbox_collection_fixer.gui.workers import (
+from rekordbox_collection_manager.gui.workers import (
     HistoryBatchSaveWorker,
     HistoryRealignWorker,
 )
-from rekordbox_collection_fixer.utils import (
+from rekordbox_collection_manager.utils import (
     MONTH_INT_TO_NAME,
     extract_year_month_from_name_or_date,
     is_rekordbox_running,

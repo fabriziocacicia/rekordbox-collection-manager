@@ -1,4 +1,4 @@
-"""Main Application Window for Rekordbox Collection Fixer."""
+"""Main Application Window for Rekordbox Collection Manager."""
 
 import os
 import shutil
@@ -25,18 +25,18 @@ from PySide6.QtWidgets import (
 )
 from sqlalchemy.engine import Engine
 
-from rekordbox_collection_fixer.gui.assets import get_app_icon, get_asset_path, get_refresh_icon
-from rekordbox_collection_fixer.gui.history_view import HistoryView
-from rekordbox_collection_fixer.gui.play_count_view import PlayCountView
-from rekordbox_collection_fixer.gui.theme import (
+from rekordbox_collection_manager.gui.assets import get_app_icon, get_asset_path, get_refresh_icon
+from rekordbox_collection_manager.gui.history_view import HistoryView
+from rekordbox_collection_manager.gui.play_count_view import PlayCountView
+from rekordbox_collection_manager.gui.theme import (
     COLOR_BLUE,
     COLOR_BORDER,
     COLOR_TEXT_MUTED,
     COLOR_TEXT_PRIMARY,
     COLOR_TEXT_SECONDARY,
 )
-from rekordbox_collection_fixer.gui.workers import DatabaseLoaderWorker
-from rekordbox_collection_fixer.utils import (
+from rekordbox_collection_manager.gui.workers import DatabaseLoaderWorker
+from rekordbox_collection_manager.utils import (
     get_default_master_db_path,
     is_rekordbox_running,
 )

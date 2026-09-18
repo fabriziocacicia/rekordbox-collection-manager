@@ -1,17 +1,17 @@
-"""Application entry point for Rekordbox Collection Fixer GUI."""
+"""Application entry point for Rekordbox Collection Manager GUI."""
 
 import argparse
 import sys
 from typing import List, Optional
 from PySide6.QtWidgets import QApplication
 
-from rekordbox_collection_fixer.gui.assets import get_app_icon, get_asset_path
-from rekordbox_collection_fixer.gui.macos import (
+from rekordbox_collection_manager.gui.assets import get_app_icon, get_asset_path
+from rekordbox_collection_manager.gui.macos import (
     setup_macos_app_metadata,
     update_macos_menu_title,
 )
-from rekordbox_collection_fixer.gui.main_window import MainWindow
-from rekordbox_collection_fixer.gui.theme import apply_dark_theme
+from rekordbox_collection_manager.gui.main_window import MainWindow
+from rekordbox_collection_manager.gui.theme import apply_dark_theme
 
 
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:

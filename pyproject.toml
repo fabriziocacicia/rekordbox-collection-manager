@@ -1,6 +1,6 @@
 [project]
 name = "rekordbox-collection-manager"
-version = "0.1.0"
+version = "0.2.0"
 description = "Rekordbox Collection Manager - Native desktop application and utilities to manage, inspect, and fix Rekordbox collections"
 readme = "README.md"
 authors = [
@@ -14,15 +14,15 @@ dependencies = [
 ]
 
 [project.scripts]
-rekordbox-manager = "rekordbox_collection_fixer.gui.app:main"
-rekordbox-gui = "rekordbox_collection_fixer.gui.app:main"
-rename-history = "rekordbox_collection_fixer.rename_history:main"
-edit-play-count = "rekordbox_collection_fixer.edit_play_count:main"
+rekordbox-manager = "rekordbox_collection_manager.gui.app:main"
+rekordbox-gui = "rekordbox_collection_manager.gui.app:main"
+rename-history = "rekordbox_collection_manager.rename_history:main"
+edit-play-count = "rekordbox_collection_manager.edit_play_count:main"
 
 [build-system]
 requires = ["uv_build>=0.12.5,<0.13.0"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
-module-name = "rekordbox_collection_fixer"
+module-name = "rekordbox_collection_manager"
 module-root = "src"

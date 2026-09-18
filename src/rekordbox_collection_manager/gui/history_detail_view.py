@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
 )
 from sqlalchemy.engine import Engine
 
-from rekordbox_collection_fixer.gui.theme import (
+from rekordbox_collection_manager.gui.theme import (
     COLOR_BG_CARD,
     COLOR_BG_DARK,
     COLOR_BG_HOVER,
@@ -35,8 +35,8 @@ from rekordbox_collection_fixer.gui.theme import (
     COLOR_TEXT_PRIMARY,
     COLOR_TEXT_SECONDARY,
 )
-from rekordbox_collection_fixer.gui.workers import HistorySessionDetailWorker
-from rekordbox_collection_fixer.utils import (
+from rekordbox_collection_manager.gui.workers import HistorySessionDetailWorker
+from rekordbox_collection_manager.utils import (
     MONTH_INT_TO_NAME,
     extract_year_month_from_name_or_date,
     natural_sort_key,
