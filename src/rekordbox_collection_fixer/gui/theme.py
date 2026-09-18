@@ -10,11 +10,11 @@ from PySide6.QtWidgets import QApplication
 
 # Platform-appropriate default font family (avoids missing font warnings on macOS/Linux)
 if sys.platform == "darwin":
-    FONT_FAMILY = '".AppleSystemUIFont", "Helvetica Neue", Arial, sans-serif'
+    FONT_FAMILY = '".AppleSystemUIFont", "Helvetica Neue", "Arial"'
 elif sys.platform == "win32":
-    FONT_FAMILY = '"Segoe UI", "Helvetica Neue", Arial, sans-serif'
+    FONT_FAMILY = '"Segoe UI", "Helvetica Neue", "Arial"'
 else:
-    FONT_FAMILY = '"Ubuntu", "DejaVu Sans", Arial, sans-serif'
+    FONT_FAMILY = '"Ubuntu", "DejaVu Sans", "Arial"'
 
 # Color Palette Constants
 COLOR_BG_DARK = "#121215"
@@ -211,19 +211,31 @@ QPushButton#stepperButton {{
     color: {COLOR_TEXT_PRIMARY};
     border: 1px solid {COLOR_BORDER_LIGHT};
     border-radius: 4px;
-    padding: 3px 9px;
+    padding: 0px;
     font-size: 14px;
     font-weight: bold;
-    min-width: 26px;
-    max-width: 26px;
-    min-height: 24px;
-    max-height: 24px;
+    min-width: 28px;
+    max-width: 28px;
+    min-height: 22px;
+    max-height: 22px;
 }}
 
 QPushButton#stepperButton:hover {{
     background-color: {COLOR_BLUE};
     color: #ffffff;
     border-color: {COLOR_BLUE};
+}}
+
+QPushButton#stepperButton:pressed {{
+    background-color: {COLOR_BLUE_PRESSED};
+    color: #ffffff;
+    border-color: {COLOR_BLUE_PRESSED};
+}}
+
+QPushButton#stepperButton:disabled {{
+    background-color: {COLOR_BG_DARK};
+    color: {COLOR_TEXT_MUTED};
+    border-color: {COLOR_BORDER};
 }}
 
 /* Inputs, SpinBoxes & ComboBoxes */

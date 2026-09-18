@@ -42,20 +42,23 @@ class StepperWidget(QWidget):
     def __init__(self, track_id: str, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.track_id = track_id
+        self.setStyleSheet("background: transparent;")
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(4, 2, 4, 2)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        self.dec_btn = QPushButton("－")
+        self.dec_btn = QPushButton("−")
         self.dec_btn.setObjectName("stepperButton")
+        self.dec_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.dec_btn.setToolTip("Decrement play count (-1)")
         self.dec_btn.clicked.connect(lambda: self.stepper_clicked.emit(self.track_id, -1))
         layout.addWidget(self.dec_btn)
 
-        self.inc_btn = QPushButton("＋")
+        self.inc_btn = QPushButton("+")
         self.inc_btn.setObjectName("stepperButton")
+        self.inc_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.inc_btn.setToolTip("Increment play count (+1)")
         self.inc_btn.clicked.connect(lambda: self.stepper_clicked.emit(self.track_id, 1))
         layout.addWidget(self.inc_btn)
@@ -136,12 +139,21 @@ class PlayCountView(QWidget):
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
 
+        # Ensure comfortable row height for buttons and readability
+        self.table.verticalHeader().setDefaultSectionSize(42)
+
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
-        self.table.setColumnWidth(3, 85)
+        self.table.setColumnWidth(3, 120)
         self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+
+        # Center align headers for Play Count and Quick Adjust columns
+        for col in (2, 3):
+            header_item = self.table.horizontalHeaderItem(col)
+            if header_item:
+                header_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self.table.cellChanged.connect(self._on_cell_changed)
         self.table.shortcut_delta.connect(self._on_keyboard_shortcut)
