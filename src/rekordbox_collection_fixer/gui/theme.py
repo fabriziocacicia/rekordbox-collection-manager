@@ -77,25 +77,7 @@ QFrame#cardFrame {{
     border-radius: 8px;
 }}
 
-/* Sidebar Toggle & Header Buttons */
-QPushButton#sidebarToggleBtn {{
-    background-color: transparent;
-    color: {COLOR_TEXT_SECONDARY};
-    border: 1px solid transparent;
-    border-radius: 6px;
-    font-size: 15px;
-    padding: 4px;
-}}
-
-QPushButton#sidebarToggleBtn:hover {{
-    background-color: {COLOR_BG_HOVER};
-    color: {COLOR_TEXT_PRIMARY};
-    border-color: {COLOR_BORDER};
-}}
-
-QPushButton#sidebarToggleBtn:pressed {{
-    background-color: {COLOR_BG_DARK};
-}}
+/* Sidebar Collapse Button */
 
 QPushButton#sidebarCollapseBtn {{
     background-color: transparent;

@@ -76,7 +76,7 @@ class InfoView(QWidget):
         self.info_text.setReadOnly(True)
         self.info_text.setStyleSheet(
             f"background-color: #1a1a20; border: 1px solid {COLOR_BORDER}; "
-            f"border-radius: 6px; padding: 12px; font-family: monospace; font-size: 12px;"
+            f'border-radius: 6px; padding: 12px; font-family: "Menlo", "Consolas", "Courier New"; font-size: 12px;'
         )
         layout.addWidget(self.info_text, stretch=1)
 
@@ -152,14 +152,6 @@ class MainWindow(QMainWindow):
         header_layout = QHBoxLayout(header_frame)
         header_layout.setContentsMargins(16, 12, 16, 12)
         header_layout.setSpacing(14)
-
-        # Sidebar Toggle Button (Header hamburger)
-        self.btn_toggle_sidebar = QPushButton("☰")
-        self.btn_toggle_sidebar.setObjectName("sidebarToggleBtn")
-        self.btn_toggle_sidebar.setToolTip("Toggle Sidebar (Cmd+B / Ctrl+B)")
-        self.btn_toggle_sidebar.setFixedSize(30, 30)
-        self.btn_toggle_sidebar.clicked.connect(self.toggle_sidebar)
-        header_layout.addWidget(self.btn_toggle_sidebar)
 
         # Brand Logo & Title
         icon_path = get_asset_path("icon.png")
@@ -328,7 +320,6 @@ class MainWindow(QMainWindow):
                 # Prepare UI for opening: update buttons, expand with icons first
                 self.btn_collapse_sidebar.setText("◀")
                 self.btn_collapse_sidebar.setToolTip("Collapse sidebar (Cmd+B / Ctrl+B)")
-                self.btn_toggle_sidebar.setToolTip("Collapse sidebar (Cmd+B / Ctrl+B)")
 
             self.sidebar_anim.setStartValue(start_width)
             self.sidebar_anim.setEndValue(target_width)
@@ -354,7 +345,6 @@ class MainWindow(QMainWindow):
         """Switch navigation to compact icon-only mode."""
         self.btn_collapse_sidebar.setText("▶")
         self.btn_collapse_sidebar.setToolTip("Expand sidebar (Cmd+B / Ctrl+B)")
-        self.btn_toggle_sidebar.setToolTip("Expand sidebar (Cmd+B / Ctrl+B)")
         self.sidebar_section_label.setVisible(False)
         self.sidebar_header_layout.setContentsMargins(0, 2, 0, 4)
         self.sidebar_header_layout.setAlignment(self.btn_collapse_sidebar, Qt.AlignmentFlag.AlignCenter)
@@ -369,7 +359,6 @@ class MainWindow(QMainWindow):
         """Switch navigation to full expanded mode."""
         self.btn_collapse_sidebar.setText("◀")
         self.btn_collapse_sidebar.setToolTip("Collapse sidebar (Cmd+B / Ctrl+B)")
-        self.btn_toggle_sidebar.setToolTip("Collapse sidebar (Cmd+B / Ctrl+B)")
         self.sidebar_section_label.setVisible(True)
         self.sidebar_header_layout.setContentsMargins(14, 2, 8, 6)
         self.sidebar_header_layout.setAlignment(self.btn_collapse_sidebar, Qt.AlignmentFlag.AlignRight)
