@@ -8,7 +8,7 @@ from unittest.mock import patch
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 from sqlalchemy import create_engine
 
 from rekordbox_collection_fixer.edit_play_count import (
@@ -205,6 +205,9 @@ class TestPlayCountView(unittest.TestCase):
 
     def test_table_populated(self):
         self.assertEqual(self.view.table.rowCount(), 2)
+        self.assertEqual(self.view.table.columnCount(), 6)
+        status_item = self.view.table.item(0, 0)
+        self.assertEqual(status_item.text(), "Clean")
 
     def _find_row_by_track_id(self, track_id: str) -> int:
         for r in range(self.view.table.rowCount()):
@@ -212,20 +215,71 @@ class TestPlayCountView(unittest.TestCase):
                 return r
         raise ValueError(f"Track ID {track_id} not found in table")
 
-    def test_stepper_and_delta(self):
-        with patch("rekordbox_collection_fixer.gui.play_count_view.is_rekordbox_running", return_value=False):
-            self.view._apply_track_delta("1", 1)
-            row_idx = self._find_row_by_track_id("1")
-            count_item = self.view.table.item(row_idx, 2)
-            self.assertEqual(count_item.text(), "6")
+    def test_stepper_and_delta_stages_changes(self):
+        self.view._apply_track_delta("1", 1)
+        row_idx = self._find_row_by_track_id("1")
+        count_item = self.view.table.item(row_idx, 3)
+        status_item = self.view.table.item(row_idx, 0)
 
-            self.view._apply_track_delta("1", -2)
-            count_item = self.view.table.item(row_idx, 2)
-            self.assertEqual(count_item.text(), "4")
+        # UI updated
+        self.assertEqual(count_item.text(), "6")
+        self.assertEqual(status_item.text(), "● Staged")
+        self.assertIn("1", self.view.staged_edits)
+        self.assertEqual(self.view.staged_edits["1"]["new_count"], 6)
+        self.assertTrue(self.view.save_btn.isEnabled())
+        self.assertTrue(self.view.discard_btn.isEnabled())
+        self.assertIn("1 track modified", self.view.status_label.text())
+
+        # DB is untouched in staging phase
+        with self.engine.connect() as conn:
+            val = conn.exec_driver_sql("SELECT DJPlayCount FROM djmdContent WHERE ID = '1'").fetchone()[0]
+            self.assertEqual(val, 5)
+
+        # Applying delta back to original un-stages it
+        self.view._apply_track_delta("1", -1)
+        self.assertEqual(count_item.text(), "5")
+        self.assertEqual(status_item.text(), "Clean")
+        self.assertNotIn("1", self.view.staged_edits)
+        self.assertFalse(self.view.save_btn.isEnabled())
+        self.assertFalse(self.view.discard_btn.isEnabled())
+
+    def test_discard_changes(self):
+        self.view._apply_track_delta("1", 2)
+        self.assertIn("1", self.view.staged_edits)
+
+        with patch("PySide6.QtWidgets.QMessageBox.question", return_value=QMessageBox.StandardButton.Yes):
+            self.view._on_discard_changes()
+
+        row_idx = self._find_row_by_track_id("1")
+        self.assertEqual(self.view.table.item(row_idx, 3).text(), "5")
+        self.assertEqual(self.view.table.item(row_idx, 0).text(), "Clean")
+        self.assertEqual(len(self.view.staged_edits), 0)
+        self.assertFalse(self.view.save_btn.isEnabled())
+
+    def test_save_all_changes(self):
+        self.view._apply_track_delta("1", 3)
+        self.assertEqual(self.view.staged_edits["1"]["new_count"], 8)
+
+        with patch("rekordbox_collection_fixer.gui.play_count_view.is_rekordbox_running", return_value=False), \
+             patch("PySide6.QtWidgets.QMessageBox.question", return_value=QMessageBox.StandardButton.Save), \
+             patch("PySide6.QtWidgets.QMessageBox.information"):
+            self.view._on_save_success(1)
+
+        self.assertEqual(len(self.view.staged_edits), 0)
+        row_idx = self._find_row_by_track_id("1")
+        self.assertEqual(self.view.table.item(row_idx, 3).text(), "8")
+        self.assertEqual(self.view.table.item(row_idx, 0).text(), "Clean")
+
+    def test_row_highlighting_persists_across_repopulate(self):
+        self.view._apply_track_delta("1", 1)
+        self.view._populate_table()
+        row_idx = self._find_row_by_track_id("1")
+        self.assertEqual(self.view.table.item(row_idx, 0).text(), "● Staged")
+        self.assertEqual(self.view.table.item(row_idx, 3).text(), "6")
 
     def test_play_count_column_read_only(self):
         row_idx = self._find_row_by_track_id("1")
-        count_item = self.view.table.item(row_idx, 2)
+        count_item = self.view.table.item(row_idx, 3)
         self.assertFalse(bool(count_item.flags() & Qt.ItemFlag.ItemIsEditable))
 
 

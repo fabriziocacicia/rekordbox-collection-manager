@@ -2,7 +2,7 @@
 
 from typing import Any, Dict, List, Optional
 from PySide6.QtCore import QEvent, QTimer, Qt, Signal
-from PySide6.QtGui import QColor, QKeyEvent
+from PySide6.QtGui import QBrush, QColor, QFont, QKeyEvent
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -20,6 +20,8 @@ from PySide6.QtWidgets import (
 from sqlalchemy.engine import Engine
 
 from rekordbox_collection_fixer.gui.theme import (
+    COLOR_AMBER,
+    COLOR_AMBER_BG,
     COLOR_BG_CARD,
     COLOR_BLUE,
     COLOR_TEXT_MUTED,
@@ -27,10 +29,12 @@ from rekordbox_collection_fixer.gui.theme import (
     COLOR_TEXT_SECONDARY,
 )
 from rekordbox_collection_fixer.gui.workers import (
-    TrackPlayCountWorker,
+    PlayCountBatchSaveWorker,
     TrackSearchWorker,
 )
 from rekordbox_collection_fixer.utils import is_rekordbox_running
+
+COLOR_STAGED_ROW_BG = QColor(245, 158, 11, 30)
 
 
 class StepperWidget(QWidget):
@@ -81,7 +85,7 @@ class PlayCountTable(QTableWidget):
 
 
 class PlayCountView(QWidget):
-    """View to filter, search, and edit track play counts interactively."""
+    """View to filter, search, and edit track play counts interactively with staged edits."""
 
     notify_status = Signal(str)
 
@@ -89,6 +93,7 @@ class PlayCountView(QWidget):
         super().__init__(parent)
         self.engine: Optional[Engine] = None
         self.records: List[Dict[str, Any]] = []
+        self.staged_edits: Dict[str, Dict[str, Any]] = {}
         self.active_search_worker: Optional[TrackSearchWorker] = None
 
         # Debounce timer for search input
@@ -132,8 +137,15 @@ class PlayCountView(QWidget):
 
         # 2. Main Tracks Table
         self.table = PlayCountTable()
-        self.table.setColumnCount(5)
-        self.table.setHorizontalHeaderLabels(["Title", "Artist", "Play Count", "Quick Adjust", "File Location"])
+        self.table.setColumnCount(6)
+        self.table.setHorizontalHeaderLabels([
+            "Status",
+            "Title",
+            "Artist",
+            "Play Count",
+            "Quick Adjust",
+            "File Location",
+        ])
         self.table.setAlternatingRowColors(True)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
@@ -141,15 +153,16 @@ class PlayCountView(QWidget):
         # Ensure comfortable row height for buttons and readability
         self.table.verticalHeader().setDefaultSectionSize(42)
 
-        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
-        self.table.setColumnWidth(3, 120)
-        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
+        self.table.setColumnWidth(4, 120)
+        self.table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
 
-        # Center align headers for Play Count and Quick Adjust columns
-        for col in (2, 3):
+        # Center align headers for Status, Play Count, and Quick Adjust columns
+        for col in (0, 3, 4):
             header_item = self.table.horizontalHeaderItem(col)
             if header_item:
                 header_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -159,7 +172,7 @@ class PlayCountView(QWidget):
 
         main_layout.addWidget(self.table, stretch=1)
 
-        # 3. Bottom Multi-Selection Action Toolbar
+        # 3. Bottom Multi-Selection & Staging Action Toolbar
         bottom_bar = QHBoxLayout()
         bottom_bar.setSpacing(10)
 
@@ -181,11 +194,23 @@ class PlayCountView(QWidget):
         self.batch_dec_btn.clicked.connect(lambda: self._apply_batch_delta(-1))
         bottom_bar.addWidget(self.batch_dec_btn)
 
+        self.discard_btn = QPushButton("Discard Changes")
+        self.discard_btn.setEnabled(False)
+        self.discard_btn.clicked.connect(self._on_discard_changes)
+        bottom_bar.addWidget(self.discard_btn)
+
+        self.save_btn = QPushButton("💾 Save Changes")
+        self.save_btn.setObjectName("primaryButton")
+        self.save_btn.setEnabled(False)
+        self.save_btn.clicked.connect(self._on_save_all_changes)
+        bottom_bar.addWidget(self.save_btn)
+
         main_layout.addLayout(bottom_bar)
 
     def set_engine(self, engine: Engine) -> None:
         """Assign active database engine and trigger initial track load."""
         self.engine = engine
+        self.staged_edits.clear()
         self._execute_search()
 
     def _on_search_text_changed(self, text: str) -> None:
@@ -214,7 +239,12 @@ class PlayCountView(QWidget):
         filter_mode = self.filter_combo.currentIndex()
         filtered = []
         for r in records:
-            count = r.get("play_count", 0)
+            track_id = str(r["id"])
+            count = (
+                self.staged_edits[track_id]["new_count"]
+                if track_id in self.staged_edits
+                else int(r.get("play_count", 0))
+            )
             if filter_mode == 1 and count <= 0:  # Played only
                 continue
             if filter_mode == 2 and count > 0:  # Unplayed only
@@ -223,11 +253,7 @@ class PlayCountView(QWidget):
 
         self.records = filtered
         self._populate_table()
-        count = len(filtered)
-        if query:
-            self.status_label.setText(f"Found {count} tracks matching '{query}'.")
-        else:
-            self.status_label.setText(f"Loaded {count} tracks from collection.")
+        self._update_status_bar()
 
     def _on_search_error(self, err_msg: str) -> None:
         self.status_label.setText(f"Search error: {err_msg}")
@@ -241,41 +267,134 @@ class PlayCountView(QWidget):
             row_idx = self.table.rowCount()
             self.table.insertRow(row_idx)
 
-            track_id = r["id"]
+            track_id = str(r["id"])
+            orig_count = int(r.get("play_count", 0))
 
-            # Col 0: Title (Read-only)
+            is_staged = track_id in self.staged_edits
+            cur_count = self.staged_edits[track_id]["new_count"] if is_staged else orig_count
+
+            # Col 0: Status
+            status_item = QTableWidgetItem("● Staged" if is_staged else "Clean")
+            status_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            status_item.setData(Qt.ItemDataRole.UserRole, track_id)
+            status_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+            self.table.setItem(row_idx, 0, status_item)
+
+            # Col 1: Title
             title_item = QTableWidgetItem(r.get("title") or "(Untitled)")
             title_item.setData(Qt.ItemDataRole.UserRole, track_id)
             title_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
-            self.table.setItem(row_idx, 0, title_item)
+            self.table.setItem(row_idx, 1, title_item)
 
-            # Col 1: Artist (Read-only)
+            # Col 2: Artist
             artist_item = QTableWidgetItem(r.get("artist") or "Unknown Artist")
             artist_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
-            self.table.setItem(row_idx, 1, artist_item)
+            self.table.setItem(row_idx, 2, artist_item)
 
-            # Col 2: Play Count (Read-only visual info)
-            count = int(r.get("play_count", 0))
-            count_item = QTableWidgetItem(str(count))
+            # Col 3: Play Count
+            count_item = QTableWidgetItem(str(cur_count))
             count_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             count_item.setData(Qt.ItemDataRole.UserRole, track_id)
             count_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
-            self.table.setItem(row_idx, 2, count_item)
+            self.table.setItem(row_idx, 3, count_item)
 
-            # Col 3: Quick Stepper Buttons [-] and [+]
+            # Col 4: Quick Stepper Buttons [-] and [+]
             stepper = StepperWidget(track_id, self.table)
             stepper.stepper_clicked.connect(self._on_stepper_clicked)
-            self.table.setCellWidget(row_idx, 3, stepper)
+            self.table.setCellWidget(row_idx, 4, stepper)
 
-            # Col 4: Location (Read-only)
+            # Col 5: Location
             loc = r.get("filename") or r.get("folder_path") or ""
             loc_item = QTableWidgetItem(loc)
-            loc_item.setForeground(Qt.GlobalColor.gray)
             loc_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
-            self.table.setItem(row_idx, 4, loc_item)
+            self.table.setItem(row_idx, 5, loc_item)
+
+            self._apply_row_styling(row_idx, track_id, is_staged, orig_count, cur_count)
 
         self.table.blockSignals(False)
         self._on_selection_changed()
+
+    def _apply_row_styling(
+        self,
+        row_idx: int,
+        track_id: str,
+        is_staged: bool,
+        orig_count: int,
+        cur_count: int,
+    ) -> None:
+        """Apply visual styling and highlights to a table row."""
+        status_item = self.table.item(row_idx, 0)
+        title_item = self.table.item(row_idx, 1)
+        artist_item = self.table.item(row_idx, 2)
+        count_item = self.table.item(row_idx, 3)
+        loc_item = self.table.item(row_idx, 5)
+        stepper = self.table.cellWidget(row_idx, 4)
+
+        if is_staged:
+            bg_brush = QBrush(COLOR_STAGED_ROW_BG)
+            if status_item:
+                status_item.setText("● Staged")
+                status_item.setForeground(QColor(COLOR_AMBER))
+                status_item.setToolTip(f"Staged modification: {orig_count} ➔ {cur_count}")
+            if count_item:
+                count_item.setText(str(cur_count))
+                count_item.setForeground(QColor(COLOR_AMBER))
+                count_item.setToolTip(f"Original: {orig_count} ➔ Staged: {cur_count}")
+            if loc_item:
+                loc_item.setForeground(QColor(COLOR_TEXT_MUTED))
+            if stepper:
+                stepper.setStyleSheet("background: rgba(245, 158, 11, 0.12); border-radius: 4px;")
+        else:
+            bg_brush = QBrush(Qt.GlobalColor.transparent)
+            if status_item:
+                status_item.setText("Clean")
+                status_item.setForeground(QColor(Qt.GlobalColor.gray))
+                status_item.setToolTip("No unsaved changes")
+            if count_item:
+                count_item.setText(str(cur_count))
+                count_item.setForeground(QColor(COLOR_TEXT_PRIMARY))
+                count_item.setToolTip("")
+            if loc_item:
+                loc_item.setForeground(QColor(Qt.GlobalColor.gray))
+            if stepper:
+                stepper.setStyleSheet("background: transparent;")
+
+        for item in (status_item, title_item, artist_item, count_item, loc_item):
+            if item:
+                item.setBackground(bg_brush)
+
+    def _find_row_by_track_id(self, track_id: str) -> Optional[int]:
+        """Locate table row index matching track_id."""
+        for r in range(self.table.rowCount()):
+            item = self.table.item(r, 0)
+            if item and item.data(Qt.ItemDataRole.UserRole) == track_id:
+                return r
+        return None
+
+    def _update_status_bar(self) -> None:
+        """Refresh bottom status label and save/discard buttons."""
+        staged_count = len(self.staged_edits)
+        if staged_count > 0:
+            self.status_label.setText(
+                f"⚠️ {staged_count} track{'s' if staged_count != 1 else ''} modified (unsaved) — click Save Changes to commit."
+            )
+            self.status_label.setStyleSheet(f"color: {COLOR_AMBER}; font-weight: 600;")
+            self.save_btn.setText(f"💾 Save Changes ({staged_count})")
+            self.discard_btn.setText(f"Discard Changes ({staged_count})")
+            self.save_btn.setEnabled(True)
+            self.discard_btn.setEnabled(True)
+        else:
+            visible_count = len(self.records)
+            query = self.search_input.text().strip()
+            if query:
+                self.status_label.setText(f"Found {visible_count} tracks matching '{query}'.")
+            else:
+                self.status_label.setText(f"Loaded {visible_count} tracks from collection.")
+            self.status_label.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY};")
+            self.save_btn.setText("💾 Save Changes")
+            self.discard_btn.setText("Discard Changes")
+            self.save_btn.setEnabled(False)
+            self.discard_btn.setEnabled(False)
 
     def _on_selection_changed(self) -> None:
         selected_rows = set(index.row() for index in self.table.selectedIndexes())
@@ -285,79 +404,146 @@ class PlayCountView(QWidget):
         self.batch_inc_btn.setEnabled(has_selection)
         self.batch_dec_btn.setEnabled(has_selection)
 
-    def _check_rekordbox_safety(self) -> bool:
+    def _on_stepper_clicked(self, track_id: str, delta: int) -> None:
+        """Triggered when row stepper [-] or [+] button is clicked."""
+        self._apply_track_delta(track_id, delta)
+
+    def _on_keyboard_shortcut(self, delta: int) -> None:
+        """Triggered by + or - keyboard shortcuts on selected rows."""
+        selected_rows = set(index.row() for index in self.table.selectedIndexes())
+        for row in selected_rows:
+            item = self.table.item(row, 0)
+            if item:
+                track_id = item.data(Qt.ItemDataRole.UserRole)
+                if track_id:
+                    self._apply_track_delta(track_id, delta)
+
+    def _apply_track_delta(self, track_id: str, delta: int) -> None:
+        """Stage a play count delta for track in memory."""
+        if track_id in self.staged_edits:
+            staged = self.staged_edits[track_id]
+            record = staged["record"]
+            orig_count = staged["original_count"]
+            cur_count = staged["new_count"]
+        else:
+            record = next((r for r in self.records if str(r["id"]) == track_id), None)
+            if not record:
+                return
+            orig_count = int(record.get("play_count", 0))
+            cur_count = orig_count
+
+        new_count = max(0, cur_count + delta)
+
+        if new_count == orig_count:
+            self.staged_edits.pop(track_id, None)
+            is_staged = False
+        else:
+            self.staged_edits[track_id] = {
+                "record": record,
+                "original_count": orig_count,
+                "new_count": new_count,
+            }
+            is_staged = True
+
+        row_idx = self._find_row_by_track_id(track_id)
+        if row_idx is not None:
+            self.table.blockSignals(True)
+            self._apply_row_styling(row_idx, track_id, is_staged, orig_count, new_count)
+            self.table.blockSignals(False)
+
+        self._update_status_bar()
+
+    def _apply_batch_delta(self, delta: int) -> None:
+        """Stage deltas to all currently selected tracks."""
+        selected_rows = set(index.row() for index in self.table.selectedIndexes())
+        for row in selected_rows:
+            item = self.table.item(row, 0)
+            if item:
+                track_id = item.data(Qt.ItemDataRole.UserRole)
+                if track_id:
+                    self._apply_track_delta(track_id, delta)
+
+    def _on_discard_changes(self) -> None:
+        """Discard all staged edits and restore original values."""
+        staged_count = len(self.staged_edits)
+        if staged_count == 0:
+            return
+
+        res = QMessageBox.question(
+            self,
+            "Discard Changes",
+            f"Are you sure you want to discard {staged_count} staged play count modification{'s' if staged_count != 1 else ''}?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if res != QMessageBox.StandardButton.Yes:
+            return
+
+        self.staged_edits.clear()
+        self._populate_table()
+        self._update_status_bar()
+        self.notify_status.emit("Staged play count changes discarded.")
+
+    def _on_save_all_changes(self) -> None:
+        """Save all staged play count modifications in a single atomic transaction."""
+        if not self.engine or not self.staged_edits:
+            return
+
         if is_rekordbox_running():
             QMessageBox.warning(
                 self,
                 "Rekordbox is Running",
                 "⚠️ Rekordbox is currently running!\n\n"
-                "Please close Rekordbox (Cmd + Q) before editing track play counts.",
+                "Saving changes now may cause database locking or corruption.\n"
+                "Please close Rekordbox (Cmd + Q) and try again.",
+                QMessageBox.StandardButton.Ok,
             )
-            return False
-        return True
-
-    def _on_stepper_clicked(self, track_id: str, delta: int) -> None:
-        """Triggered when row stepper [-] or [+] button is clicked."""
-        if not self._check_rekordbox_safety():
-            return
-        self._apply_track_delta(track_id, delta)
-
-    def _on_keyboard_shortcut(self, delta: int) -> None:
-        """Triggered by + or - keyboard shortcuts on selected rows."""
-        if not self._check_rekordbox_safety():
-            return
-        selected_rows = set(index.row() for index in self.table.selectedIndexes())
-        for row in selected_rows:
-            track_id = self.table.item(row, 0).data(Qt.ItemDataRole.UserRole)
-            if track_id:
-                self._apply_track_delta(track_id, delta)
-
-    def _apply_track_delta(self, track_id: str, delta: int) -> None:
-        """Apply delta to track in database and update cell."""
-        if not self.engine:
             return
 
-        # Find row and current record
-        record = next((r for r in self.records if r["id"] == track_id), None)
-        if not record:
+        count = len(self.staged_edits)
+        res = QMessageBox.question(
+            self,
+            "Confirm Save",
+            f"Are you ready to commit {count} track play count update{'s' if count != 1 else ''} to Rekordbox?\n\n"
+            "This will update the database in a single atomic transaction.",
+            QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Cancel,
+        )
+        if res != QMessageBox.StandardButton.Save:
             return
 
-        current_count = record.get("play_count", 0)
-        new_count = max(0, current_count + delta)
-        record["play_count"] = new_count
+        updates = [
+            {"id": item["record"]["id"], "play_count": item["new_count"]}
+            for item in self.staged_edits.values()
+        ]
 
-        # Update cell in UI immediately
-        for row in range(self.table.rowCount()):
-            item = self.table.item(row, 0)
-            if item and item.data(Qt.ItemDataRole.UserRole) == track_id:
-                count_item = self.table.item(row, 2)
-                if count_item:
-                    self.table.blockSignals(True)
-                    count_item.setText(str(new_count))
-                    self.table.blockSignals(False)
-                break
+        self.save_btn.setEnabled(False)
+        self.discard_btn.setEnabled(False)
+        self.notify_status.emit(f"Saving {count} play count updates to database...")
+        self.status_label.setText(f"Saving {count} updates to database...")
 
-        # Fire worker in background
-        worker = TrackPlayCountWorker(self.engine, track_id, delta=delta, parent=self)
-        worker.success.connect(self._on_play_count_saved)
-        worker.error.connect(self._on_play_count_error)
+        worker = PlayCountBatchSaveWorker(self.engine, updates, parent=self)
+        worker.success.connect(self._on_save_success)
+        worker.error.connect(self._on_save_error)
         worker.start()
 
-    def _on_play_count_saved(self, track_id: str, old_count: int, new_count: int) -> None:
-        self.notify_status.emit(f"Updated play count: {old_count} ➔ {new_count}")
-        self.status_label.setText(f"✓ Saved to database: play count updated ({old_count} ➔ {new_count})")
+    def _on_save_success(self, updated_count: int) -> None:
+        for track_id, item in self.staged_edits.items():
+            new_count = item["new_count"]
+            item["record"]["play_count"] = new_count
+            for r in self.records:
+                if str(r["id"]) == track_id:
+                    r["play_count"] = new_count
 
-    def _on_play_count_error(self, track_id: str, err_msg: str) -> None:
-        self.notify_status.emit(f"❌ Error updating play count: {err_msg}")
-        self.status_label.setText(f"❌ Error saving to database: {err_msg}")
-        QMessageBox.warning(self, "Update Error", f"Failed to update play count:\n{err_msg}")
+        self.staged_edits.clear()
+        self._populate_table()
+        self._update_status_bar()
+        self.notify_status.emit(f"✅ Successfully saved play count updates for {updated_count} tracks.")
+        QMessageBox.information(
+            self,
+            "Changes Saved",
+            f"Successfully updated play counts for {updated_count} tracks in Rekordbox.",
+        )
 
-    # Batch Operations
-    def _apply_batch_delta(self, delta: int) -> None:
-        if not self._check_rekordbox_safety():
-            return
-        selected_rows = set(index.row() for index in self.table.selectedIndexes())
-        for row in selected_rows:
-            track_id = self.table.item(row, 0).data(Qt.ItemDataRole.UserRole)
-            if track_id:
-                self._apply_track_delta(track_id, delta)
+    def _on_save_error(self, err_msg: str) -> None:
+        self._update_status_bar()
+        self.notify_status.emit(f"❌ Save failed: {err_msg}")
+        QMessageBox.critical(self, "Save Failed", f"Database error while saving changes:\n{err_msg}")

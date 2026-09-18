@@ -289,6 +289,55 @@ def set_track_play_count(
     return current_count, target_count
 
 
+def batch_update_track_play_counts(
+    engine: Engine,
+    updates: List[Dict[str, Any]],
+    table_name: Optional[str] = None,
+) -> int:
+    """Batch update the play counts of multiple tracks in a single atomic transaction.
+
+    Each item in `updates` is a dict with:
+      - 'id': track_id (str)
+      - 'play_count': new_count (int)
+
+    Returns the count of successfully updated records.
+    """
+    if not updates:
+        return 0
+
+    if table_name is None:
+        table_name = detect_content_table(engine)
+
+    now_utc = get_rekordbox_timestamp()
+
+    with engine.begin() as conn:
+        cols = {
+            r[1]
+            for r in conn.exec_driver_sql(f"PRAGMA table_info({table_name});").fetchall()
+        }
+        play_count_col = "DJPlayCount" if "DJPlayCount" in cols else "PlayCount"
+        has_updated_at = "updated_at" in cols
+
+        updated_count = 0
+        for item in updates:
+            track_id = str(item["id"])
+            target_count = max(0, int(item["play_count"]))
+
+            set_clauses = [f"{play_count_col} = :new_count"]
+            params: Dict[str, Any] = {"new_count": target_count, "id": track_id}
+
+            if has_updated_at:
+                set_clauses.append("updated_at = :updated_at")
+                params["updated_at"] = now_utc
+
+            update_sql = f"UPDATE {table_name} SET {', '.join(set_clauses)} WHERE ID = :id;"
+            res = conn.execute(text(update_sql), params)
+            if res.rowcount and res.rowcount > 0:
+                updated_count += res.rowcount
+
+    return updated_count
+
+
 def prompt_action_mode(cli_inc: bool, cli_dec: bool) -> str:
     """Determine initial action mode ('increment', 'decrement', or 'ask')."""
     if cli_inc and not cli_dec:

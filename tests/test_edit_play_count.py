@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 from sqlalchemy import create_engine
 
 from rekordbox_collection_fixer.edit_play_count import (
+    batch_update_track_play_counts,
     detect_content_table,
     main,
     parse_args,
@@ -225,6 +226,20 @@ class TestEditPlayCount(unittest.TestCase):
         with self.engine.connect() as conn:
             row = conn.exec_driver_sql("SELECT DJPlayCount FROM djmdContent WHERE ID = '1'").fetchone()
             self.assertEqual(row[0], 5)
+
+    def test_batch_update_track_play_counts(self):
+        updates = [
+            {"id": "1", "play_count": 12},
+            {"id": "2", "play_count": 0},
+        ]
+        count = batch_update_track_play_counts(self.engine, updates)
+        self.assertEqual(count, 2)
+
+        with self.engine.connect() as conn:
+            c1 = conn.exec_driver_sql("SELECT DJPlayCount FROM djmdContent WHERE ID = '1'").fetchone()[0]
+            c2 = conn.exec_driver_sql("SELECT DJPlayCount FROM djmdContent WHERE ID = '2'").fetchone()[0]
+            self.assertEqual(c1, 12)
+            self.assertEqual(c2, 0)
 
     def test_main_running_check(self):
         with patch("rekordbox_collection_fixer.edit_play_count.ensure_rekordbox_not_running") as mock_check, \

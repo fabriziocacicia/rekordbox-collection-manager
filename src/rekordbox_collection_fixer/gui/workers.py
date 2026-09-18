@@ -6,6 +6,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from rekordbox_collection_fixer.edit_play_count import (
+    batch_update_track_play_counts,
     search_tracks,
     set_track_play_count,
     update_track_play_count,
@@ -167,3 +168,28 @@ class TrackPlayCountWorker(QThread):
             self.success.emit(self.track_id, old_count, new_count)
         except Exception as e:
             self.error.emit(self.track_id, str(e))
+
+
+class PlayCountBatchSaveWorker(QThread):
+    """Worker to save batch track play count updates in an atomic transaction."""
+
+    success = Signal(int)  # updated_count
+    error = Signal(str)
+
+    def __init__(
+        self,
+        engine: Engine,
+        updates: List[Dict[str, Any]],
+        parent: Optional[Any] = None,
+    ):
+        super().__init__(parent)
+        self.engine = engine
+        self.updates = updates
+
+    def run(self) -> None:
+        try:
+            updated_count = batch_update_track_play_counts(self.engine, self.updates)
+            self.success.emit(updated_count)
+        except Exception as e:
+            self.error.emit(str(e))
+
