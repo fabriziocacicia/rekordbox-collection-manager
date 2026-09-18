@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
 )
 from sqlalchemy.engine import Engine
 
-from rekordbox_collection_fixer.gui.assets import get_app_icon, get_asset_path
+from rekordbox_collection_fixer.gui.assets import get_app_icon, get_asset_path, get_refresh_icon
 from rekordbox_collection_fixer.gui.history_view import HistoryView
 from rekordbox_collection_fixer.gui.play_count_view import PlayCountView
 from rekordbox_collection_fixer.gui.theme import (
@@ -175,11 +175,15 @@ class MainWindow(QMainWindow):
         self.safety_chip.setObjectName("safeBadge")
         header_layout.addWidget(self.safety_chip)
 
-        refresh_chip_btn = QPushButton("↻")
-        refresh_chip_btn.setToolTip("Re-check Rekordbox running status")
-        refresh_chip_btn.setFixedSize(28, 28)
-        refresh_chip_btn.clicked.connect(self._check_rekordbox_status)
-        header_layout.addWidget(refresh_chip_btn)
+        self.refresh_chip_btn = QPushButton()
+        self.refresh_chip_btn.setObjectName("refreshChipBtn")
+        self.refresh_chip_btn.setToolTip("Re-check Rekordbox running status")
+        self.refresh_chip_btn.setIcon(get_refresh_icon())
+        self.refresh_chip_btn.setIconSize(QSize(15, 15))
+        self.refresh_chip_btn.setFixedSize(28, 28)
+        self.refresh_chip_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.refresh_chip_btn.clicked.connect(self._check_rekordbox_status)
+        header_layout.addWidget(self.refresh_chip_btn)
 
         header_layout.addStretch(1)
 

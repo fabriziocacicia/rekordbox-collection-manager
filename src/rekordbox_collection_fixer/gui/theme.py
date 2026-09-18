@@ -245,6 +245,29 @@ QPushButton#detailActionBtn:pressed {{
     border-color: {COLOR_BLUE_PRESSED};
 }}
 
+/* Header Refresh / Status Check Button */
+QPushButton#refreshChipBtn {{
+    background-color: {COLOR_BG_CARD};
+    color: {COLOR_TEXT_PRIMARY};
+    border: 1px solid {COLOR_BORDER};
+    border-radius: 6px;
+    padding: 0px;
+    min-width: 28px;
+    max-width: 28px;
+    min-height: 28px;
+    max-height: 28px;
+}}
+
+QPushButton#refreshChipBtn:hover {{
+    background-color: {COLOR_BG_HOVER};
+    border-color: {COLOR_BORDER_LIGHT};
+}}
+
+QPushButton#refreshChipBtn:pressed {{
+    background-color: {COLOR_BG_DARK};
+}}
+
+
 /* Inputs, SpinBoxes & ComboBoxes */
 QLineEdit, QSpinBox, QComboBox {{
     background-color: {COLOR_BG_INPUT};

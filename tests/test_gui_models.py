@@ -423,6 +423,19 @@ class TestMainWindowSidebar(unittest.TestCase):
         self.window.btn_info.click()
         self.assertEqual(self.window.stacked_widget.currentIndex(), 2)
 
+    def test_refresh_button_icon_and_action(self):
+        from rekordbox_collection_fixer.gui.assets import get_refresh_icon
+
+        icon = get_refresh_icon()
+        self.assertFalse(icon.isNull())
+        self.assertIsNotNone(self.window.refresh_chip_btn)
+        self.assertEqual(self.window.refresh_chip_btn.objectName(), "refreshChipBtn")
+        self.assertFalse(self.window.refresh_chip_btn.icon().isNull())
+        self.assertEqual(self.window.refresh_chip_btn.toolTip(), "Re-check Rekordbox running status")
+        self.assertEqual(self.window.refresh_chip_btn.width(), 28)
+        self.assertEqual(self.window.refresh_chip_btn.height(), 28)
+
+
 
 class TestHistoryDetailView(unittest.TestCase):
     """Tests for the HistoryDetailView component."""
