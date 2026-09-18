@@ -167,17 +167,6 @@ class TestHistoryView(unittest.TestCase):
         status_item = self.view.table.item(0, 0)
         self.assertEqual(status_item.text(), "● Staged")
 
-    def test_auto_extract_dates(self):
-        # Set a session with date in name but no date field
-        self.view.original_records[0]["date"] = ""
-        self.view.original_records[0]["name"] = "HISTORY 2026-08-15 Club Night"
-        self.view._refresh_table()
-
-        self.view._on_auto_extract_dates()
-        rec_id = self.view.original_records[0]["id"]
-        self.assertIn(rec_id, self.view.staged_edits)
-        self.assertEqual(self.view.staged_edits[rec_id]["date"], "2026-08-15")
-
     def test_search_filter(self):
         self.view.search_input.setText("Space")
         self.assertEqual(self.view.table.rowCount(), 1)
@@ -234,14 +223,10 @@ class TestPlayCountView(unittest.TestCase):
             count_item = self.view.table.item(row_idx, 2)
             self.assertEqual(count_item.text(), "4")
 
-    def test_direct_cell_edit(self):
-        with patch("rekordbox_collection_fixer.gui.play_count_view.is_rekordbox_running", return_value=False):
-            row_idx = self._find_row_by_track_id("1")
-            count_item = self.view.table.item(row_idx, 2)
-            count_item.setText("25")
-            self.view._on_cell_changed(row_idx, 2)
-            rec = next(r for r in self.view.records if r["id"] == "1")
-            self.assertEqual(rec["play_count"], 25)
+    def test_play_count_column_read_only(self):
+        row_idx = self._find_row_by_track_id("1")
+        count_item = self.view.table.item(row_idx, 2)
+        self.assertFalse(bool(count_item.flags() & Qt.ItemFlag.ItemIsEditable))
 
 
 class TestAssets(unittest.TestCase):

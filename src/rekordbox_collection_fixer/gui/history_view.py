@@ -35,7 +35,6 @@ from rekordbox_collection_fixer.gui.workers import (
 )
 from rekordbox_collection_fixer.utils import (
     MONTH_INT_TO_NAME,
-    extract_date_from_name,
     extract_year_month_from_name_or_date,
     is_rekordbox_running,
     parse_history_name,
@@ -73,11 +72,6 @@ class HistoryView(QWidget):
         self.search_input.setClearButtonEnabled(True)
         self.search_input.textChanged.connect(self._on_search_text_changed)
         top_bar.addWidget(self.search_input, stretch=2)
-
-        self.auto_extract_btn = QPushButton("🪄 Auto-Extract Dates from Names")
-        self.auto_extract_btn.setToolTip("Scan session titles for YYYY-MM-DD and stage extracted dates")
-        self.auto_extract_btn.clicked.connect(self._on_auto_extract_dates)
-        top_bar.addWidget(self.auto_extract_btn)
 
         self.realign_btn = QPushButton("⚡ Realign Chronology")
         self.realign_btn.setToolTip("Recalculate Seq order in database (Months 1-12, Days 01-31)")
@@ -355,33 +349,6 @@ class HistoryView(QWidget):
             status_item.setForeground(Qt.GlobalColor.gray)
 
         self._update_status_bar()
-
-    def _on_auto_extract_dates(self) -> None:
-        """Scan all loaded sessions and extract date if found in name."""
-        extracted_count = 0
-        for r in self.original_records:
-            rec_id = r["id"]
-            current_name = self.staged_edits.get(rec_id, {}).get("name", r.get("name") or "")
-            current_date = self.staged_edits.get(rec_id, {}).get("date", r.get("date") or "")
-
-            extracted = extract_date_from_name(current_name)
-            if extracted and extracted != current_date:
-                self.staged_edits[rec_id] = {
-                    "record": r,
-                    "name": current_name,
-                    "date": extracted,
-                }
-                extracted_count += 1
-
-        if extracted_count > 0:
-            self._refresh_table()
-            self.notify_status.emit(f"🪄 Auto-extracted dates for {extracted_count} sessions.")
-        else:
-            QMessageBox.information(
-                self,
-                "Auto-Extract Dates",
-                "No new dates could be extracted from session titles.",
-            )
 
     def _on_discard_changes(self) -> None:
         """Discard all staged edits."""
