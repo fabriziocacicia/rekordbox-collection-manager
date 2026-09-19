@@ -520,7 +520,7 @@ class TestHistoryDetailView(unittest.TestCase):
         self.assertIn("127.0", self.detail_view.kpi_bpm.val_lbl.text())
         self.assertIn("130.0", self.detail_view.kpi_bpm.val_lbl.text())
         self.assertEqual(self.detail_view.table.rowCount(), 2)
-        self.assertEqual(self.detail_view.table.columnCount(), 10)
+        self.assertEqual(self.detail_view.table.columnCount(), 14)
 
         # Check column 1 (Title)
         self.assertEqual(self.detail_view.table.item(0, 1).text(), "Glue")
@@ -860,7 +860,156 @@ class TestMainWindowDbBadge(unittest.TestCase):
         self.assertFalse(icon.isNull())
 
 
+class TestTracksTableWidget(unittest.TestCase):
+    """Unit tests for the shared customizable TracksTableWidget."""
+
+    def setUp(self):
+        from rekordbox_collection_manager.gui.track_table import (
+            DEFAULT_COLLECTION_COLUMNS,
+            DEFAULT_HISTORY_COLUMNS,
+            TrackColumn,
+            TrackTableConfig,
+            TracksTableWidget,
+        )
+
+        self.mock_tracks = [
+            {
+                "track_no": 10,
+                "content_id": "c1",
+                "title": "Breathe",
+                "artist": "CamelPhat",
+                "album": "Dark Matter",
+                "genre": "Melodic House",
+                "key": "4A",
+                "bpm": 125.0,
+                "duration_sec": 195,
+                "duration_str": "3:15",
+                "play_count": 8,
+                "bitrate": 320,
+                "file_type": "FLAC",
+                "tags": ["Melodic", "Peak"],
+                "playlists": ["Festival 2024"],
+                "folder_name": "Melodic",
+                "folder_dir": "/Music/Melodic",
+                "file_name": "Breathe.flac",
+                "file_path": "/Music/Melodic/Breathe.flac",
+            },
+            {
+                "track_no": 11,
+                "content_id": "c2",
+                "title": "Glue",
+                "artist": "Bicep",
+                "album": "Bicep",
+                "genre": "Breakbeat",
+                "key": "Am",
+                "bpm": 130.0,
+                "duration_sec": 269,
+                "duration_str": "4:29",
+                "play_count": 3,
+                "bitrate": 320,
+                "file_type": "MP3",
+                "tags": [],
+                "playlists": [],
+                "folder_name": "Breaks",
+                "folder_dir": "/Music/Breaks",
+                "file_name": "Glue.mp3",
+                "file_path": "/Music/Breaks/Glue.mp3",
+            },
+        ]
+
+    def test_table_collection_mode(self):
+        from rekordbox_collection_manager.gui.track_table import (
+            DEFAULT_COLLECTION_COLUMNS,
+            TrackTableConfig,
+            TracksTableWidget,
+        )
+
+        cfg = TrackTableConfig(
+            columns=list(DEFAULT_COLLECTION_COLUMNS),
+            index_mode="row_number",
+            sorting_mode="server",
+        )
+        table = TracksTableWidget(config=cfg)
+        self.assertEqual(table.columnCount(), 13)
+        self.assertFalse(table.isSortingEnabled())
+
+        table.set_tracks(self.mock_tracks)
+        self.assertEqual(table.rowCount(), 2)
+        # Row index mode: 1 and 2
+        self.assertEqual(table.item(0, 0).text(), "1")
+        self.assertEqual(table.item(1, 0).text(), "2")
+        self.assertEqual(table.item(0, 1).text(), "Breathe")
+        self.assertEqual(table.item(0, 2).text(), "CamelPhat")
+
+    def test_table_history_mode(self):
+        from rekordbox_collection_manager.gui.track_table import (
+            DEFAULT_HISTORY_COLUMNS,
+            TrackTableConfig,
+            TracksTableWidget,
+        )
+
+        cfg = TrackTableConfig(
+            columns=list(DEFAULT_HISTORY_COLUMNS),
+            index_mode="track_no",
+            sorting_mode="client",
+        )
+        table = TracksTableWidget(config=cfg)
+        self.assertEqual(table.columnCount(), 14)
+        self.assertTrue(table.isSortingEnabled())
+
+        table.set_tracks(self.mock_tracks)
+        self.assertEqual(table.rowCount(), 2)
+        # Track sequence mode: 10 and 11
+        self.assertEqual(table.item(0, 0).text(), "10")
+        self.assertEqual(table.item(1, 0).text(), "11")
+        # Column 3 is Album in history preset
+        self.assertEqual(table.item(0, 3).text(), "Dark Matter")
+        self.assertEqual(table.item(1, 3).text(), "Bicep")
+
+    def test_table_sorting_signal_emission_in_server_mode(self):
+        from rekordbox_collection_manager.gui.track_table import (
+            DEFAULT_COLLECTION_COLUMNS,
+            TrackTableConfig,
+            TracksTableWidget,
+        )
+
+        cfg = TrackTableConfig(
+            columns=list(DEFAULT_COLLECTION_COLUMNS),
+            sorting_mode="server",
+        )
+        table = TracksTableWidget(config=cfg)
+
+        received_sorts = []
+        table.sort_requested.connect(lambda field, order: received_sorts.append((field, order)))
+
+        # Simulate clicking BPM column (index 4 in collection columns)
+        table._on_header_section_clicked(4)
+        self.assertEqual(len(received_sorts), 1)
+        self.assertEqual(received_sorts[0][0], "bpm")
+        self.assertEqual(received_sorts[0][1], Qt.SortOrder.DescendingOrder)
+
+    def test_table_copy_tracklist_formatting(self):
+        from rekordbox_collection_manager.gui.track_table import (
+            DEFAULT_COLLECTION_COLUMNS,
+            TrackTableConfig,
+            TracksTableWidget,
+        )
+
+        table = TracksTableWidget(config=TrackTableConfig(columns=list(DEFAULT_COLLECTION_COLUMNS)))
+        table.set_tracks(self.mock_tracks)
+
+        count = table.copy_tracklist_to_clipboard()
+        self.assertEqual(count, 2)
+
+        clipboard = QApplication.clipboard()
+        self.assertIsNotNone(clipboard)
+        text = clipboard.text()
+        self.assertIn("01. CamelPhat - Breathe", text)
+        self.assertIn("02. Bicep - Glue", text)
+
+
 if __name__ == "__main__":
     unittest.main()
+
 
 

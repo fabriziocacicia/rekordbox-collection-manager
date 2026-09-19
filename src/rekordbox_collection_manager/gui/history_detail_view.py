@@ -2,21 +2,19 @@
 
 Presents complete metadata for a Rekordbox history session at the top
 and a rich, scrollable, searchable, and sortable tracklist of all played tracks at the bottom.
+Utilizes the shared customizable TracksTableWidget for rich audio format badges,
+tag & playlist chips, Finder link reveals, and context menus.
 """
 
 from typing import Any, Dict, List, Optional
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QClipboard, QColor, QFont, QKeyEvent
+from PySide6.QtGui import QKeyEvent
 from PySide6.QtWidgets import (
-    QApplication,
     QFrame,
     QHBoxLayout,
-    QHeaderView,
     QLabel,
     QLineEdit,
     QPushButton,
-    QTableWidget,
-    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -24,37 +22,26 @@ from sqlalchemy.engine import Engine
 
 from rekordbox_collection_manager.gui.theme import (
     COLOR_BG_CARD,
-    COLOR_BG_DARK,
-    COLOR_BG_HOVER,
     COLOR_BG_PANEL,
     COLOR_BLUE,
     COLOR_BORDER,
     COLOR_BORDER_LIGHT,
-    COLOR_GREEN,
     COLOR_TEXT_MUTED,
     COLOR_TEXT_PRIMARY,
     COLOR_TEXT_SECONDARY,
+)
+from rekordbox_collection_manager.gui.track_table import (
+    DEFAULT_HISTORY_COLUMNS,
+    NumericTableWidgetItem,
+    TrackTableConfig,
+    TracksTableWidget,
 )
 from rekordbox_collection_manager.gui.workers import HistorySessionDetailWorker
 from rekordbox_collection_manager.utils import (
     MONTH_INT_TO_NAME,
     extract_year_month_from_name_or_date,
-    natural_sort_key,
     parse_history_name,
 )
-
-
-class NumericTableWidgetItem(QTableWidgetItem):
-    """QTableWidgetItem with proper numeric sorting support."""
-
-    def __init__(self, text: str, sort_value: float = 0.0):
-        super().__init__(text)
-        self.sort_value = sort_value
-
-    def __lt__(self, other: Any) -> bool:
-        if isinstance(other, NumericTableWidgetItem):
-            return self.sort_value < other.sort_value
-        return super().__lt__(other)
 
 
 class HistoryDetailView(QWidget):
@@ -172,7 +159,7 @@ class HistoryDetailView(QWidget):
         toolbar.addWidget(self.tracklist_header_label)
 
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("🔍 Filter tracks by title, artist, album, or key...")
+        self.search_input.setPlaceholderText("🔍 Filter tracks by title, artist, album, key, tags, or playlist...")
         self.search_input.setClearButtonEnabled(True)
         self.search_input.textChanged.connect(self._on_search_changed)
         toolbar.addWidget(self.search_input, stretch=2)
@@ -184,51 +171,17 @@ class HistoryDetailView(QWidget):
 
         main_layout.addLayout(toolbar)
 
-        # 4. Scrollable Tracks Table
-        self.table = QTableWidget()
-        self.table.setColumnCount(10)
-        self.table.setHorizontalHeaderLabels([
-            "#",
-            "Title",
-            "Artist",
-            "Album",
-            "Key",
-            "BPM",
-            "Time",
-            "Plays",
-            "Bitrate",
-            "Location",
-        ])
-        self.table.setAlternatingRowColors(True)
-        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
-        self.table.verticalHeader().setDefaultSectionSize(36)
-        self.table.verticalHeader().setVisible(False)
-
-        # Column resize modes
-        header = self.table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(8, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(9, QHeaderView.ResizeMode.Stretch)
-
-        # Align headers
-        for col in (0, 4, 5, 6, 7, 8):
-            item = self.table.horizontalHeaderItem(col)
-            if item:
-                item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        # Sorting
-        header.setSectionsClickable(True)
-        header.setSortIndicatorShown(True)
-        self.table.setSortingEnabled(True)
-
+        # 4. Scrollable Tracks Table (via shared customizable TracksTableWidget)
+        table_config = TrackTableConfig(
+            columns=list(DEFAULT_HISTORY_COLUMNS),
+            index_mode="track_no",
+            index_header_tooltip="Track play sequence in this DJ set",
+            sorting_mode="client",
+            enable_context_menu=True,
+            enable_finder_clicks=True,
+        )
+        self.table = TracksTableWidget(config=table_config, parent=self)
+        self.table.status_message.connect(self._on_table_status_message)
         main_layout.addWidget(self.table, stretch=1)
 
         # 5. Bottom Status Bar
@@ -370,100 +323,32 @@ class HistoryDetailView(QWidget):
         self.filter_text = text.strip().lower()
         self._filter_and_render_tracks()
 
+    def _on_table_status_message(self, msg: str) -> None:
+        self.status_label.setText(msg)
+        self.notify_status.emit(msg)
+
     def _filter_and_render_tracks(self) -> None:
         """Filter tracks and render rows into the table."""
-        self.table.setSortingEnabled(False)
-        self.table.setRowCount(0)
-
         q = self.filter_text
         if q:
             self.displayed_tracks = [
                 t for t in self.all_tracks
                 if (
-                    q in t["title"].lower()
-                    or q in t["artist"].lower()
-                    or q in t["album"].lower()
-                    or q in t["genre"].lower()
-                    or q in t["key"].lower()
-                    or q in t["filename"].lower()
+                    q in str(t.get("title", "")).lower()
+                    or q in str(t.get("artist", "")).lower()
+                    or q in str(t.get("album", "")).lower()
+                    or q in str(t.get("genre", "")).lower()
+                    or q in str(t.get("key", "")).lower()
+                    or q in str(t.get("filename", "")).lower()
+                    or q in str(t.get("file_type", "")).lower()
+                    or any(q in str(tag).lower() for tag in t.get("tags", []))
+                    or any(q in str(pl).lower() for pl in t.get("playlists", []))
                 )
             ]
         else:
             self.displayed_tracks = list(self.all_tracks)
 
-        for row_idx, t in enumerate(self.displayed_tracks):
-            self.table.insertRow(row_idx)
-
-            # Col 0: # (TrackNo)
-            item_no = NumericTableWidgetItem(str(t["track_no"]), float(t["track_no"]))
-            item_no.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            item_no.setForeground(QColor(COLOR_TEXT_MUTED))
-            self.table.setItem(row_idx, 0, item_no)
-
-            # Col 1: Title
-            item_title = QTableWidgetItem(t["title"])
-            font = item_title.font()
-            font.setBold(True)
-            item_title.setFont(font)
-            item_title.setForeground(QColor("#ffffff"))
-            self.table.setItem(row_idx, 1, item_title)
-
-            # Col 2: Artist
-            item_artist = QTableWidgetItem(t["artist"])
-            item_artist.setForeground(QColor(COLOR_TEXT_SECONDARY))
-            self.table.setItem(row_idx, 2, item_artist)
-
-            # Col 3: Album
-            item_album = QTableWidgetItem(t["album"] or "—")
-            item_album.setForeground(QColor(COLOR_TEXT_MUTED))
-            self.table.setItem(row_idx, 3, item_album)
-
-            # Col 4: Key
-            key_text = t["key"] or "—"
-            item_key = QTableWidgetItem(key_text)
-            item_key.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            if t["key"]:
-                item_key.setForeground(QColor(COLOR_BLUE))
-            else:
-                item_key.setForeground(QColor(COLOR_TEXT_MUTED))
-            self.table.setItem(row_idx, 4, item_key)
-
-            # Col 5: BPM
-            bpm_val = t["bpm"]
-            bpm_text = f"{bpm_val:.1f}" if bpm_val > 0 else "—"
-            item_bpm = NumericTableWidgetItem(bpm_text, bpm_val)
-            item_bpm.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.table.setItem(row_idx, 5, item_bpm)
-
-            # Col 6: Time
-            item_time = NumericTableWidgetItem(t["duration_str"], float(t["duration_sec"]))
-            item_time.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.table.setItem(row_idx, 6, item_time)
-
-            # Col 7: Plays
-            plays_val = t["play_count"]
-            item_plays = NumericTableWidgetItem(str(plays_val), float(plays_val))
-            item_plays.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            if plays_val > 0:
-                item_plays.setForeground(QColor(COLOR_GREEN))
-            self.table.setItem(row_idx, 7, item_plays)
-
-            # Col 8: Bitrate
-            br_val = t["bitrate"]
-            br_text = f"{br_val} kbps" if br_val > 0 else "—"
-            item_br = NumericTableWidgetItem(br_text, float(br_val))
-            item_br.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            item_br.setForeground(QColor(COLOR_TEXT_MUTED))
-            self.table.setItem(row_idx, 8, item_br)
-
-            # Col 9: Location
-            loc_text = t["filename"] or t["folder_path"]
-            item_loc = QTableWidgetItem(loc_text)
-            item_loc.setToolTip(t["folder_path"] or t["filename"])
-            item_loc.setForeground(QColor(COLOR_TEXT_MUTED))
-            self.table.setItem(row_idx, 9, item_loc)
-
-        self.table.setSortingEnabled(True)
+        self.table.set_tracks(self.displayed_tracks)
 
         # Update Footer Label
         disp_cnt = len(self.displayed_tracks)
@@ -474,21 +359,8 @@ class HistoryDetailView(QWidget):
             self.status_label.setText(f"Showing {total_cnt} tracks")
 
     def _on_copy_tracklist(self) -> None:
-        """Copy formatted tracklist (e.g. 01. Artist - Title) to system clipboard."""
-        tracks = self.displayed_tracks if self.filter_text else self.all_tracks
-        if not tracks:
-            self.notify_status.emit("No tracks to copy.")
-            return
-
-        lines = []
-        for idx, t in enumerate(tracks, 1):
-            lines.append(f"{idx:02d}. {t['artist']} - {t['title']}")
-
-        tracklist_str = "\n".join(lines)
-        clipboard = QApplication.clipboard()
-        if clipboard:
-            clipboard.setText(tracklist_str)
-            self.notify_status.emit(f"📋 Copied {len(tracks)} tracks to clipboard!")
+        """Copy formatted tracklist to system clipboard."""
+        self.table.copy_tracklist_to_clipboard()
 
     def _on_back_clicked(self) -> None:
         self.back_clicked.emit()

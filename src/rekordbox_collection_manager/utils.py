@@ -620,4 +620,101 @@ def reveal_in_file_manager(path: str) -> bool:
         return False
 
 
+def resolve_file_type(
+    raw_file_type: Any,
+    filename: Optional[str] = None,
+    folder_path: Optional[str] = None,
+) -> str:
+    """Resolve human-readable audio file format (MP3, AIFF, FLAC, WAV, M4A, etc.)."""
+    type_map = {
+        1: "MP3",
+        4: "M4A",
+        5: "FLAC",
+        11: "WAV",
+        12: "AIFF",
+        25: "Spotify",
+        26: "Apple Music",
+    }
+    try:
+        if raw_file_type is not None:
+            ft_int = int(raw_file_type)
+            if ft_int in type_map:
+                return type_map[ft_int]
+    except (ValueError, TypeError):
+        pass
+
+    target_str = filename or folder_path or ""
+    if target_str.startswith("apple-music:"):
+        return "Apple Music"
+    if target_str.startswith("spotify:"):
+        return "Spotify"
+
+    ext = os.path.splitext(target_str)[1].lstrip(".").upper()
+    if ext:
+        if ext in ("AIF", "AIFF"):
+            return "AIFF"
+        return ext
+
+    return "—"
+
+
+def format_location_display(
+    filename: Optional[str],
+    folder_path: Optional[str],
+) -> str:
+    """Return 'containing_folder/filename' if containing folder exists, else filename or path."""
+    fp = folder_path or ""
+    fn = filename or ""
+    if fp.startswith("apple-music:") or fp.startswith("spotify:"):
+        return fp
+
+    if fp:
+        parent_dir = os.path.basename(os.path.dirname(fp))
+        file_part = fn or os.path.basename(fp)
+        if parent_dir and file_part:
+            return f"{parent_dir}/{file_part}"
+        if file_part:
+            return file_part
+        return fp
+
+    return fn or "—"
+
+
+def resolve_file_and_folder_paths(
+    filename: Optional[str],
+    folder_path: Optional[str],
+) -> Tuple[str, str, str, str]:
+    """Resolve (folder_name, folder_dir, file_name, file_path).
+
+    Returns:
+        folder_name: containing directory basename for concise display (e.g. 'Afro House - BP')
+        folder_dir: full directory path (e.g. '/Users/.../Music/Downloaded/Afro House - BP')
+        file_name: track audio file name (e.g. 'On My Mind - Ajna (BE).mp3')
+        file_path: full absolute path to the audio file
+    """
+    fp = folder_path or ""
+    fn = filename or ""
+
+    if fp.startswith("apple-music:") or fp.startswith("spotify:"):
+        return ("Streaming", fp, fn or fp, fp)
+
+    if not fp and not fn:
+        return ("—", "", "—", "")
+
+    if fp:
+        if os.path.splitext(fp)[1] or (fn and fp.endswith(f"/{fn}")):
+            file_path = fp
+            file_name = fn or os.path.basename(fp)
+            folder_dir = os.path.dirname(fp)
+            folder_name = os.path.basename(folder_dir)
+        else:
+            folder_dir = fp
+            folder_name = os.path.basename(fp)
+            file_name = fn or ""
+            file_path = os.path.join(fp, fn) if fn else fp
+        return (folder_name or "—", folder_dir, file_name or "—", file_path)
+
+    return ("—", "", fn or "—", fn or "")
+
+
 

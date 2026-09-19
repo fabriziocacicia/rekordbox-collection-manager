@@ -23,6 +23,7 @@ from rekordbox_collection_manager.utils import (
     ensure_rekordbox_not_running,
     extract_date_from_name,
     extract_year_month_from_name_or_date,
+    format_location_display,
     get_default_master_db_path,
     get_rekordbox_timestamp,
     is_rekordbox_running,
@@ -34,6 +35,8 @@ from rekordbox_collection_manager.utils import (
     parse_session_paren_number,
     parse_year_month,
     resolve_db_path,
+    resolve_file_and_folder_paths,
+    resolve_file_type,
 )
 
 
@@ -368,6 +371,36 @@ def fetch_session_tracks(engine: Engine, history_id: str) -> Dict[str, Any]:
             join_key = "LEFT JOIN djmdKey k ON c.KeyID = k.ID" if "djmdKey" in existing_tables else ""
             key_expr = "k.ScaleName" if "djmdKey" in existing_tables else "NULL"
 
+            has_my_tag = "djmdSongMyTag" in existing_tables and "djmdMyTag" in existing_tables
+            has_playlist = "djmdSongPlaylist" in existing_tables and "djmdPlaylist" in existing_tables
+
+            if has_my_tag:
+                tag_expr = """(
+                    SELECT GROUP_CONCAT(t.Name, '|||')
+                    FROM djmdSongMyTag smt
+                    JOIN djmdMyTag t ON smt.MyTagID = t.ID
+                    WHERE smt.ContentID = c.ID
+                      AND (smt.rb_local_deleted = 0 OR smt.rb_local_deleted IS NULL)
+                      AND (t.rb_local_deleted = 0 OR t.rb_local_deleted IS NULL)
+                ) AS TagNames"""
+            else:
+                tag_expr = "NULL AS TagNames"
+
+            if has_playlist:
+                playlist_expr = """(
+                    SELECT GROUP_CONCAT(p.Name, '|||')
+                    FROM djmdSongPlaylist sp
+                    JOIN djmdPlaylist p ON sp.PlaylistID = p.ID
+                    WHERE sp.ContentID = c.ID
+                      AND p.Attribute = 0
+                      AND (p.rb_local_deleted = 0 OR p.rb_local_deleted IS NULL)
+                      AND (sp.rb_local_deleted = 0 OR sp.rb_local_deleted IS NULL)
+                ) AS PlaylistNames"""
+            else:
+                playlist_expr = "NULL AS PlaylistNames"
+
+            file_type_expr = "c.FileType" if "FileType" in c_cols else "NULL AS FileType"
+
             query = f"""
                 SELECT 
                     sh.TrackNo,
@@ -384,9 +417,12 @@ def fetch_session_tracks(engine: Engine, history_id: str) -> Dict[str, Any]:
                     c.Rating,
                     c.ReleaseYear,
                     c.BitRate,
+                    {file_type_expr},
                     c.Commnt,
                     c.FolderPath,
-                    c.FileNameL
+                    c.FileNameL,
+                    {tag_expr},
+                    {playlist_expr}
                 FROM djmdSongHistory sh
                 JOIN djmdContent c ON sh.ContentID = c.ID
                 {join_artist}
@@ -411,9 +447,22 @@ def fetch_session_tracks(engine: Engine, history_id: str) -> Dict[str, Any]:
                 else:
                     dur_str = "--:--"
 
+                raw_tags = r.get("TagNames")
+                tags_list = [t.strip() for t in raw_tags.split("|||") if t.strip()] if raw_tags else []
+
+                raw_playlists = r.get("PlaylistNames")
+                playlists_list = [p.strip() for p in raw_playlists.split("|||") if p.strip()] if raw_playlists else []
+
+                raw_fn = r.get("FileNameL") or ""
+                raw_fp = r.get("FolderPath") or ""
+                file_type_str = resolve_file_type(r.get("FileType"), raw_fn, raw_fp)
+                f_name, f_dir, fn_disp, f_full = resolve_file_and_folder_paths(raw_fn, raw_fp)
+                loc_disp = format_location_display(raw_fn, raw_fp)
+
                 tracks.append({
                     "track_no": int(r.get("TrackNo") or 0),
                     "content_id": str(r.get("ContentID") or ""),
+                    "id": str(r.get("ContentID") or ""),
                     "title": r.get("Title") or "(Untitled)",
                     "artist": r.get("ArtistName") or "Unknown Artist",
                     "album": r.get("AlbumName") or "",
@@ -426,9 +475,18 @@ def fetch_session_tracks(engine: Engine, history_id: str) -> Dict[str, Any]:
                     "rating": int(r.get("Rating") or 0),
                     "year": int(r.get("ReleaseYear") or 0),
                     "bitrate": int(r.get("BitRate") or 0),
+                    "file_type": file_type_str,
+                    "raw_file_type": r.get("FileType"),
+                    "tags": tags_list,
+                    "playlists": playlists_list,
+                    "folder_name": f_name,
+                    "folder_dir": f_dir,
+                    "file_name": fn_disp,
+                    "file_path": f_full,
+                    "location_display": loc_disp,
                     "comment": r.get("Commnt") or "",
-                    "folder_path": r.get("FolderPath") or "",
-                    "filename": r.get("FileNameL") or "",
+                    "folder_path": raw_fp,
+                    "filename": raw_fn,
                     "played_at": str(r.get("PlayedAt") or ""),
                 })
 
