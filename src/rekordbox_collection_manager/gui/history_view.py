@@ -37,6 +37,7 @@ from rekordbox_collection_manager.gui.workers import (
 )
 from rekordbox_collection_manager.utils import (
     MONTH_INT_TO_NAME,
+    compose_history_name,
     extract_year_month_from_name_or_date,
     is_rekordbox_running,
     parse_history_name,
@@ -122,24 +123,35 @@ class HistoryView(QWidget):
         table_layout.setContentsMargins(0, 0, 0, 0)
         table_layout.setSpacing(6)
 
-        table_header = QLabel("HISTORY SESSIONS (Double-click name/date to edit • Click Details to view tracks)")
+        table_header = QLabel("HISTORY SESSIONS (Double-click date, name, location or played with to edit • Click Details to view tracks)")
         table_header.setStyleSheet(f"color: {COLOR_TEXT_MUTED}; font-size: 11px; font-weight: 600; padding: 4px;")
         table_layout.addWidget(table_header)
 
         self.table = QTableWidget()
-        self.table.setColumnCount(6)
-        self.table.setHorizontalHeaderLabels(["Status", "Date", "Session Name", "Target Folder", "Created At", "Actions"])
+        self.table.setColumnCount(7)
+        self.table.setHorizontalHeaderLabels([
+            "Status",
+            "Date",
+            "Session Name",
+            "Location",
+            "Played With",
+            "Created At",
+            "Actions",
+        ])
         self.table.setAlternatingRowColors(True)
         self.table.verticalHeader().setDefaultSectionSize(42)
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
-        self.table.setColumnWidth(5, 110)
+        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Interactive)
+        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Interactive)
+        self.table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeMode.Fixed)
+        self.table.setColumnWidth(3, 150)
+        self.table.setColumnWidth(4, 180)
+        self.table.setColumnWidth(6, 110)
 
-        actions_hdr = self.table.horizontalHeaderItem(5)
+        actions_hdr = self.table.horizontalHeaderItem(6)
         if actions_hdr:
             actions_hdr.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
 
@@ -274,6 +286,9 @@ class HistoryView(QWidget):
             cur_name = self.staged_edits[rec_id]["name"] if is_staged else orig_name
             cur_date = self.staged_edits[rec_id]["date"] if is_staged else orig_date
 
+            orig_base, orig_loc, orig_art = parse_history_name(orig_name)
+            cur_base, cur_loc, cur_art = parse_history_name(cur_name)
+
             # 1. Folder Tree Filter
             y, m = extract_year_month_from_name_or_date(cur_name, cur_date)
             folder_key = f"{y}{m:02d}" if (y and m) else "Other"
@@ -287,9 +302,13 @@ class HistoryView(QWidget):
 
             # 2. Text Search Filter
             if self.search_filter_text:
+                q = self.search_filter_text
                 if (
-                    self.search_filter_text not in cur_name.lower()
-                    and self.search_filter_text not in cur_date.lower()
+                    q not in cur_name.lower()
+                    and q not in cur_date.lower()
+                    and q not in cur_base.lower()
+                    and q not in cur_loc.lower()
+                    and q not in cur_art.lower()
                 ):
                     continue
 
@@ -317,29 +336,33 @@ class HistoryView(QWidget):
             self.table.setItem(row_idx, 1, date_item)
 
             # Col 2: Session Name (Editable)
-            name_item = QTableWidgetItem(cur_name)
+            name_item = QTableWidgetItem(cur_base)
             name_item.setData(Qt.ItemDataRole.UserRole, rec_id)
-            if is_staged and cur_name != orig_name:
+            if is_staged and cur_base != orig_base:
                 name_item.setForeground(Qt.GlobalColor.yellow)
             self.table.setItem(row_idx, 2, name_item)
 
-            # Col 3: Target Folder (Read-only computed)
-            if y and m:
-                m_name = MONTH_INT_TO_NAME.get(m, f"{m:02d}")
-                target_folder_str = f"{y} > {m:02d} {m_name}"
-            else:
-                target_folder_str = "(Root)"
-            folder_item = QTableWidgetItem(target_folder_str)
-            folder_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
-            self.table.setItem(row_idx, 3, folder_item)
+            # Col 3: Location (Editable)
+            loc_item = QTableWidgetItem(cur_loc)
+            loc_item.setData(Qt.ItemDataRole.UserRole, rec_id)
+            if is_staged and cur_loc != orig_loc:
+                loc_item.setForeground(Qt.GlobalColor.yellow)
+            self.table.setItem(row_idx, 3, loc_item)
 
-            # Col 4: Original Created At
+            # Col 4: Played With (Editable)
+            art_item = QTableWidgetItem(cur_art)
+            art_item.setData(Qt.ItemDataRole.UserRole, rec_id)
+            if is_staged and cur_art != orig_art:
+                art_item.setForeground(Qt.GlobalColor.yellow)
+            self.table.setItem(row_idx, 4, art_item)
+
+            # Col 5: Original Created At
             orig_created = orig_date or "(None)"
             created_item = QTableWidgetItem(orig_created)
             created_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
-            self.table.setItem(row_idx, 4, created_item)
+            self.table.setItem(row_idx, 5, created_item)
 
-            # Col 5: Actions (View Details)
+            # Col 6: Actions (View Details)
             action_widget = QWidget()
             action_widget.setStyleSheet("background: transparent;")
             action_layout = QHBoxLayout(action_widget)
@@ -353,14 +376,14 @@ class HistoryView(QWidget):
             detail_btn.clicked.connect(lambda _, rid=rec_id: self._open_session_detail(rid))
             action_layout.addWidget(detail_btn)
 
-            self.table.setCellWidget(row_idx, 5, action_widget)
+            self.table.setCellWidget(row_idx, 6, action_widget)
 
         self.table.blockSignals(False)
         self._update_status_bar()
 
     def _on_cell_double_clicked(self, row: int, column: int) -> None:
-        """Double clicking non-editable columns (0, 3, 4, 5) opens detail view."""
-        if column in (1, 2):
+        """Double clicking non-editable columns (0, 5, 6) opens detail view."""
+        if column in (1, 2, 3, 4):
             return
         item = self.table.item(row, 1) or self.table.item(row, 2)
         if item:
@@ -422,8 +445,8 @@ class HistoryView(QWidget):
             self._open_session_detail(next_id)
 
     def _on_cell_changed(self, row: int, column: int) -> None:
-        """Handle inline editing of Date (col 1) or Name (col 2)."""
-        if column not in (1, 2):
+        """Handle inline editing of Date (1), Session Name (2), Location (3), or Played With (4)."""
+        if column not in (1, 2, 3, 4):
             return
 
         item = self.table.item(row, column)
@@ -432,7 +455,13 @@ class HistoryView(QWidget):
 
         rec_id = item.data(Qt.ItemDataRole.UserRole)
         if not rec_id:
-            return
+            for c in (1, 2, 3, 4):
+                cand = self.table.item(row, c)
+                if cand and cand.data(Qt.ItemDataRole.UserRole):
+                    rec_id = cand.data(Qt.ItemDataRole.UserRole)
+                    break
+            if not rec_id:
+                return
 
         # Find original record
         record = next((r for r in self.original_records if r["id"] == rec_id), None)
@@ -441,12 +470,20 @@ class HistoryView(QWidget):
 
         date_item = self.table.item(row, 1)
         name_item = self.table.item(row, 2)
+        loc_item = self.table.item(row, 3)
+        art_item = self.table.item(row, 4)
 
         new_date = date_item.text().strip() if date_item else ""
-        new_name = name_item.text().strip() if name_item else ""
+        new_base = name_item.text().strip() if name_item else ""
+        new_loc = loc_item.text().strip() if loc_item else ""
+        new_art = art_item.text().strip() if art_item else ""
+
+        # Compose full name according to schema
+        new_name = compose_history_name(new_base, location=new_loc, artist=new_art)
 
         orig_date = record.get("date") or ""
         orig_name = record.get("name") or ""
+        orig_base, orig_loc, orig_art = parse_history_name(orig_name)
 
         # Check if modified from original
         if new_date != orig_date or new_name != orig_name:
@@ -458,18 +495,28 @@ class HistoryView(QWidget):
         else:
             self.staged_edits.pop(rec_id, None)
 
-        # Update target folder cell and status cell
-        y, m = extract_year_month_from_name_or_date(new_name, new_date)
-        target_folder = f"{y} > {m:02d} {MONTH_INT_TO_NAME.get(m, '')}" if (y and m) else "(Root)"
-        self.table.item(row, 3).setText(target_folder)
+        self.table.blockSignals(True)
+        # Highlight modified fields in yellow
+        is_staged = rec_id in self.staged_edits
+        if date_item:
+            date_item.setForeground(Qt.GlobalColor.yellow if (is_staged and new_date != orig_date) else Qt.GlobalColor.white)
+        if name_item:
+            name_item.setForeground(Qt.GlobalColor.yellow if (is_staged and new_base != orig_base) else Qt.GlobalColor.white)
+        if loc_item:
+            loc_item.setForeground(Qt.GlobalColor.yellow if (is_staged and new_loc != orig_loc) else Qt.GlobalColor.white)
+        if art_item:
+            art_item.setForeground(Qt.GlobalColor.yellow if (is_staged and new_art != orig_art) else Qt.GlobalColor.white)
 
+        # Update status cell
         status_item = self.table.item(row, 0)
-        if rec_id in self.staged_edits:
-            status_item.setText("● Staged")
-            status_item.setForeground(Qt.GlobalColor.yellow)
-        else:
-            status_item.setText("Clean")
-            status_item.setForeground(Qt.GlobalColor.gray)
+        if status_item:
+            if is_staged:
+                status_item.setText("● Staged")
+                status_item.setForeground(Qt.GlobalColor.yellow)
+            else:
+                status_item.setText("Clean")
+                status_item.setForeground(Qt.GlobalColor.gray)
+        self.table.blockSignals(False)
 
         self._update_status_bar()
 

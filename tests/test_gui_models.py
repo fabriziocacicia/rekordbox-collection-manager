@@ -173,7 +173,24 @@ class TestHistoryView(unittest.TestCase):
     def test_search_filter(self):
         self.view.search_input.setText("Space")
         self.assertEqual(self.view.table.rowCount(), 1)
-        self.assertIn("Space", self.view.table.item(0, 2).text())
+        self.assertEqual(self.view.table.item(0, 2).text(), "HISTORY 2026-08-20")
+        self.assertEqual(self.view.table.item(0, 3).text(), "Space")
+
+    def test_inline_editing_location_and_djs(self):
+        # Edit location of row 0
+        loc_item = self.view.table.item(0, 3)
+        rec_id = loc_item.data(Qt.ItemDataRole.UserRole)
+        loc_item.setText("Amnesia")
+        self.view._on_cell_changed(0, 3)
+        self.assertEqual(len(self.view.staged_edits), 1)
+        self.assertIn("Amnesia", self.view.staged_edits[rec_id]["name"])
+
+        # Edit played with of row 0
+        art_item = self.view.table.item(0, 4)
+        art_item.setText("Carl Cox")
+        self.view._on_cell_changed(0, 4)
+        self.assertIn("Amnesia", self.view.staged_edits[rec_id]["name"])
+        self.assertIn("Carl Cox", self.view.staged_edits[rec_id]["name"])
 
 
 class TestPlayCountView(unittest.TestCase):
@@ -514,7 +531,10 @@ class TestHistoryDetailView(unittest.TestCase):
     def test_detail_view_rendering(self):
         self.detail_view._on_data_loaded(self.mock_data)
 
-        self.assertEqual(self.detail_view.session_title_label.text(), "HISTORY 2026-08-14 @ Space Terrace")
+        self.assertEqual(self.detail_view.session_title_label.text(), "HISTORY 2026-08-14")
+        self.assertEqual(self.detail_view.location_val_label.text(), "Space Terrace")
+        self.assertFalse(self.detail_view.location_chip.isHidden())
+        self.assertTrue(self.detail_view.djs_chip.isHidden())
         self.assertEqual(self.detail_view.kpi_tracks.val_lbl.text(), "2 tracks")
         self.assertEqual(self.detail_view.kpi_runtime.val_lbl.text(), "12m 43s")
         self.assertIn("127.0", self.detail_view.kpi_bpm.val_lbl.text())
@@ -607,9 +627,12 @@ class TestHistoryViewDetailIntegration(unittest.TestCase):
     def tearDown(self):
         self.patcher.stop()
 
-    def test_table_has_six_columns_including_actions(self):
-        self.assertEqual(self.history_view.table.columnCount(), 6)
-        self.assertEqual(self.history_view.table.horizontalHeaderItem(5).text(), "Actions")
+    def test_table_has_seven_columns_including_location_and_played_with(self):
+        self.assertEqual(self.history_view.table.columnCount(), 7)
+        self.assertEqual(self.history_view.table.horizontalHeaderItem(2).text(), "Session Name")
+        self.assertEqual(self.history_view.table.horizontalHeaderItem(3).text(), "Location")
+        self.assertEqual(self.history_view.table.horizontalHeaderItem(4).text(), "Played With")
+        self.assertEqual(self.history_view.table.horizontalHeaderItem(6).text(), "Actions")
         self.assertEqual(self.history_view.table.rowCount(), 2)
 
     def test_open_session_detail_and_back(self):

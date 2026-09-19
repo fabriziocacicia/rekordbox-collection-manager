@@ -107,25 +107,107 @@ class HistoryDetailView(QWidget):
         header_layout.setContentsMargins(14, 12, 14, 12)
         header_layout.setSpacing(10)
 
-        # Title Row
-        title_row = QHBoxLayout()
-        title_row.setSpacing(8)
+        # Title Card (Refined container surrounding History Name & metadata chips)
+        self.title_frame = QFrame()
+        self.title_frame.setObjectName("sessionTitleCard")
+        self.title_frame.setStyleSheet(
+            f"QFrame#sessionTitleCard {{ "
+            f"  background-color: {COLOR_BG_CARD}; "
+            f"  border: 1px solid {COLOR_BORDER}; "
+            f"  border-radius: 6px; "
+            f"}} "
+            f"QFrame#sessionTitleCard QLabel {{ "
+            f"  background: transparent; "
+            f"}}"
+        )
+        title_layout = QHBoxLayout(self.title_frame)
+        title_layout.setContentsMargins(12, 8, 12, 8)
+        title_layout.setSpacing(10)
+        title_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+
+        # Left: Session Icon & Parsed History/Date Name
+        session_icon = QLabel("🎧")
+        session_icon.setStyleSheet("font-size: 16px; background: transparent;")
+        title_layout.addWidget(session_icon)
 
         self.session_title_label = QLabel("Loading session...")
         self.session_title_label.setStyleSheet(
-            f"color: {COLOR_TEXT_PRIMARY}; font-size: 18px; font-weight: 700; letter-spacing: -0.2px;"
+            f"color: {COLOR_TEXT_PRIMARY}; font-size: 16px; font-weight: 700; letter-spacing: -0.2px; background: transparent;"
         )
-        title_row.addWidget(self.session_title_label, stretch=1)
+        title_layout.addWidget(self.session_title_label)
 
-        self.venue_badge = QLabel("")
-        self.venue_badge.setStyleSheet(
-            f"background-color: {COLOR_BG_CARD}; color: {COLOR_BLUE}; border: 1px solid {COLOR_BORDER_LIGHT}; "
-            f"border-radius: 12px; padding: 3px 10px; font-size: 11px; font-weight: 600;"
+        title_layout.addStretch(1)
+
+        # Right: Refined Location & Played With Chips
+        self.location_chip = QFrame()
+        self.location_chip.setObjectName("locChip")
+        self.location_chip.setStyleSheet(
+            f"QFrame#locChip {{ "
+            f"  background-color: {COLOR_BG_PANEL}; "
+            f"  border: 1px solid {COLOR_BORDER}; "
+            f"  border-radius: 6px; "
+            f"}} "
+            f"QFrame#locChip QLabel {{ "
+            f"  background: transparent; "
+            f"}}"
         )
-        self.venue_badge.setVisible(False)
-        title_row.addWidget(self.venue_badge)
+        loc_layout = QHBoxLayout(self.location_chip)
+        loc_layout.setContentsMargins(8, 4, 10, 4)
+        loc_layout.setSpacing(6)
 
-        header_layout.addLayout(title_row)
+        loc_icon = QLabel("📍")
+        loc_icon.setStyleSheet("font-size: 11px; background: transparent;")
+        loc_layout.addWidget(loc_icon)
+
+        loc_tag = QLabel("LOCATION")
+        loc_tag.setStyleSheet(
+            f"color: {COLOR_TEXT_MUTED}; font-size: 9px; font-weight: 700; letter-spacing: 0.5px; background: transparent;"
+        )
+        loc_layout.addWidget(loc_tag)
+
+        self.location_val_label = QLabel("")
+        self.location_val_label.setStyleSheet(
+            f"color: {COLOR_TEXT_PRIMARY}; font-size: 12px; font-weight: 600; background: transparent;"
+        )
+        loc_layout.addWidget(self.location_val_label)
+        self.location_chip.setVisible(False)
+        title_layout.addWidget(self.location_chip)
+
+        self.djs_chip = QFrame()
+        self.djs_chip.setObjectName("djsChip")
+        self.djs_chip.setStyleSheet(
+            f"QFrame#djsChip {{ "
+            f"  background-color: {COLOR_BG_PANEL}; "
+            f"  border: 1px solid {COLOR_BORDER}; "
+            f"  border-radius: 6px; "
+            f"}} "
+            f"QFrame#djsChip QLabel {{ "
+            f"  background: transparent; "
+            f"}}"
+        )
+        djs_layout = QHBoxLayout(self.djs_chip)
+        djs_layout.setContentsMargins(8, 4, 10, 4)
+        djs_layout.setSpacing(6)
+
+        djs_icon = QLabel("👥")
+        djs_icon.setStyleSheet("font-size: 11px; background: transparent;")
+        djs_layout.addWidget(djs_icon)
+
+        djs_tag = QLabel("PLAYED WITH")
+        djs_tag.setStyleSheet(
+            f"color: {COLOR_TEXT_MUTED}; font-size: 9px; font-weight: 700; letter-spacing: 0.5px; background: transparent;"
+        )
+        djs_layout.addWidget(djs_tag)
+
+        self.djs_val_label = QLabel("")
+        self.djs_val_label.setStyleSheet(
+            f"color: {COLOR_TEXT_PRIMARY}; font-size: 12px; font-weight: 600; background: transparent;"
+        )
+        djs_layout.addWidget(self.djs_val_label)
+        self.djs_chip.setVisible(False)
+        title_layout.addWidget(self.djs_chip)
+
+        header_layout.addWidget(self.title_frame)
 
         # KPI Metrics Cards Row
         kpi_row = QHBoxLayout()
@@ -135,14 +217,12 @@ class HistoryDetailView(QWidget):
         self.kpi_tracks = self._create_kpi_card("🎵 TOTAL TRACKS", "—")
         self.kpi_runtime = self._create_kpi_card("⏱️ TOTAL RUNTIME", "—")
         self.kpi_bpm = self._create_kpi_card("⚡ BPM PROFILE", "—")
-        self.kpi_folder = self._create_kpi_card("📁 FOLDER", "—")
         self.kpi_keys = self._create_kpi_card("🎹 TOP KEYS", "—")
 
         kpi_row.addWidget(self.kpi_date, stretch=1)
         kpi_row.addWidget(self.kpi_tracks, stretch=1)
         kpi_row.addWidget(self.kpi_runtime, stretch=1)
         kpi_row.addWidget(self.kpi_bpm, stretch=1)
-        kpi_row.addWidget(self.kpi_folder, stretch=1)
         kpi_row.addWidget(self.kpi_keys, stretch=1)
 
         header_layout.addLayout(kpi_row)
@@ -193,8 +273,15 @@ class HistoryDetailView(QWidget):
         """Create a styled compact metric KPI card widget."""
         card = QFrame()
         card.setStyleSheet(
-            f"background-color: {COLOR_BG_CARD}; border: 1px solid {COLOR_BORDER}; "
-            f"border-radius: 6px; padding: 6px 10px;"
+            f"QFrame {{ "
+            f"  background-color: {COLOR_BG_CARD}; "
+            f"  border: 1px solid {COLOR_BORDER}; "
+            f"  border-radius: 6px; "
+            f"  padding: 6px 10px; "
+            f"}} "
+            f"QFrame QLabel {{ "
+            f"  background: transparent; "
+            f"}}"
         )
         layout = QVBoxLayout(card)
         layout.setContentsMargins(4, 4, 4, 4)
@@ -202,14 +289,14 @@ class HistoryDetailView(QWidget):
 
         title_lbl = QLabel(title)
         title_lbl.setStyleSheet(
-            f"color: {COLOR_TEXT_MUTED}; font-size: 10px; font-weight: 700; letter-spacing: 0.5px;"
+            f"color: {COLOR_TEXT_MUTED}; font-size: 10px; font-weight: 700; letter-spacing: 0.5px; background: transparent;"
         )
         layout.addWidget(title_lbl)
 
         val_lbl = QLabel(initial_value)
         val_lbl.setObjectName("kpiValue")
         val_lbl.setStyleSheet(
-            f"color: {COLOR_TEXT_PRIMARY}; font-size: 14px; font-weight: 700;"
+            f"color: {COLOR_TEXT_PRIMARY}; font-size: 14px; font-weight: 700; background: transparent;"
         )
         layout.addWidget(val_lbl)
 
@@ -228,24 +315,25 @@ class HistoryDetailView(QWidget):
     ) -> None:
         """Load session details and tracklist asynchronously."""
         self.engine = engine
-        self.session_title_label.setText(session_title or f"History Session {history_id}")
+
+        base_name, location, artist = parse_history_name(session_title)
+        self.session_title_label.setText(base_name or f"History Session {history_id}")
         self.prev_btn.setEnabled(has_prev)
         self.next_btn.setEnabled(has_next)
         self.status_label.setText("Loading tracks from database...")
 
-        # Parse venue or notes from session name
-        base_name, location, artist = parse_history_name(session_title)
-        venue_parts = []
+        # Update Location & Played With (DJs) Chips
         if location:
-            venue_parts.append(f"📍 {location}")
-        if artist:
-            venue_parts.append(f"👥 w/ {artist}")
-
-        if venue_parts:
-            self.venue_badge.setText("  •  ".join(venue_parts))
-            self.venue_badge.setVisible(True)
+            self.location_val_label.setText(location)
+            self.location_chip.setVisible(True)
         else:
-            self.venue_badge.setVisible(False)
+            self.location_chip.setVisible(False)
+
+        if artist:
+            self.djs_val_label.setText(artist)
+            self.djs_chip.setVisible(True)
+        else:
+            self.djs_chip.setVisible(False)
 
         # Breadcrumb
         y, m = extract_year_month_from_name_or_date(session_title, session_date)
@@ -273,7 +361,21 @@ class HistoryDetailView(QWidget):
 
         s_name = session.get("name") or self.session_title_label.text()
         s_date = session.get("date") or "—"
-        self.session_title_label.setText(s_name)
+
+        base_name, location, artist = parse_history_name(s_name)
+        self.session_title_label.setText(base_name or s_name)
+
+        if location:
+            self.location_val_label.setText(location)
+            self.location_chip.setVisible(True)
+        else:
+            self.location_chip.setVisible(False)
+
+        if artist:
+            self.djs_val_label.setText(artist)
+            self.djs_chip.setVisible(True)
+        else:
+            self.djs_chip.setVisible(False)
 
         # Update KPI Cards
         self.kpi_date.val_lbl.setText(s_date[:19] if s_date else "—")  # type: ignore[attr-defined]
@@ -293,14 +395,6 @@ class HistoryDetailView(QWidget):
         else:
             bpm_str = "—"
         self.kpi_bpm.val_lbl.setText(bpm_str)  # type: ignore[attr-defined]
-
-        # Folder
-        y, m = extract_year_month_from_name_or_date(s_name, s_date)
-        if y and m:
-            folder_str = f"{y} > {m:02d} {MONTH_INT_TO_NAME.get(m, '')}"
-        else:
-            folder_str = "(Root)"
-        self.kpi_folder.val_lbl.setText(folder_str)  # type: ignore[attr-defined]
 
         # Top Keys
         top_keys = stats.get("top_keys", [])

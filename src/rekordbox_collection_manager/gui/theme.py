@@ -58,6 +58,11 @@ QMainWindow, QWidget {{
     font-size: 13px;
 }}
 
+/* Base Labels (transparent background by default so they inherit parent card backgrounds) */
+QLabel {{
+    background-color: transparent;
+}}
+
 /* Top Header & Toolbars */
 QFrame#headerFrame {{
     background-color: {COLOR_BG_PANEL};
