@@ -30,6 +30,7 @@ from rekordbox_collection_manager.gui.theme import (
     COLOR_TEXT_PRIMARY,
     COLOR_TEXT_SECONDARY,
 )
+from rekordbox_collection_manager.gui.track_detail_dialog import TrackDetailDialog
 from rekordbox_collection_manager.gui.track_table import (
     DEFAULT_HISTORY_COLUMNS,
     NumericTableWidgetItem,
@@ -51,10 +52,13 @@ class HistoryDetailView(QWidget):
     prev_session_requested = Signal()
     next_session_requested = Signal()
     notify_status = Signal(str)
+    open_history_session_requested = Signal(str)
+    track_detail_requested = Signal(dict, int)  # Emits (track_dict, track_index)
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.engine: Optional[Engine] = None
+        self.db_path: Optional[str] = None
         self.session_data: Dict[str, Any] = {}
         self.all_tracks: List[Dict[str, Any]] = []
         self.displayed_tracks: List[Dict[str, Any]] = []
@@ -262,6 +266,7 @@ class HistoryDetailView(QWidget):
         )
         self.table = TracksTableWidget(config=table_config, parent=self)
         self.table.status_message.connect(self._on_table_status_message)
+        self.table.track_detail_requested.connect(self._open_track_detail)
         main_layout.addWidget(self.table, stretch=1)
 
         # 5. Bottom Status Bar
@@ -312,9 +317,11 @@ class HistoryDetailView(QWidget):
         session_date: str = "",
         has_prev: bool = False,
         has_next: bool = False,
+        db_path: Optional[str] = None,
     ) -> None:
         """Load session details and tracklist asynchronously."""
         self.engine = engine
+        self.db_path = db_path
 
         base_name, location, artist = parse_history_name(session_title)
         self.session_title_label.setText(base_name or f"History Session {history_id}")
@@ -459,6 +466,26 @@ class HistoryDetailView(QWidget):
     def _on_back_clicked(self) -> None:
         self.back_clicked.emit()
 
+    def _open_track_detail(self, track: Dict[str, Any]) -> None:
+        """Request in-place track details view for a track in the history session."""
+        if not track:
+            return
+
+        track_id = track.get("id") or track.get("content_id")
+        curr_idx = 0
+        for idx, r in enumerate(self.displayed_tracks):
+            if (r.get("id") or r.get("content_id")) == track_id:
+                curr_idx = idx
+                break
+
+        self.track_detail_requested.emit(track, curr_idx)
+
+    def select_track_at_index(self, idx: int) -> None:
+        """Select and scroll to track in table when detail view navigates."""
+        if 0 <= idx < self.table.rowCount():
+            self.table.selectRow(idx)
+            self.table.scrollToItem(self.table.item(idx, 0))
+
     def keyPressEvent(self, event: QKeyEvent) -> None:
         """Handle Escape key to go back."""
         if event.key() == Qt.Key.Key_Escape:
@@ -466,3 +493,4 @@ class HistoryDetailView(QWidget):
             event.accept()
             return
         super().keyPressEvent(event)
+

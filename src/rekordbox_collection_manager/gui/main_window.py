@@ -324,10 +324,12 @@ class MainWindow(QMainWindow):
 
         self.tracks_view = TracksView(self)
         self.tracks_view.notify_status.connect(self._show_status_message)
+        self.tracks_view.open_history_session_requested.connect(self.open_history_session)
         self.stacked_widget.addWidget(self.tracks_view)
 
         self.play_count_view = PlayCountView(self)
         self.play_count_view.notify_status.connect(self._show_status_message)
+        self.play_count_view.open_history_session_requested.connect(self.open_history_session)
         self.stacked_widget.addWidget(self.play_count_view)
 
         self.info_view = InfoView(self)
@@ -342,7 +344,22 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage("Initializing Rekordbox Collection Manager...")
 
     def _on_nav_clicked(self, page_id: int) -> None:
+        curr = self.stacked_widget.currentIndex()
+        if page_id == curr:
+            if page_id == 0 and hasattr(self.history_view, "reset_to_list"):
+                self.history_view.reset_to_list()
+            elif page_id == 1 and hasattr(self.tracks_view, "reset_to_list"):
+                self.tracks_view.reset_to_list()
+            elif page_id == 2 and hasattr(self.play_count_view, "reset_to_list"):
+                self.play_count_view.reset_to_list()
         self.stacked_widget.setCurrentIndex(page_id)
+
+    def open_history_session(self, history_id: str) -> None:
+        """Switch navigation to History tab and open the requested history session."""
+        if self.nav_buttons and len(self.nav_buttons) > 0:
+            self.nav_buttons[0].setChecked(True)
+        self.stacked_widget.setCurrentIndex(0)
+        self.history_view.open_session_by_id(history_id)
 
     def toggle_sidebar(self) -> None:
         """Toggle sidebar between expanded and collapsed icon-only mode."""
@@ -490,9 +507,9 @@ class MainWindow(QMainWindow):
                 pass
 
         # Populate Views
-        self.history_view.set_data(engine, history_records)
-        self.tracks_view.set_engine(engine, total_tracks=total_tracks)
-        self.play_count_view.set_engine(engine)
+        self.history_view.set_data(engine, history_records, db_path=path)
+        self.tracks_view.set_engine(engine, total_tracks=total_tracks, db_path=path)
+        self.play_count_view.set_engine(engine, db_path=path)
 
         self.info_view.set_info({
             "Database File": path,

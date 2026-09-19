@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 from sqlalchemy.engine import Engine
 
 from rekordbox_collection_manager.gui.history_detail_view import HistoryDetailView
+from rekordbox_collection_manager.gui.track_detail_view import TrackDetailView
 from rekordbox_collection_manager.gui.theme import (
     COLOR_AMBER,
     COLOR_AMBER_BG,
@@ -60,6 +61,7 @@ class HistoryView(QWidget):
         self.search_filter_text: str = ""
         self.active_session_ids_in_table: List[str] = []
         self.current_detail_id: Optional[str] = None
+        self.db_path: Optional[str] = None
 
         self._init_ui()
 
@@ -194,11 +196,29 @@ class HistoryView(QWidget):
         self.detail_view.prev_session_requested.connect(self._on_prev_session)
         self.detail_view.next_session_requested.connect(self._on_next_session)
         self.detail_view.notify_status.connect(self.notify_status.emit)
+        self.detail_view.open_history_session_requested.connect(self._open_session_detail)
+        self.detail_view.track_detail_requested.connect(self._open_track_detail)
         self.stack.addWidget(self.detail_view)
 
-    def set_data(self, engine: Engine, records: List[Dict[str, Any]]) -> None:
+        # ----------------------------------------------------------------------
+        # Page 2: Track Details View Screen
+        # ----------------------------------------------------------------------
+        self.track_detail_view = TrackDetailView(parent=self, back_button_text="← Back to Session")
+        self.track_detail_view.back_clicked.connect(self._on_back_from_track_detail)
+        self.track_detail_view.open_history_session_requested.connect(self._open_session_detail)
+        self.track_detail_view.status_message.connect(self.notify_status.emit)
+        self.track_detail_view.track_changed.connect(self._on_track_detail_changed)
+        self.stack.addWidget(self.track_detail_view)
+
+    def set_data(
+        self,
+        engine: Engine,
+        records: List[Dict[str, Any]],
+        db_path: Optional[str] = None,
+    ) -> None:
         """Populate the view with records loaded from database."""
         self.engine = engine
+        self.db_path = db_path
         self.original_records = records
         self.staged_edits.clear()
         self._update_folder_tree()
@@ -391,18 +411,23 @@ class HistoryView(QWidget):
             if rec_id:
                 self._open_session_detail(rec_id)
 
+    def open_session_by_id(self, rec_id: str) -> None:
+        """Public method to navigate directly to a history session by ID."""
+        self._open_session_detail(rec_id)
+
     def _open_session_detail(self, rec_id: str) -> None:
         """Open the HistoryDetailView for a given session ID."""
         if not self.engine:
             return
         self.current_detail_id = rec_id
-        record = next((r for r in self.original_records if r["id"] == rec_id), None)
+        record = next((r for r in self.original_records if str(r["id"]) == str(rec_id)), None)
         if not record:
-            return
-
-        is_staged = rec_id in self.staged_edits
-        name = self.staged_edits[rec_id]["name"] if is_staged else record.get("name", "")
-        date = self.staged_edits[rec_id]["date"] if is_staged else record.get("date", "")
+            name = f"History Session {rec_id}"
+            date = ""
+        else:
+            is_staged = rec_id in self.staged_edits
+            name = self.staged_edits[rec_id]["name"] if is_staged else record.get("name", "")
+            date = self.staged_edits[rec_id]["date"] if is_staged else record.get("date", "")
 
         has_prev = False
         has_next = False
@@ -418,6 +443,7 @@ class HistoryView(QWidget):
             session_date=date,
             has_prev=has_prev,
             has_next=has_next,
+            db_path=getattr(self, "db_path", None),
         )
         self.stack.setCurrentIndex(1)
 
@@ -425,6 +451,38 @@ class HistoryView(QWidget):
         """Return from detail view to main sessions list."""
         self.stack.setCurrentIndex(0)
         self.current_detail_id = None
+
+    def _open_track_detail(self, track: Dict[str, Any], track_idx: int) -> None:
+        """Open TrackDetailView for a track within the active history session."""
+        if not self.engine or not track:
+            return
+        session_name = self.detail_view.session_data.get("name") or "Session"
+        btn_label = (
+            f"← Back to {session_name[:24]}..."
+            if len(session_name) > 24
+            else f"← Back to {session_name}"
+        )
+        self.track_detail_view.load_track(
+            engine=self.engine,
+            track_data=track,
+            db_path=self.db_path,
+            tracks_list=self.detail_view.displayed_tracks,
+            current_index=track_idx,
+            back_button_text=btn_label,
+        )
+        self.stack.setCurrentIndex(2)
+
+    def _on_back_from_track_detail(self) -> None:
+        """Return from track details view to active history session view."""
+        self.stack.setCurrentIndex(1)
+
+    def _on_track_detail_changed(self, idx: int, track: Dict[str, Any]) -> None:
+        """Select track in history detail view table when navigating in track detail view."""
+        self.detail_view.select_track_at_index(idx)
+
+    def reset_to_list(self) -> None:
+        """Reset view to history sessions list."""
+        self.stack.setCurrentIndex(0)
 
     def _on_prev_session(self) -> None:
         """Navigate to previous session in current list."""

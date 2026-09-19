@@ -717,4 +717,47 @@ def resolve_file_and_folder_paths(
     return ("—", "", fn or "—", fn or "")
 
 
+def resolve_artwork_path(
+    image_path: Optional[str],
+    db_path: Optional[str] = None,
+) -> Optional[str]:
+    """Resolve Rekordbox internal artwork path to absolute path on disk.
 
+    Rekordbox stores artwork references like '/PIONEER/Artwork/9e9/1e.../artwork.jpg'.
+    On macOS / Pioneer installations, artwork lives under the 'share' directory
+    next to master.db (e.g. ~/Library/Pioneer/rekordbox/share/PIONEER/Artwork/...)
+    or relative to exportLibrary.db on USB drives.
+    """
+    if not image_path:
+        return None
+
+    if os.path.isabs(image_path) and os.path.exists(image_path):
+        return image_path
+
+    clean_rel = image_path.lstrip("/\\")
+    candidates = []
+
+    if db_path:
+        db_dir = os.path.dirname(db_path)
+        candidates.append(os.path.join(db_dir, "share", clean_rel))
+        candidates.append(os.path.join(db_dir, clean_rel))
+        volume_root = db_dir
+        for _ in range(4):
+            volume_pioneer = os.path.join(volume_root, "PIONEER")
+            if os.path.exists(volume_pioneer):
+                candidates.append(os.path.join(volume_root, clean_rel))
+                break
+            parent = os.path.dirname(volume_root)
+            if parent == volume_root:
+                break
+            volume_root = parent
+
+    home_pioneer = os.path.expanduser("~/Library/Pioneer/rekordbox")
+    candidates.append(os.path.join(home_pioneer, "share", clean_rel))
+    candidates.append(os.path.join(home_pioneer, clean_rel))
+
+    for c in candidates:
+        if os.path.exists(c):
+            return c
+
+    return None

@@ -399,6 +399,7 @@ class TracksTableWidget(QTableWidget):
     file_clicked = Signal(str)
     sort_requested = Signal(str, Qt.SortOrder)
     status_message = Signal(str)
+    track_detail_requested = Signal(dict)
 
     def __init__(
         self,
@@ -457,6 +458,8 @@ class TracksTableWidget(QTableWidget):
         if self.config.enable_context_menu:
             self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
             self.customContextMenuRequested.connect(self._on_table_context_menu)
+
+        self.cellDoubleClicked.connect(self._on_cell_double_clicked)
 
         # Delegate singletons
         file_type_delegate = FileTypeBadgeDelegate(parent=self)
@@ -864,6 +867,11 @@ class TracksTableWidget(QTableWidget):
                 msg = f"❌ File not found on disk: {file_path}"
         self.status_message.emit(msg)
 
+    def _on_cell_double_clicked(self, row: int, column: int) -> None:
+        """Double clicking a track row emits track_detail_requested with track record."""
+        if 0 <= row < len(self.records):
+            self.track_detail_requested.emit(self.records[row])
+
     def _on_table_context_menu(self, pos: QPoint) -> None:
         """Right-click menu on track rows."""
         item = self.itemAt(pos)
@@ -880,6 +888,8 @@ class TracksTableWidget(QTableWidget):
         artist = track.get("artist") or ""
 
         menu = QMenu(self)
+        act_details = menu.addAction("ℹ️ View Track Details...")
+        menu.addSeparator()
         act_open_folder = menu.addAction("📁 Open Containing Folder")
         act_reveal_file = menu.addAction("🔍 Reveal in Finder")
         menu.addSeparator()
@@ -888,7 +898,9 @@ class TracksTableWidget(QTableWidget):
         act_copy_track = menu.addAction("📋 Copy Track (Artist - Title)")
 
         action = menu.exec(self.viewport().mapToGlobal(pos))
-        if action == act_open_folder:
+        if action == act_details:
+            self.track_detail_requested.emit(track)
+        elif action == act_open_folder:
             self.open_folder(folder_dir)
         elif action == act_reveal_file:
             self.reveal_file(file_path)

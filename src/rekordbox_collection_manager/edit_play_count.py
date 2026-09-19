@@ -17,6 +17,7 @@ from rekordbox_collection_manager.utils import (
     get_rekordbox_timestamp,
     is_rekordbox_running,
     open_database,
+    resolve_artwork_path,
     resolve_db_path,
     resolve_file_and_folder_paths,
     resolve_file_type,
@@ -69,12 +70,13 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
 
 def search_tracks(
     engine: Engine,
-    query: str,
+    query: str = "",
     limit: Optional[int] = 50,
     table_name: Optional[str] = None,
     sort_by: str = "title",
     sort_order: str = "asc",
     play_count_filter: Optional[str] = "all",
+    content_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Search for tracks matching query string with rich metadata support.
 
@@ -174,6 +176,12 @@ def search_tracks(
             comment_expr = "c.Commnt" if "Commnt" in cols else "'' AS Commnt"
             folder_expr = "c.FolderPath" if "FolderPath" in cols else "'' AS FolderPath"
             filename_expr = "c.FileNameL" if "FileNameL" in cols else "'' AS FileNameL"
+            image_path_expr = "c.ImagePath" if "ImagePath" in cols else "NULL AS ImagePath"
+            stock_date_expr = "c.StockDate" if "StockDate" in cols else ("c.DateCreated" if "DateCreated" in cols else "NULL AS StockDate")
+            sample_rate_expr = "c.SampleRate" if "SampleRate" in cols else "0 AS SampleRate"
+            bit_depth_expr = "c.BitDepth" if "BitDepth" in cols else "0 AS BitDepth"
+            file_size_expr = "c.FileSize" if "FileSize" in cols else "0 AS FileSize"
+            color_expr = "c.ColorID" if "ColorID" in cols else "NULL AS ColorID"
 
             # Deleted filter
             deleted_filter = "AND (c.rb_local_deleted = 0 OR c.rb_local_deleted IS NULL)" if "rb_local_deleted" in cols else ""
@@ -187,7 +195,9 @@ def search_tracks(
 
             # Search condition
             search_condition = ""
-            if query_str:
+            if content_id is not None:
+                search_condition = "AND c.ID = :content_id"
+            elif query_str:
                 search_parts = ["c.Title LIKE :pattern"]
                 if "SearchStr" in cols:
                     search_parts.append("c.SearchStr LIKE :pattern")
@@ -280,7 +290,13 @@ def search_tracks(
                     {folder_expr},
                     {filename_expr},
                     {tag_expr},
-                    {playlist_expr}
+                    {playlist_expr},
+                    {image_path_expr},
+                    {stock_date_expr},
+                    {sample_rate_expr},
+                    {bit_depth_expr},
+                    {file_size_expr},
+                    {color_expr}
                 FROM djmdContent c
                 {join_clause}
                 WHERE 1=1 {deleted_filter} {play_filter} {search_condition}
@@ -292,6 +308,8 @@ def search_tracks(
                 "exact": query_str,
                 "starts_with": starts_with,
             }
+            if content_id is not None:
+                params["content_id"] = str(content_id)
             if limit and limit > 0:
                 params["limit"] = limit
 
@@ -354,6 +372,12 @@ def search_tracks(
                     "comment": r.get("Commnt") or "",
                     "folder_path": raw_fp,
                     "filename": raw_fn,
+                    "image_path": r.get("ImagePath") or "",
+                    "date_added": str(r.get("StockDate") or "")[:10],
+                    "sample_rate": int(r.get("SampleRate") or 0),
+                    "bit_depth": int(r.get("BitDepth") or 0),
+                    "file_size": int(r.get("FileSize") or 0),
+                    "color_id": str(r.get("ColorID") or ""),
                     "table": "djmdContent",
                 })
 
@@ -377,16 +401,23 @@ def search_tracks(
 
             limit_clause = "LIMIT :limit" if (limit and limit > 0) else ""
 
+            if content_id is not None:
+                where_clause = "WHERE ID = :content_id"
+                params = {"content_id": str(content_id)}
+            else:
+                where_clause = f"WHERE Title LIKE :pattern {play_filter}"
+                params = {"pattern": pattern}
+
+            if limit and limit > 0:
+                params["limit"] = limit
+
             sql = f"""
                 SELECT ID, Title, {count_expr} AS DJPlayCount
                 FROM {table_name}
-                WHERE Title LIKE :pattern {play_filter}
+                {where_clause}
                 ORDER BY {fallback_order}
                 {limit_clause};
             """
-            params = {"pattern": pattern}
-            if limit and limit > 0:
-                params["limit"] = limit
 
             rows = conn.execute(text(sql), params).mappings().fetchall()
             for r in rows:
@@ -422,10 +453,74 @@ def search_tracks(
                     "comment": "",
                     "folder_path": "",
                     "filename": "",
+                    "image_path": "",
+                    "date_added": "",
+                    "sample_rate": 0,
+                    "bit_depth": 0,
+                    "file_size": 0,
+                    "color_id": "",
                     "table": table_name,
                 })
 
     return records
+
+
+def fetch_track_full_details(
+    engine: Engine,
+    content_id: str,
+    db_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Fetch complete metadata and history session plays for a specific track.
+
+    Returns a rich dictionary containing all track attributes (title, artist,
+    album, key, bpm, audio specs, artwork path on disk, file location, tags, playlists)
+    plus a 'history_plays' list of every history session where the track was dropped.
+    """
+    from rekordbox_collection_manager.rename_history import fetch_track_history_plays
+
+    results = search_tracks(engine, query="", content_id=content_id, limit=1)
+    if results:
+        track = dict(results[0])
+    else:
+        track = {
+            "id": str(content_id),
+            "content_id": str(content_id),
+            "title": "(Track Not Found)",
+            "artist": "Unknown Artist",
+            "album": "",
+            "genre": "",
+            "key": "",
+            "bpm": 0.0,
+            "duration_sec": 0,
+            "duration_str": "--:--",
+            "play_count": 0,
+            "rating": 0,
+            "year": 0,
+            "bitrate": 0,
+            "file_type": "—",
+            "tags": [],
+            "playlists": [],
+            "folder_name": "—",
+            "folder_dir": "",
+            "file_name": "—",
+            "file_path": "",
+            "location_display": "—",
+            "comment": "",
+            "folder_path": "",
+            "filename": "",
+            "image_path": "",
+            "date_added": "",
+            "sample_rate": 0,
+            "bit_depth": 0,
+            "file_size": 0,
+            "color_id": "",
+            "table": "djmdContent",
+        }
+
+    raw_img = track.get("image_path")
+    track["artwork_path"] = resolve_artwork_path(raw_img, db_path=db_path)
+    track["history_plays"] = fetch_track_history_plays(engine, str(content_id))
+    return track
 
 
 def update_track_play_count(

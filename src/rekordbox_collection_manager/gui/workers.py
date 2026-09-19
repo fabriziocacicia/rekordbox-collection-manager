@@ -7,6 +7,7 @@ from sqlalchemy.engine import Engine
 
 from rekordbox_collection_manager.edit_play_count import (
     batch_update_track_play_counts,
+    fetch_track_full_details,
     search_tracks,
     set_track_play_count,
     update_track_play_count,
@@ -228,3 +229,34 @@ class HistorySessionDetailWorker(QThread):
             self.success.emit(data)
         except Exception as e:
             self.error.emit(str(e))
+
+
+class TrackDetailWorker(QThread):
+    """Worker to fetch full track metadata and history plays without blocking the UI."""
+
+    success = Signal(dict)  # full track details & history plays
+    error = Signal(str)
+
+    def __init__(
+        self,
+        engine: Engine,
+        content_id: str,
+        db_path: Optional[str] = None,
+        parent: Optional[Any] = None,
+    ):
+        super().__init__(parent)
+        self.engine = engine
+        self.content_id = content_id
+        self.db_path = db_path
+
+    def run(self) -> None:
+        try:
+            data = fetch_track_full_details(
+                self.engine,
+                self.content_id,
+                db_path=self.db_path,
+            )
+            self.success.emit(data)
+        except Exception as e:
+            self.error.emit(str(e))
+

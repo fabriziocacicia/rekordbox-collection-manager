@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -25,6 +26,7 @@ from rekordbox_collection_manager.gui.theme import (
     COLOR_TEXT_MUTED,
     COLOR_TEXT_SECONDARY,
 )
+from rekordbox_collection_manager.gui.track_detail_view import TrackDetailView
 from rekordbox_collection_manager.gui.track_table import (
     DEFAULT_COLLECTION_COLUMNS,
     TrackTableConfig,
@@ -38,10 +40,12 @@ class TracksView(QWidget):
     """View to search, filter, and inspect collection tracks in rich read-only format."""
 
     notify_status = Signal(str)
+    open_history_session_requested = Signal(str)
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.engine: Optional[Engine] = None
+        self.db_path: Optional[str] = None
         self.total_collection_tracks: int = 0
         self.records: List[Dict[str, Any]] = []
         self.active_search_worker: Optional[TrackSearchWorker] = None
@@ -57,7 +61,18 @@ class TracksView(QWidget):
         self._init_ui()
 
     def _init_ui(self) -> None:
-        main_layout = QVBoxLayout(self)
+        root_layout = QVBoxLayout(self)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
+
+        self.stack = QStackedWidget(self)
+        root_layout.addWidget(self.stack)
+
+        # ----------------------------------------------------------------------
+        # Page 0: Tracks Collection List View
+        # ----------------------------------------------------------------------
+        self.list_widget = QWidget()
+        main_layout = QVBoxLayout(self.list_widget)
         main_layout.setContentsMargins(16, 16, 16, 16)
         main_layout.setSpacing(12)
 
@@ -100,6 +115,11 @@ class TracksView(QWidget):
         self.search_btn.clicked.connect(self._execute_search)
         toolbar.addWidget(self.search_btn)
 
+        self.detail_btn = QPushButton("ℹ️ Details")
+        self.detail_btn.setToolTip("View full metadata and history sessions for selected track (or double-click row)")
+        self.detail_btn.clicked.connect(self._on_open_selected_track_detail)
+        toolbar.addWidget(self.detail_btn)
+
         self.copy_btn = QPushButton("📋 Copy Tracklist")
         self.copy_btn.setToolTip("Copy formatted tracklist to clipboard (e.g. 01. Artist - Title)")
         self.copy_btn.clicked.connect(self._on_copy_tracklist)
@@ -121,16 +141,35 @@ class TracksView(QWidget):
         self.table.status_message.connect(self._on_table_status_message)
         self.table.folder_clicked.connect(self._on_open_folder)
         self.table.file_clicked.connect(self._on_reveal_file)
+        self.table.track_detail_requested.connect(self._open_track_detail)
         main_layout.addWidget(self.table, stretch=1)
 
         # 3. Bottom Status Bar
         self.status_label = QLabel("0 tracks")
         self.status_label.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY}; font-size: 11px;")
         main_layout.addWidget(self.status_label)
+        self.stack.addWidget(self.list_widget)
 
-    def set_engine(self, engine: Engine, total_tracks: int = 0) -> None:
+        # ----------------------------------------------------------------------
+        # Page 1: Track Details View Screen
+        # ----------------------------------------------------------------------
+        self.detail_view = TrackDetailView(parent=self, back_button_text="← Back to Tracks")
+        self.detail_view.back_clicked.connect(self._on_back_from_detail)
+        self.detail_view.open_history_session_requested.connect(self.open_history_session_requested.emit)
+        self.detail_view.status_message.connect(self._on_table_status_message)
+        self.detail_view.track_changed.connect(self._on_detail_track_changed)
+        self.stack.addWidget(self.detail_view)
+
+    def reset_to_list(self) -> None:
+        """Reset view to collection tracks table list."""
+        self.stack.setCurrentIndex(0)
+
+    def set_engine(
+        self, engine: Engine, total_tracks: int = 0, db_path: Optional[str] = None
+    ) -> None:
         """Assign active database engine and initiate initial track search."""
         self.engine = engine
+        self.db_path = db_path
         self.total_collection_tracks = total_tracks
         self._execute_search()
 
@@ -259,3 +298,48 @@ class TracksView(QWidget):
     def _on_copy_tracklist(self) -> None:
         """Copy formatted tracklist to system clipboard."""
         self.table.copy_tracklist_to_clipboard(self.records)
+
+    def _open_track_detail(self, track: Dict[str, Any]) -> None:
+        """Switch to in-place TrackDetailView for the given track."""
+        if not self.engine or not track:
+            return
+
+        track_id = track.get("id") or track.get("content_id")
+        curr_idx = 0
+        for idx, r in enumerate(self.records):
+            if (r.get("id") or r.get("content_id")) == track_id:
+                curr_idx = idx
+                break
+
+        self.detail_view.load_track(
+            engine=self.engine,
+            track_data=track,
+            db_path=self.db_path,
+            tracks_list=self.records,
+            current_index=curr_idx,
+            back_button_text="← Back to Tracks",
+        )
+        self.stack.setCurrentIndex(1)
+
+    def _on_back_from_detail(self) -> None:
+        """Return to tracks collection list view."""
+        self.stack.setCurrentIndex(0)
+
+    def _on_detail_track_changed(self, idx: int, track: Dict[str, Any]) -> None:
+        """Select and scroll to track in table when detail view navigates."""
+        if 0 <= idx < self.table.rowCount():
+            self.table.selectRow(idx)
+            self.table.scrollToItem(self.table.item(idx, 0))
+
+    def _on_open_selected_track_detail(self) -> None:
+        """Open details for currently selected table row."""
+        selected = self.table.selectedItems()
+        if not selected:
+            msg = "⚠️ Select a track in the table to view details."
+            self.status_label.setText(msg)
+            self.notify_status.emit(msg)
+            return
+        row = selected[0].row()
+        if 0 <= row < len(self.records):
+            self._open_track_detail(self.records[row])
+

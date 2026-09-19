@@ -542,6 +542,132 @@ def fetch_session_tracks(engine: Engine, history_id: str) -> Dict[str, Any]:
     }
 
 
+def fetch_track_history_plays(engine: Engine, content_id: str) -> List[Dict[str, Any]]:
+    """Fetch all history sessions in which a specific track was played.
+
+    Queries djmdSongHistory joined with djmdHistory (or generic history table),
+    returning chronological records with track set order (TrackNo), playback timestamp,
+    session name, parsed date, location (@ Location), and co-DJs (w Artists).
+    """
+    history_plays: List[Dict[str, Any]] = []
+    if not engine or not content_id:
+        return history_plays
+
+    with engine.connect() as conn:
+        tables_res = conn.exec_driver_sql(
+            "SELECT name FROM sqlite_master WHERE type='table';"
+        ).fetchall()
+        existing_tables = {r[0] for r in tables_res}
+
+        if "djmdSongHistory" in existing_tables and "djmdHistory" in existing_tables:
+            sh_cols = {
+                r[1]
+                for r in conn.exec_driver_sql("PRAGMA table_info(djmdSongHistory);").fetchall()
+            }
+            h_cols = {
+                r[1]
+                for r in conn.exec_driver_sql("PRAGMA table_info(djmdHistory);").fetchall()
+            }
+
+            sh_del = (
+                "AND (sh.rb_local_deleted = 0 OR sh.rb_local_deleted IS NULL)"
+                if "rb_local_deleted" in sh_cols
+                else ""
+            )
+            h_del = (
+                "AND (h.rb_local_deleted = 0 OR h.rb_local_deleted IS NULL)"
+                if "rb_local_deleted" in h_cols
+                else ""
+            )
+
+            query = f"""
+                SELECT 
+                    sh.ID AS song_history_id,
+                    sh.HistoryID AS history_id,
+                    sh.TrackNo AS track_no,
+                    sh.created_at AS played_at,
+                    h.Name AS history_name,
+                    h.DateCreated AS session_date,
+                    h.ParentID AS parent_id
+                FROM djmdSongHistory sh
+                LEFT JOIN djmdHistory h ON sh.HistoryID = h.ID
+                WHERE sh.ContentID = :content_id
+                  {sh_del}
+                  {h_del}
+                ORDER BY COALESCE(h.DateCreated, sh.created_at) DESC, sh.created_at DESC;
+            """
+            rows = (
+                conn.execute(text(query), {"content_id": str(content_id)})
+                .mappings()
+                .fetchall()
+            )
+            for r in rows:
+                raw_name = r.get("history_name") or "(Untitled Session)"
+                session_title, location, played_with = parse_history_name(raw_name)
+                session_date = r.get("session_date") or ""
+                played_at = str(r.get("played_at") or "")
+
+                time_display = ""
+                if played_at:
+                    parts = played_at.split()
+                    if len(parts) >= 2:
+                        time_display = parts[1].split(".")[0]
+                    else:
+                        time_display = played_at
+
+                history_plays.append({
+                    "song_history_id": str(r.get("song_history_id") or ""),
+                    "history_id": str(r.get("history_id") or ""),
+                    "track_no": int(r.get("track_no") or 0),
+                    "played_at": played_at,
+                    "played_time": time_display,
+                    "history_name": raw_name,
+                    "session_title": session_title,
+                    "session_date": session_date,
+                    "location": location,
+                    "played_with": played_with,
+                    "parent_id": (
+                        str(r.get("parent_id") or "")
+                        if r.get("parent_id") is not None
+                        else None
+                    ),
+                })
+        elif "history_songs" in existing_tables and "history" in existing_tables:
+            try:
+                query = """
+                    SELECT hs.history_id, hs.track_no, h.name, h.date
+                    FROM history_songs hs
+                    JOIN history h ON hs.history_id = h.history_id
+                    WHERE hs.content_id = :content_id
+                    ORDER BY h.date DESC;
+                """
+                rows = (
+                    conn.execute(text(query), {"content_id": str(content_id)})
+                    .mappings()
+                    .fetchall()
+                )
+                for r in rows:
+                    raw_name = r.get("name") or "(Untitled Session)"
+                    session_title, location, played_with = parse_history_name(raw_name)
+                    history_plays.append({
+                        "song_history_id": "",
+                        "history_id": str(r.get("history_id") or ""),
+                        "track_no": int(r.get("track_no") or 0),
+                        "played_at": str(r.get("date") or ""),
+                        "played_time": "",
+                        "history_name": raw_name,
+                        "session_title": session_title,
+                        "session_date": str(r.get("date") or ""),
+                        "location": location,
+                        "played_with": played_with,
+                        "parent_id": None,
+                    })
+            except Exception:
+                pass
+
+    return history_plays
+
+
 def update_history_record(
     engine: Engine,
     record: Dict[str, Any],

@@ -1,17 +1,21 @@
 """Track Play Count Manager Screen."""
 
+import os
 from typing import Any, Dict, List, Optional
-from PySide6.QtCore import QEvent, QTimer, Qt, Signal
+from PySide6.QtCore import QEvent, QPoint, QTimer, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QFont, QKeyEvent
 from PySide6.QtWidgets import (
+    QApplication,
     QComboBox,
     QDialog,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QLineEdit,
+    QMenu,
     QMessageBox,
     QPushButton,
+    QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -28,11 +32,16 @@ from rekordbox_collection_manager.gui.theme import (
     COLOR_TEXT_PRIMARY,
     COLOR_TEXT_SECONDARY,
 )
+from rekordbox_collection_manager.gui.track_detail_view import TrackDetailView
 from rekordbox_collection_manager.gui.workers import (
     PlayCountBatchSaveWorker,
     TrackSearchWorker,
 )
-from rekordbox_collection_manager.utils import is_rekordbox_running
+from rekordbox_collection_manager.utils import (
+    is_rekordbox_running,
+    open_in_folder,
+    reveal_in_file_manager,
+)
 
 COLOR_STAGED_ROW_BG = QColor(245, 158, 11, 30)
 
@@ -88,10 +97,12 @@ class PlayCountView(QWidget):
     """View to filter, search, and edit track play counts interactively with staged edits."""
 
     notify_status = Signal(str)
+    open_history_session_requested = Signal(str)
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.engine: Optional[Engine] = None
+        self.db_path: Optional[str] = None
         self.records: List[Dict[str, Any]] = []
         self.staged_edits: Dict[str, Dict[str, Any]] = {}
         self.active_search_worker: Optional[TrackSearchWorker] = None
@@ -107,7 +118,18 @@ class PlayCountView(QWidget):
         self._init_ui()
 
     def _init_ui(self) -> None:
-        main_layout = QVBoxLayout(self)
+        root_layout = QVBoxLayout(self)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
+
+        self.stack = QStackedWidget(self)
+        root_layout.addWidget(self.stack)
+
+        # ----------------------------------------------------------------------
+        # Page 0: Play Count Adjuster List View
+        # ----------------------------------------------------------------------
+        self.list_widget = QWidget()
+        main_layout = QVBoxLayout(self.list_widget)
         main_layout.setContentsMargins(16, 16, 16, 16)
         main_layout.setSpacing(12)
 
@@ -189,6 +211,9 @@ class PlayCountView(QWidget):
 
         self.table.shortcut_delta.connect(self._on_keyboard_shortcut)
         self.table.itemSelectionChanged.connect(self._on_selection_changed)
+        self.table.cellDoubleClicked.connect(self._on_cell_double_clicked)
+        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._on_table_context_menu)
 
         main_layout.addWidget(self.table, stretch=1)
 
@@ -226,10 +251,26 @@ class PlayCountView(QWidget):
         bottom_bar.addWidget(self.save_btn)
 
         main_layout.addLayout(bottom_bar)
+        self.stack.addWidget(self.list_widget)
 
-    def set_engine(self, engine: Engine) -> None:
+        # ----------------------------------------------------------------------
+        # Page 1: Track Details View Screen
+        # ----------------------------------------------------------------------
+        self.track_detail_view = TrackDetailView(parent=self, back_button_text="← Back to Play Counts")
+        self.track_detail_view.back_clicked.connect(self._on_back_from_detail)
+        self.track_detail_view.open_history_session_requested.connect(self.open_history_session_requested.emit)
+        self.track_detail_view.status_message.connect(self.notify_status.emit)
+        self.track_detail_view.track_changed.connect(self._on_detail_track_changed)
+        self.stack.addWidget(self.track_detail_view)
+
+    def reset_to_list(self) -> None:
+        """Reset view to play count adjuster table list."""
+        self.stack.setCurrentIndex(0)
+
+    def set_engine(self, engine: Engine, db_path: Optional[str] = None) -> None:
         """Assign active database engine and trigger initial track load."""
         self.engine = engine
+        self.db_path = db_path
         self.staged_edits.clear()
         self._execute_search()
 
@@ -655,4 +696,80 @@ class PlayCountView(QWidget):
         reverse = (self.current_sort_order == Qt.SortOrder.DescendingOrder)
         self.records.sort(key=self._record_sort_key, reverse=reverse)
         self._populate_table()
+
+    def _on_cell_double_clicked(self, row: int, col: int) -> None:
+        """Double clicking non-editable columns opens TrackDetailDialog."""
+        if col != 3 and 0 <= row < len(self.records):
+            self._open_track_detail(self.records[row])
+
+    def _open_track_detail(self, track: Dict[str, Any]) -> None:
+        """Switch to in-place TrackDetailView for track."""
+        if not self.engine or not track:
+            return
+
+        track_id = track.get("id") or track.get("content_id")
+        curr_idx = 0
+        for idx, r in enumerate(self.records):
+            if (r.get("id") or r.get("content_id")) == track_id:
+                curr_idx = idx
+                break
+
+        self.track_detail_view.load_track(
+            engine=self.engine,
+            track_data=track,
+            db_path=self.db_path,
+            tracks_list=self.records,
+            current_index=curr_idx,
+            back_button_text="← Back to Play Counts",
+        )
+        self.stack.setCurrentIndex(1)
+
+    def _on_back_from_detail(self) -> None:
+        """Return to play count editor table view."""
+        self.stack.setCurrentIndex(0)
+
+    def _on_detail_track_changed(self, idx: int, track: Dict[str, Any]) -> None:
+        """Select and scroll to track in table when detail view navigates."""
+        if 0 <= idx < self.table.rowCount():
+            self.table.selectRow(idx)
+            self.table.scrollToItem(self.table.item(idx, 0))
+
+    def _on_table_context_menu(self, pos: QPoint) -> None:
+        item = self.table.itemAt(pos)
+        if not item:
+            return
+        row = item.row()
+        if row < 0 or row >= len(self.records):
+            return
+        track = self.records[row]
+        menu = QMenu(self)
+        act_details = menu.addAction("ℹ️ View Track Details...")
+        menu.addSeparator()
+        act_copy_track = menu.addAction("📋 Copy Track (Artist - Title)")
+        act_open_folder = menu.addAction("📁 Open Containing Folder")
+        act_reveal_file = menu.addAction("🔍 Reveal in Finder")
+
+        action = menu.exec(self.table.viewport().mapToGlobal(pos))
+        if action == act_details:
+            self._open_track_detail(track)
+        elif action == act_copy_track:
+            artist = track.get("artist") or "Unknown Artist"
+            title = track.get("title") or ""
+            cb = QApplication.clipboard()
+            if cb:
+                cb.setText(f"{artist} - {title}")
+                self.notify_status.emit(f"📋 Copied '{artist} - {title}' to clipboard!")
+        elif action == act_open_folder:
+            folder = track.get("folder_dir") or track.get("folder_path") or ""
+            if folder and open_in_folder(folder):
+                self.notify_status.emit(f"📂 Opened folder: {os.path.basename(folder) or folder}")
+            else:
+                self.notify_status.emit(f"❌ Folder not found: {folder}")
+        elif action == act_reveal_file:
+            fp = track.get("file_path") or track.get("filename") or ""
+            if fp and reveal_in_file_manager(fp):
+                self.notify_status.emit(f"🔍 Revealed in Finder: {os.path.basename(fp)}")
+            else:
+                self.notify_status.emit(f"❌ File not found: {fp}")
+
 
