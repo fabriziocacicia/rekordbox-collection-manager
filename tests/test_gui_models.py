@@ -667,9 +667,13 @@ class TestTracksView(unittest.TestCase):
                 "rating": 5,
                 "year": 2011,
                 "bitrate": 320,
+                "file_type": "MP3",
+                "tags": ["Electro", "Club"],
+                "playlists": ["Mainstage - BP", "Festival"],
                 "comment": "Club hit",
                 "folder_path": "/Music/Titanium.mp3",
                 "filename": "Titanium.mp3",
+                "location_display": "Music/Titanium.mp3",
             },
             {
                 "id": "2",
@@ -686,29 +690,39 @@ class TestTracksView(unittest.TestCase):
                 "rating": 4,
                 "year": 2001,
                 "bitrate": 320,
+                "file_type": "AIFF",
+                "tags": ["French Touch"],
+                "playlists": [],
                 "comment": "",
-                "folder_path": "/Music/OneMoreTime.mp3",
-                "filename": "OneMoreTime.mp3",
+                "folder_path": "/Music/OneMoreTime.aiff",
+                "filename": "OneMoreTime.aiff",
+                "location_display": "Music/OneMoreTime.aiff",
             },
         ]
 
     def test_tracks_view_initial_ui(self):
         self.assertEqual(self.view.tracks_header_label.text(), "TRACKS")
-        self.assertEqual(self.view.table.columnCount(), 10)
+        self.assertEqual(self.view.table.columnCount(), 12)
         expected_headers = [
             "#",
             "Title",
             "Artist",
-            "Album",
             "Key",
             "BPM",
             "Time",
             "Plays",
             "Bitrate",
+            "Type",
+            "Tags",
+            "Playlists",
             "Location",
         ]
         for idx, text in enumerate(expected_headers):
             self.assertEqual(self.view.table.horizontalHeaderItem(idx).text(), text)
+
+        self.assertIsNotNone(self.view.table.itemDelegateForColumn(8))
+        self.assertIsNotNone(self.view.table.itemDelegateForColumn(9))
+        self.assertIsNotNone(self.view.table.itemDelegateForColumn(10))
 
         self.assertEqual(self.view.filter_combo.count(), 3)
         self.assertEqual(self.view.filter_combo.itemText(0), "All Tracks")
@@ -726,16 +740,20 @@ class TestTracksView(unittest.TestCase):
         self.assertEqual(self.view.table.item(0, 0).text(), "1")
         self.assertEqual(self.view.table.item(0, 1).text(), "Titanium")
         self.assertEqual(self.view.table.item(0, 2).text(), "David Guetta")
-        self.assertEqual(self.view.table.item(0, 3).text(), "Nothing But the Beat")
-        self.assertEqual(self.view.table.item(0, 4).text(), "8A")
-        self.assertEqual(self.view.table.item(0, 5).text(), "126.0")
-        self.assertEqual(self.view.table.item(0, 6).text(), "4:05")
-        self.assertEqual(self.view.table.item(0, 7).text(), "5")
-        self.assertEqual(self.view.table.item(0, 8).text(), "320 kbps")
-        self.assertEqual(self.view.table.item(0, 9).text(), "Titanium.mp3")
+        self.assertEqual(self.view.table.item(0, 3).text(), "8A")
+        self.assertEqual(self.view.table.item(0, 4).text(), "126.0")
+        self.assertEqual(self.view.table.item(0, 5).text(), "4:05")
+        self.assertEqual(self.view.table.item(0, 6).text(), "5")
+        self.assertEqual(self.view.table.item(0, 7).text(), "320 kbps")
+        self.assertEqual(self.view.table.item(0, 8).text(), "MP3")
+        self.assertEqual(self.view.table.item(0, 9).text(), "Electro, Club")
+        self.assertEqual(self.view.table.item(0, 9).data(Qt.ItemDataRole.UserRole), ["Electro", "Club"])
+        self.assertEqual(self.view.table.item(0, 10).text(), "Mainstage - BP, Festival")
+        self.assertEqual(self.view.table.item(0, 10).data(Qt.ItemDataRole.UserRole), ["Mainstage - BP", "Festival"])
+        self.assertEqual(self.view.table.item(0, 11).text(), "Music/Titanium.mp3")
 
         # Verify all items in Row 0 are read-only (not editable)
-        for col in range(10):
+        for col in range(12):
             item = self.view.table.item(0, col)
             self.assertIsNotNone(item)
             self.assertFalse(item.flags() & Qt.ItemFlag.ItemIsEditable)
@@ -743,9 +761,13 @@ class TestTracksView(unittest.TestCase):
         # Check Row 1
         self.assertEqual(self.view.table.item(1, 0).text(), "2")
         self.assertEqual(self.view.table.item(1, 1).text(), "One More Time")
-        self.assertEqual(self.view.table.item(1, 4).text(), "11B")
-        self.assertEqual(self.view.table.item(1, 5).text(), "123.0")
-        self.assertEqual(self.view.table.item(1, 7).text(), "0")
+        self.assertEqual(self.view.table.item(1, 3).text(), "11B")
+        self.assertEqual(self.view.table.item(1, 4).text(), "123.0")
+        self.assertEqual(self.view.table.item(1, 6).text(), "0")
+        self.assertEqual(self.view.table.item(1, 8).text(), "AIFF")
+        self.assertEqual(self.view.table.item(1, 9).text(), "French Touch")
+        self.assertEqual(self.view.table.item(1, 10).text(), "—")
+        self.assertEqual(self.view.table.item(1, 11).text(), "Music/OneMoreTime.aiff")
 
     def test_tracks_view_search_success_updates_header_and_table(self):
         self.view._on_search_success("test", self.mock_records)

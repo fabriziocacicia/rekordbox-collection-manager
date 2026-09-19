@@ -9,10 +9,12 @@ from sqlalchemy import create_engine
 from rekordbox_collection_manager.edit_play_count import (
     batch_update_track_play_counts,
     detect_content_table,
+    format_location_display,
     main,
     parse_args,
     prompt_action_mode,
     resolve_db_path,
+    resolve_file_type,
     run_interactive_session,
     search_tracks,
     update_track_play_count,
@@ -272,6 +274,103 @@ class TestEditPlayCount(unittest.TestCase):
             c2 = conn.exec_driver_sql("SELECT DJPlayCount FROM djmdContent WHERE ID = '2'").fetchone()[0]
             self.assertEqual(c1, 12)
             self.assertEqual(c2, 0)
+
+    def test_resolve_file_type(self):
+        self.assertEqual(resolve_file_type(1), "MP3")
+        self.assertEqual(resolve_file_type(4), "M4A")
+        self.assertEqual(resolve_file_type(5), "FLAC")
+        self.assertEqual(resolve_file_type(11), "WAV")
+        self.assertEqual(resolve_file_type(12), "AIFF")
+        self.assertEqual(resolve_file_type(25), "Spotify")
+        self.assertEqual(resolve_file_type(26), "Apple Music")
+        self.assertEqual(resolve_file_type(None, filename="track.flac"), "FLAC")
+        self.assertEqual(resolve_file_type(None, filename="track.aiff"), "AIFF")
+        self.assertEqual(resolve_file_type(None, folder_path="/Music/track.mp3"), "MP3")
+        self.assertEqual(resolve_file_type(None, folder_path="apple-music:tracks:123"), "Apple Music")
+        self.assertEqual(resolve_file_type(None, folder_path="spotify:track:456"), "Spotify")
+        self.assertEqual(resolve_file_type(None, filename=""), "—")
+
+    def test_format_location_display(self):
+        self.assertEqual(
+            format_location_display("song.mp3", "/Music/Afro House/song.mp3"),
+            "Afro House/song.mp3",
+        )
+        self.assertEqual(
+            format_location_display(None, "/Music/Afro House/song.mp3"),
+            "Afro House/song.mp3",
+        )
+        self.assertEqual(
+            format_location_display("song.mp3", None),
+            "song.mp3",
+        )
+        self.assertEqual(
+            format_location_display("", "spotify:track:123"),
+            "spotify:track:123",
+        )
+
+    def test_search_tracks_tags_and_playlists(self):
+        with self.engine.begin() as conn:
+            conn.exec_driver_sql("""
+                CREATE TABLE djmdMyTag (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    Name VARCHAR(255),
+                    Seq INTEGER,
+                    rb_local_deleted INTEGER DEFAULT 0
+                );
+            """)
+            conn.exec_driver_sql("""
+                CREATE TABLE djmdSongMyTag (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    MyTagID VARCHAR(255),
+                    ContentID VARCHAR(255),
+                    rb_local_deleted INTEGER DEFAULT 0
+                );
+            """)
+            conn.exec_driver_sql("""
+                CREATE TABLE djmdPlaylist (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    Name VARCHAR(255),
+                    Attribute INTEGER,
+                    rb_local_deleted INTEGER DEFAULT 0
+                );
+            """)
+            conn.exec_driver_sql("""
+                CREATE TABLE djmdSongPlaylist (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    PlaylistID VARCHAR(255),
+                    ContentID VARCHAR(255),
+                    rb_local_deleted INTEGER DEFAULT 0
+                );
+            """)
+            conn.exec_driver_sql("""
+                INSERT INTO djmdMyTag (ID, Name, Seq) VALUES ('tag-1', 'Peak Time', 1), ('tag-2', 'Vocal', 2);
+            """)
+            conn.exec_driver_sql("""
+                INSERT INTO djmdSongMyTag (ID, MyTagID, ContentID) VALUES ('smt-1', 'tag-1', '1'), ('smt-2', 'tag-2', '1');
+            """)
+            conn.exec_driver_sql("""
+                INSERT INTO djmdPlaylist (ID, Name, Attribute) VALUES ('pl-1', 'Festival 2026', 0), ('pl-smart', 'Smart Playlist', 4);
+            """)
+            conn.exec_driver_sql("""
+                INSERT INTO djmdSongPlaylist (ID, PlaylistID, ContentID) VALUES ('sp-1', 'pl-1', '1');
+            """)
+
+        results = search_tracks(self.engine, "Titanium")
+        self.assertEqual(len(results), 2)
+        titanium = results[0]
+        self.assertEqual(titanium["tags"], ["Peak Time", "Vocal"])
+        self.assertEqual(titanium["playlists"], ["Festival 2026"])
+        self.assertEqual(titanium["location_display"], "music/1.mp3")
+
+        # Test searching by tag name
+        tag_match = search_tracks(self.engine, "Peak Time")
+        self.assertEqual(len(tag_match), 1)
+        self.assertEqual(tag_match[0]["id"], "1")
+
+        # Test searching by playlist name
+        pl_match = search_tracks(self.engine, "Festival")
+        self.assertEqual(len(pl_match), 1)
+        self.assertEqual(pl_match[0]["id"], "1")
 
     def test_main_running_check(self):
         with patch("rekordbox_collection_manager.edit_play_count.ensure_rekordbox_not_running") as mock_check, \

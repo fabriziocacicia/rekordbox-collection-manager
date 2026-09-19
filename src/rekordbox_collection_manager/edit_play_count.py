@@ -66,6 +66,66 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
 
 
 
+def resolve_file_type(
+    raw_file_type: Any,
+    filename: Optional[str] = None,
+    folder_path: Optional[str] = None,
+) -> str:
+    """Resolve human-readable audio file format (MP3, AIFF, FLAC, WAV, M4A, etc.)."""
+    type_map = {
+        1: "MP3",
+        4: "M4A",
+        5: "FLAC",
+        11: "WAV",
+        12: "AIFF",
+        25: "Spotify",
+        26: "Apple Music",
+    }
+    try:
+        if raw_file_type is not None:
+            ft_int = int(raw_file_type)
+            if ft_int in type_map:
+                return type_map[ft_int]
+    except (ValueError, TypeError):
+        pass
+
+    target_str = filename or folder_path or ""
+    if target_str.startswith("apple-music:"):
+        return "Apple Music"
+    if target_str.startswith("spotify:"):
+        return "Spotify"
+
+    ext = os.path.splitext(target_str)[1].lstrip(".").upper()
+    if ext:
+        if ext in ("AIF", "AIFF"):
+            return "AIFF"
+        return ext
+
+    return "—"
+
+
+def format_location_display(
+    filename: Optional[str],
+    folder_path: Optional[str],
+) -> str:
+    """Return 'containing_folder/filename' if containing folder exists, else filename or path."""
+    fp = folder_path or ""
+    fn = filename or ""
+    if fp.startswith("apple-music:") or fp.startswith("spotify:"):
+        return fp
+
+    if fp:
+        parent_dir = os.path.basename(os.path.dirname(fp))
+        file_part = fn or os.path.basename(fp)
+        if parent_dir and file_part:
+            return f"{parent_dir}/{file_part}"
+        if file_part:
+            return file_part
+        return fp
+
+    return fn or "—"
+
+
 def search_tracks(
     engine: Engine,
     query: str,
@@ -78,8 +138,9 @@ def search_tracks(
     """Search for tracks matching query string with rich metadata support.
 
     Dynamically queries djmdContent (or generic content table) and joins
-    artist, album, genre, and key tables when present. Supports text searching,
-    play count filtering ('all', 'played', 'unplayed'), and column sorting.
+    artist, album, genre, key, tags, and real playlists when present.
+    Supports text searching, play count filtering ('all', 'played', 'unplayed'),
+    and column sorting.
     """
     if table_name is None:
         table_name = detect_content_table(engine)
@@ -130,6 +191,34 @@ def search_tracks(
             else:
                 key_col_expr = "NULL"
 
+            has_my_tag = "djmdSongMyTag" in existing_tables and "djmdMyTag" in existing_tables
+            has_playlist = "djmdSongPlaylist" in existing_tables and "djmdPlaylist" in existing_tables
+
+            if has_my_tag:
+                tag_expr = """(
+                    SELECT GROUP_CONCAT(t.Name, '|||')
+                    FROM djmdSongMyTag smt
+                    JOIN djmdMyTag t ON smt.MyTagID = t.ID
+                    WHERE smt.ContentID = c.ID
+                      AND (smt.rb_local_deleted = 0 OR smt.rb_local_deleted IS NULL)
+                      AND (t.rb_local_deleted = 0 OR t.rb_local_deleted IS NULL)
+                ) AS TagNames"""
+            else:
+                tag_expr = "NULL AS TagNames"
+
+            if has_playlist:
+                playlist_expr = """(
+                    SELECT GROUP_CONCAT(p.Name, '|||')
+                    FROM djmdSongPlaylist sp
+                    JOIN djmdPlaylist p ON sp.PlaylistID = p.ID
+                    WHERE sp.ContentID = c.ID
+                      AND p.Attribute = 0
+                      AND (p.rb_local_deleted = 0 OR p.rb_local_deleted IS NULL)
+                      AND (sp.rb_local_deleted = 0 OR sp.rb_local_deleted IS NULL)
+                ) AS PlaylistNames"""
+            else:
+                playlist_expr = "NULL AS PlaylistNames"
+
             join_clause = "\n".join(joins)
 
             # Columns
@@ -140,6 +229,7 @@ def search_tracks(
             rating_expr = "c.Rating" if "Rating" in cols else "0 AS Rating"
             year_expr = "c.ReleaseYear" if "ReleaseYear" in cols else "0 AS ReleaseYear"
             bitrate_expr = "c.BitRate" if "BitRate" in cols else "0 AS BitRate"
+            file_type_expr = "c.FileType" if "FileType" in cols else "NULL AS FileType"
             comment_expr = "c.Commnt" if "Commnt" in cols else "'' AS Commnt"
             folder_expr = "c.FolderPath" if "FolderPath" in cols else "'' AS FolderPath"
             filename_expr = "c.FileNameL" if "FileNameL" in cols else "'' AS FileNameL"
@@ -172,6 +262,22 @@ def search_tracks(
                     search_parts.append("g.Name LIKE :pattern")
                 if "djmdKey" in existing_tables and "KeyID" in cols:
                     search_parts.append("k.ScaleName LIKE :pattern")
+                if has_my_tag:
+                    search_parts.append("""c.ID IN (
+                        SELECT smt.ContentID FROM djmdSongMyTag smt
+                        JOIN djmdMyTag t ON smt.MyTagID = t.ID
+                        WHERE t.Name LIKE :pattern
+                          AND (smt.rb_local_deleted = 0 OR smt.rb_local_deleted IS NULL)
+                          AND (t.rb_local_deleted = 0 OR t.rb_local_deleted IS NULL)
+                    )""")
+                if has_playlist:
+                    search_parts.append("""c.ID IN (
+                        SELECT sp.ContentID FROM djmdSongPlaylist sp
+                        JOIN djmdPlaylist p ON sp.PlaylistID = p.ID
+                        WHERE p.Attribute = 0 AND p.Name LIKE :pattern
+                          AND (p.rb_local_deleted = 0 OR p.rb_local_deleted IS NULL)
+                          AND (sp.rb_local_deleted = 0 OR sp.rb_local_deleted IS NULL)
+                    )""")
                 search_condition = "AND (" + " OR ".join(search_parts) + ")"
 
             # Order clause
@@ -189,8 +295,14 @@ def search_tracks(
                 order_clause = f"c.Length {order_dir}, c.Title ASC" if "Length" in cols else "c.Title ASC"
             elif sort_by == "bitrate":
                 order_clause = f"c.BitRate {order_dir}, c.Title ASC" if "BitRate" in cols else "c.Title ASC"
+            elif sort_by in ("file_type", "type"):
+                order_clause = f"c.FileType {order_dir}, c.Title ASC" if "FileType" in cols else "c.Title ASC"
+            elif sort_by == "tags" and has_my_tag:
+                order_clause = f"TagNames {order_dir}, c.Title ASC"
+            elif sort_by in ("playlists", "playlist") and has_playlist:
+                order_clause = f"PlaylistNames {order_dir}, c.Title ASC"
             elif sort_by == "location":
-                order_clause = f"c.FileNameL {order_dir}, c.Title ASC" if "FileNameL" in cols else "c.Title ASC"
+                order_clause = f"c.FolderPath {order_dir}, c.FileNameL {order_dir}" if "FolderPath" in cols else ("c.FileNameL {order_dir}" if "FileNameL" in cols else "c.Title ASC")
             elif sort_by == "title" and is_desc:
                 order_clause = "c.Title DESC"
             elif sort_by == "title" and not is_desc and query_str:
@@ -218,9 +330,12 @@ def search_tracks(
                     {rating_expr},
                     {year_expr},
                     {bitrate_expr},
+                    {file_type_expr},
                     {comment_expr},
                     {folder_expr},
-                    {filename_expr}
+                    {filename_expr},
+                    {tag_expr},
+                    {playlist_expr}
                 FROM djmdContent c
                 {join_clause}
                 WHERE 1=1 {deleted_filter} {play_filter} {search_condition}
@@ -255,6 +370,17 @@ def search_tracks(
                 else:
                     dur_str = "--:--"
 
+                raw_tags = r.get("TagNames")
+                tags_list = [t.strip() for t in raw_tags.split("|||") if t.strip()] if raw_tags else []
+
+                raw_playlists = r.get("PlaylistNames")
+                playlists_list = [p.strip() for p in raw_playlists.split("|||") if p.strip()] if raw_playlists else []
+
+                raw_fn = r.get("FileNameL") or ""
+                raw_fp = r.get("FolderPath") or ""
+                file_type_str = resolve_file_type(r.get("FileType"), raw_fn, raw_fp)
+                loc_disp = format_location_display(raw_fn, raw_fp)
+
                 records.append({
                     "id": str(r.get("ID")),
                     "content_id": str(r.get("ID")),
@@ -270,9 +396,14 @@ def search_tracks(
                     "rating": int(r.get("Rating") or 0),
                     "year": int(r.get("ReleaseYear") or 0),
                     "bitrate": int(r.get("BitRate") or 0),
+                    "raw_file_type": r.get("FileType"),
+                    "file_type": file_type_str,
+                    "tags": tags_list,
+                    "playlists": playlists_list,
+                    "location_display": loc_disp,
                     "comment": r.get("Commnt") or "",
-                    "folder_path": r.get("FolderPath") or "",
-                    "filename": r.get("FileNameL") or "",
+                    "folder_path": raw_fp,
+                    "filename": raw_fn,
                     "table": "djmdContent",
                 })
 
@@ -329,6 +460,11 @@ def search_tracks(
                     "rating": 0,
                     "year": 0,
                     "bitrate": 0,
+                    "raw_file_type": None,
+                    "file_type": "—",
+                    "tags": [],
+                    "playlists": [],
+                    "location_display": "—",
                     "comment": "",
                     "folder_path": "",
                     "filename": "",
