@@ -765,6 +765,54 @@ class TestTracksView(unittest.TestCase):
         self.assertIn("02. Daft Punk - One More Time", text)
 
 
+class TestMainWindowDbBadge(unittest.TestCase):
+    def setUp(self):
+        from rekordbox_collection_manager.gui.main_window import MainWindow
+
+        with patch.object(MainWindow, "load_database"), patch.object(MainWindow, "_check_rekordbox_status"):
+            self.window = MainWindow(initial_db_path=None)
+
+    def tearDown(self):
+        self.window.safety_timer.stop()
+        self.window.close()
+
+    def test_db_badge_initialization(self):
+        self.assertIsNotNone(self.window.db_badge)
+        self.assertEqual(self.window.db_badge.objectName(), "dbBadge")
+        self.assertEqual(self.window.db_badge.height(), 28)
+        self.assertEqual(self.window.db_badge.cursor().shape(), Qt.CursorShape.PointingHandCursor)
+        self.assertIsNotNone(self.window.db_icon_label.pixmap())
+        self.assertIn("Resolving", self.window.db_label.text())
+
+    def test_db_badge_loaded_state(self):
+        engine = create_engine("sqlite:///:memory:")
+        self.window._on_db_loaded(
+            engine=engine,
+            path="/path/to/rekordbox/master.db",
+            history_records=[],
+            total_tracks=0,
+            table_format="djmdHistory",
+        )
+        self.assertIn("master.db", self.window.db_label.text())
+        self.assertIn("rekordbox/", self.window.db_label.text())
+        self.assertIn("/path/to/rekordbox/master.db", self.window.db_badge.toolTip())
+
+    def test_db_badge_error_state(self):
+        with patch.object(QMessageBox, "critical"):
+            self.window._on_db_error("Connection failed")
+        self.assertIn("DB Error", self.window.db_label.text())
+        self.assertIn("Connection failed", self.window.db_badge.toolTip())
+
+    def test_database_pixmap_and_icon_generators(self):
+        from rekordbox_collection_manager.gui.assets import get_database_icon, get_database_pixmap
+
+        pix = get_database_pixmap("#00a2ff", 14)
+        self.assertFalse(pix.isNull())
+        icon = get_database_icon("#00a2ff")
+        self.assertFalse(icon.isNull())
+
+
 if __name__ == "__main__":
     unittest.main()
+
 

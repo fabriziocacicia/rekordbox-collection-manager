@@ -74,3 +74,33 @@ def get_refresh_icon() -> QIcon:
     </svg>"""
     return create_svg_icon(svg, color="#a0a4b0", active_color="#f4f5f7", size=48)
 
+
+def get_database_pixmap(color: str = "#00a2ff", size: int = 14) -> QPixmap:
+    """Generate a crisp high-DPI vector database cylinder pixmap."""
+    scale = 2
+    svg = f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="{color}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+      <ellipse cx="12" cy="5" rx="9" ry="3"/>
+      <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/>
+      <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
+    </svg>"""
+    renderer = QSvgRenderer(QByteArray(svg.encode("utf-8")))
+    pixmap = QPixmap(size * scale, size * scale)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    renderer.render(painter)
+    painter.end()
+    pixmap.setDevicePixelRatio(scale)
+    return pixmap
+
+
+def get_database_icon(color: str = "#00a2ff", active_color: str = "#f4f5f7") -> QIcon:
+    """Return a crisp vector database cylinder icon."""
+    svg = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="{color}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+      <ellipse cx="12" cy="5" rx="9" ry="3"/>
+      <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/>
+      <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
+    </svg>"""
+    return create_svg_icon(svg, color=color, active_color=active_color, size=48)
+
+

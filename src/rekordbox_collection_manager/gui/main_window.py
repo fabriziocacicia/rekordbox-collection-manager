@@ -26,13 +26,20 @@ from PySide6.QtWidgets import (
 from sqlalchemy.engine import Engine
 
 from rekordbox_collection_manager import __version__
-from rekordbox_collection_manager.gui.assets import get_app_icon, get_asset_path, get_refresh_icon
+from rekordbox_collection_manager.gui.assets import (
+    get_app_icon,
+    get_asset_path,
+    get_database_pixmap,
+    get_refresh_icon,
+)
 from rekordbox_collection_manager.gui.history_view import HistoryView
 from rekordbox_collection_manager.gui.play_count_view import PlayCountView
 from rekordbox_collection_manager.gui.tracks_view import TracksView
 from rekordbox_collection_manager.gui.theme import (
+    COLOR_AMBER,
     COLOR_BLUE,
     COLOR_BORDER,
+    COLOR_RED,
     COLOR_TEXT_MUTED,
     COLOR_TEXT_PRIMARY,
     COLOR_TEXT_SECONDARY,
@@ -194,10 +201,32 @@ class MainWindow(QMainWindow):
 
         header_layout.addStretch(1)
 
-        # Active Database Label & Browse
+        # Active Database Chip & Actions
+        self.db_badge = QFrame()
+        self.db_badge.setObjectName("dbBadge")
+        self.db_badge.setFixedHeight(28)
+        self.db_badge.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.db_badge.setToolTip("Active Rekordbox Database\nClick to switch database.")
+        self.db_badge.mousePressEvent = (
+            lambda ev: self._on_browse_db() if ev.button() == Qt.MouseButton.LeftButton else None
+        )
+
+        db_badge_layout = QHBoxLayout(self.db_badge)
+        db_badge_layout.setContentsMargins(9, 0, 11, 0)
+        db_badge_layout.setSpacing(7)
+        db_badge_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+
+        self.db_icon_label = QLabel()
+        self.db_icon_label.setFixedSize(14, 14)
+        self.db_icon_label.setPixmap(get_database_pixmap(COLOR_AMBER, size=14))
+        db_badge_layout.addWidget(self.db_icon_label)
+
         self.db_label = QLabel("Database: Resolving...")
-        self.db_label.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY}; font-size: 12px;")
-        header_layout.addWidget(self.db_label)
+        self.db_label.setTextFormat(Qt.TextFormat.RichText)
+        self.db_label.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY}; font-size: 11px;")
+        db_badge_layout.addWidget(self.db_label)
+
+        header_layout.addWidget(self.db_badge)
 
         browse_btn = QPushButton("📁 Switch DB...")
         browse_btn.setToolTip("Open custom master.db or USB exportLibrary.db")
@@ -405,7 +434,12 @@ class MainWindow(QMainWindow):
     def load_database(self, db_path: Optional[str] = None) -> None:
         """Start background loader worker to open database."""
         self.status_bar.showMessage("Opening Rekordbox database...")
-        self.db_label.setText("Database: Connecting...")
+        self.db_icon_label.setPixmap(get_database_pixmap(COLOR_AMBER, size=14))
+        self.db_label.setText(
+            f'<span style="color: {COLOR_AMBER}; font-size: 11px; font-weight: 500;">Connecting...</span>'
+        )
+        self.db_badge.setToolTip("Connecting to Rekordbox database...")
+        self.db_label.setToolTip("Connecting to Rekordbox database...")
 
         loader = DatabaseLoaderWorker(db_path, parent=self)
         loader.success.connect(self._on_db_loaded)
@@ -426,14 +460,26 @@ class MainWindow(QMainWindow):
         self.total_tracks = total_tracks
         self.table_format = table_format
 
-        # Shorten path for display in header
+        # Shorten path for display in header badge
         db_filename = os.path.basename(path)
-        display_path = db_filename
         parent_dir = os.path.basename(os.path.dirname(path))
         if parent_dir:
-            display_path = f"{parent_dir}/{db_filename}"
-        self.db_label.setText(f"DB: {display_path}")
-        self.db_label.setToolTip(path)
+            display_html = (
+                f'<span style="color: {COLOR_TEXT_MUTED}; font-size: 10px; font-weight: 700; letter-spacing: 0.5px;">DB</span>&nbsp;&nbsp;'
+                f'<span style="color: {COLOR_TEXT_SECONDARY}; font-size: 11px;">{parent_dir}/</span>'
+                f'<span style="color: {COLOR_TEXT_PRIMARY}; font-weight: 600; font-size: 11px;">{db_filename}</span>'
+            )
+        else:
+            display_html = (
+                f'<span style="color: {COLOR_TEXT_MUTED}; font-size: 10px; font-weight: 700; letter-spacing: 0.5px;">DB</span>&nbsp;&nbsp;'
+                f'<span style="color: {COLOR_TEXT_PRIMARY}; font-weight: 600; font-size: 11px;">{db_filename}</span>'
+            )
+
+        self.db_icon_label.setPixmap(get_database_pixmap(COLOR_BLUE, size=14))
+        self.db_label.setText(display_html)
+        tip_text = f"Active Database:\n{path}\n\nClick to switch database."
+        self.db_badge.setToolTip(tip_text)
+        self.db_label.setToolTip(tip_text)
 
         # Update window title with active database
         self.setWindowTitle(f"Rekordbox Collection Manager — {db_filename}")
@@ -465,7 +511,13 @@ class MainWindow(QMainWindow):
     def _on_db_error(self, err_msg: str) -> None:
         self.setWindowTitle("Rekordbox Collection Manager")
         self.status_bar.showMessage(f"❌ Database load error: {err_msg}")
-        self.db_label.setText("Database: Error")
+        self.db_icon_label.setPixmap(get_database_pixmap(COLOR_RED, size=14))
+        self.db_label.setText(
+            f'<span style="color: {COLOR_RED}; font-size: 11px; font-weight: 500;">DB Error</span>'
+        )
+        tip_error = f"Database Error:\n{err_msg}\n\nClick to select a database."
+        self.db_badge.setToolTip(tip_error)
+        self.db_label.setToolTip(tip_error)
         QMessageBox.critical(
             self,
             "Database Connection Error",
