@@ -126,6 +126,44 @@ def format_location_display(
     return fn or "—"
 
 
+def resolve_file_and_folder_paths(
+    filename: Optional[str],
+    folder_path: Optional[str],
+) -> Tuple[str, str, str, str]:
+    """Resolve (folder_name, folder_dir, file_name, file_path).
+
+    Returns:
+        folder_name: containing directory basename for concise display (e.g. 'Afro House - BP')
+        folder_dir: full directory path (e.g. '/Users/.../Music/Downloaded/Afro House - BP')
+        file_name: track audio file name (e.g. 'On My Mind - Ajna (BE).mp3')
+        file_path: full absolute path to the audio file
+    """
+    fp = folder_path or ""
+    fn = filename or ""
+
+    if fp.startswith("apple-music:") or fp.startswith("spotify:"):
+        return ("Streaming", fp, fn or fp, fp)
+
+    if not fp and not fn:
+        return ("—", "", "—", "")
+
+    if fp:
+        if os.path.splitext(fp)[1] or (fn and fp.endswith(f"/{fn}")):
+            file_path = fp
+            file_name = fn or os.path.basename(fp)
+            folder_dir = os.path.dirname(fp)
+            folder_name = os.path.basename(folder_dir)
+        else:
+            folder_dir = fp
+            folder_name = os.path.basename(fp)
+            file_name = fn or ""
+            file_path = os.path.join(fp, fn) if fn else fp
+        return (folder_name or "—", folder_dir, file_name or "—", file_path)
+
+    return ("—", "", fn or "—", fn or "")
+
+
+
 def search_tracks(
     engine: Engine,
     query: str,
@@ -301,6 +339,10 @@ def search_tracks(
                 order_clause = f"TagNames {order_dir}, c.Title ASC"
             elif sort_by in ("playlists", "playlist") and has_playlist:
                 order_clause = f"PlaylistNames {order_dir}, c.Title ASC"
+            elif sort_by in ("folder", "folder_name"):
+                order_clause = f"c.FolderPath {order_dir}, c.Title ASC" if "FolderPath" in cols else "c.Title ASC"
+            elif sort_by in ("filename", "file_name"):
+                order_clause = f"c.FileNameL {order_dir}, c.Title ASC" if "FileNameL" in cols else "c.Title ASC"
             elif sort_by == "location":
                 order_clause = f"c.FolderPath {order_dir}, c.FileNameL {order_dir}" if "FolderPath" in cols else ("c.FileNameL {order_dir}" if "FileNameL" in cols else "c.Title ASC")
             elif sort_by == "title" and is_desc:
@@ -380,6 +422,7 @@ def search_tracks(
                 raw_fp = r.get("FolderPath") or ""
                 file_type_str = resolve_file_type(r.get("FileType"), raw_fn, raw_fp)
                 loc_disp = format_location_display(raw_fn, raw_fp)
+                f_name, f_dir, fn_disp, f_full = resolve_file_and_folder_paths(raw_fn, raw_fp)
 
                 records.append({
                     "id": str(r.get("ID")),
@@ -400,6 +443,10 @@ def search_tracks(
                     "file_type": file_type_str,
                     "tags": tags_list,
                     "playlists": playlists_list,
+                    "folder_name": f_name,
+                    "folder_dir": f_dir,
+                    "file_name": fn_disp,
+                    "file_path": f_full,
                     "location_display": loc_disp,
                     "comment": r.get("Commnt") or "",
                     "folder_path": raw_fp,
@@ -464,6 +511,10 @@ def search_tracks(
                     "file_type": "—",
                     "tags": [],
                     "playlists": [],
+                    "folder_name": "—",
+                    "folder_dir": "",
+                    "file_name": "—",
+                    "file_path": "",
                     "location_display": "—",
                     "comment": "",
                     "folder_path": "",

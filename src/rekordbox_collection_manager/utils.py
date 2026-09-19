@@ -577,3 +577,47 @@ def compose_history_name(
     return " ".join(parts)
 
 
+def open_in_folder(path: str) -> bool:
+    """Open containing directory in the system file manager (Finder on macOS, Explorer on Windows).
+
+    Returns True if successfully launched, False otherwise.
+    """
+    if not path:
+        return False
+    # If path is a file, get its directory
+    folder = path if os.path.isdir(path) else os.path.dirname(path)
+    if not folder or not os.path.exists(folder):
+        return False
+    try:
+        if sys.platform == "darwin":
+            subprocess.Popen(["open", folder])
+        elif sys.platform == "win32":
+            subprocess.Popen(["explorer", os.path.normpath(folder)])
+        else:
+            subprocess.Popen(["xdg-open", folder])
+        return True
+    except Exception:
+        return False
+
+
+def reveal_in_file_manager(path: str) -> bool:
+    """Reveal and highlight file in the system file manager (Finder -R on macOS, Explorer /select on Windows).
+
+    Returns True if successfully launched, False otherwise.
+    """
+    if not path or not os.path.exists(path):
+        return False
+    try:
+        if sys.platform == "darwin":
+            subprocess.Popen(["open", "-R", path])
+        elif sys.platform == "win32":
+            subprocess.Popen(["explorer", f"/select,{os.path.normpath(path)}"])
+        else:
+            folder = os.path.dirname(path) if os.path.isfile(path) else path
+            subprocess.Popen(["xdg-open", folder])
+        return True
+    except Exception:
+        return False
+
+
+

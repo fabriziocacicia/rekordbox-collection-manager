@@ -1,14 +1,26 @@
 """Collection Tracks View Screen.
 
-Presents complete collection tracklist with rich metadata in a 12-column table
-featuring audio file format badges, containing folder location paths,
+Presents complete collection tracklist with rich metadata in a 13-column table
+featuring audio file format badges, dedicated folder and filename columns,
+Ctrl/Cmd-click direct folder opening and Finder file revealing,
 tags rendered as chips, real playlist chips, play count filtering,
 configurable limits, interactive column sorting, and instant search.
 """
 
-from typing import Any, Dict, List, Optional
-from PySide6.QtCore import QModelIndex, QRectF, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QBrush, QColor, QFont, QFontMetrics, QPainter, QPen
+import os
+from typing import Any, Dict, List, Optional, Tuple
+from PySide6.QtCore import QEvent, QModelIndex, QObject, QPoint, QRectF, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import (
+    QBrush,
+    QColor,
+    QCursor,
+    QFont,
+    QFontMetrics,
+    QKeyEvent,
+    QMouseEvent,
+    QPainter,
+    QPen,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -16,6 +28,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
+    QMenu,
     QPushButton,
     QStyle,
     QStyledItemDelegate,
@@ -35,6 +48,156 @@ from rekordbox_collection_manager.gui.theme import (
     COLOR_TEXT_SECONDARY,
 )
 from rekordbox_collection_manager.gui.workers import TrackSearchWorker
+from rekordbox_collection_manager.utils import open_in_folder, reveal_in_file_manager
+
+
+class ModifierKeyFilter(QObject):
+    """Watches key events across the application to update link hover states immediately when Cmd/Ctrl is pressed."""
+
+    def __init__(self, callback: Any, parent: Optional[QObject] = None):
+        super().__init__(parent)
+        self.callback = callback
+
+    def eventFilter(self, obj: Any, event: QEvent) -> bool:
+        if event.type() in (QEvent.Type.KeyPress, QEvent.Type.KeyRelease):
+            if isinstance(event, QKeyEvent) and event.key() in (Qt.Key.Key_Control, Qt.Key.Key_Meta):
+                self.callback()
+        return False
+
+
+class TracksTableWidget(QTableWidget):
+    """Custom table widget supporting Ctrl/Cmd+click to open/reveal folders and files with visual hover highlight."""
+
+    folder_clicked = Signal(str)
+    file_clicked = Signal(str)
+
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.folder_col_idx: int = 11
+        self.file_col_idx: int = 12
+        self.hovered_link_cell: Optional[Tuple[int, int]] = None
+        self.setMouseTracking(True)
+        self.viewport().setMouseTracking(True)
+
+        app = QApplication.instance()
+        if app:
+            self._key_filter = ModifierKeyFilter(self._on_modifier_changed, self)
+            app.installEventFilter(self._key_filter)
+
+    def _on_modifier_changed(self) -> None:
+        """Called whenever Ctrl or Cmd is pressed or released anywhere."""
+        self._update_hover_state()
+
+    def _update_hover_state(self, mouse_pos: Optional[QPoint] = None) -> None:
+        if not self.isVisible():
+            return
+        if mouse_pos is None:
+            mouse_pos = self.viewport().mapFromGlobal(QCursor.pos())
+
+        new_cell: Optional[Tuple[int, int]] = None
+        if self.viewport().rect().contains(mouse_pos):
+            mod = QApplication.keyboardModifiers()
+            is_cmd = bool(mod & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.MetaModifier))
+            if is_cmd:
+                item = self.itemAt(mouse_pos)
+                if item and item.column() in (self.folder_col_idx, self.file_col_idx):
+                    path_data = item.data(Qt.ItemDataRole.UserRole)
+                    if path_data and str(path_data) not in ("", "—"):
+                        new_cell = (item.row(), item.column())
+
+        if new_cell != self.hovered_link_cell:
+            self.hovered_link_cell = new_cell
+            if new_cell is not None:
+                self.viewport().setCursor(Qt.CursorShape.PointingHandCursor)
+            else:
+                self.viewport().unsetCursor()
+            self.viewport().update()
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        self._update_hover_state(event.position().toPoint())
+        super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event: QEvent) -> None:
+        if self.hovered_link_cell is not None:
+            self.hovered_link_cell = None
+            self.viewport().unsetCursor()
+            self.viewport().update()
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            mod = event.modifiers()
+            if mod & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.MetaModifier):
+                item = self.itemAt(event.position().toPoint())
+                if item:
+                    col = item.column()
+                    if col == self.folder_col_idx:
+                        path_data = item.data(Qt.ItemDataRole.UserRole)
+                        if path_data and str(path_data) not in ("", "—"):
+                            self.folder_clicked.emit(str(path_data))
+                            event.accept()
+                            return
+                    elif col == self.file_col_idx:
+                        path_data = item.data(Qt.ItemDataRole.UserRole)
+                        if path_data and str(path_data) not in ("", "—"):
+                            self.file_clicked.emit(str(path_data))
+                            event.accept()
+                            return
+        super().mousePressEvent(event)
+
+
+class PathLinkDelegate(QStyledItemDelegate):
+    """Renders Folder and File cells with a subtle link underline when hovered with Cmd/Ctrl held."""
+
+    def paint(
+        self,
+        painter: QPainter,
+        option: QStyleOptionViewItem,
+        index: QModelIndex,
+    ) -> None:
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        widget = option.widget
+        style = widget.style() if widget else QApplication.style()
+        style.drawPrimitive(QStyle.PrimitiveElement.PE_PanelItemViewItem, opt, painter, widget)
+
+        text_str = index.data(Qt.ItemDataRole.DisplayRole) or ""
+        path_data = index.data(Qt.ItemDataRole.UserRole)
+        is_link_active = (
+            bool(path_data)
+            and text_str not in ("", "—")
+            and getattr(widget, "hovered_link_cell", None) == (index.row(), index.column())
+        )
+
+        font = QFont(painter.font())
+        if is_link_active:
+            font.setUnderline(True)
+            text_color = QColor("#82b4ea")
+        else:
+            if opt.state & QStyle.StateFlag.State_Selected:
+                text_color = QColor(COLOR_TEXT_PRIMARY)
+            else:
+                text_color = QColor(COLOR_TEXT_MUTED)
+        painter.setFont(font)
+        fm = QFontMetrics(font)
+
+        text_rect = option.rect.adjusted(6, 0, -6, 0)
+        elided = fm.elidedText(text_str, Qt.TextElideMode.ElideMiddle, text_rect.width())
+
+        painter.setPen(text_color)
+        painter.drawText(text_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, elided)
+        painter.restore()
+
+    def sizeHint(self, option: QStyleOptionViewItem, index: QModelIndex) -> QSize:
+        text_str = index.data(Qt.ItemDataRole.DisplayRole) or ""
+        if not text_str:
+            return QSize(60, 36)
+        font = QFont(option.font)
+        fm = QFontMetrics(font)
+        return QSize(min(fm.horizontalAdvance(text_str) + 20, 300), 36)
 
 
 class ChipBadgeDelegate(QStyledItemDelegate):
@@ -297,9 +460,9 @@ class TracksView(QWidget):
 
         main_layout.addLayout(toolbar)
 
-        # 3. Main Tracks Table (12 Columns)
-        self.table = QTableWidget()
-        self.table.setColumnCount(12)
+        # 3. Main Tracks Table (13 Columns: split folder and file name)
+        self.table = TracksTableWidget(self)
+        self.table.setColumnCount(13)
         self.table.setHorizontalHeaderLabels([
             "#",
             "Title",
@@ -312,13 +475,22 @@ class TracksView(QWidget):
             "Type",
             "Tags",
             "Playlists",
-            "Location",
+            "Folder",
+            "File Name",
         ])
         self.table.setAlternatingRowColors(True)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
         self.table.verticalHeader().setDefaultSectionSize(36)
         self.table.verticalHeader().setVisible(False)
+
+        # Connect click signals for folder opening and file revealing
+        self.table.folder_clicked.connect(self._on_open_folder)
+        self.table.file_clicked.connect(self._on_reveal_file)
+
+        # Custom right-click context menu
+        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._on_table_context_menu)
 
         # Custom delegates for chip badges and file type badges
         self.file_type_delegate = FileTypeBadgeDelegate(parent=self.table)
@@ -335,9 +507,13 @@ class TracksView(QWidget):
             parent=self.table,
         )
 
+        self.path_link_delegate = PathLinkDelegate(parent=self.table)
+
         self.table.setItemDelegateForColumn(8, self.file_type_delegate)
         self.table.setItemDelegateForColumn(9, self.tags_delegate)
         self.table.setItemDelegateForColumn(10, self.playlist_delegate)
+        self.table.setItemDelegateForColumn(11, self.path_link_delegate)
+        self.table.setItemDelegateForColumn(12, self.path_link_delegate)
 
         # Column resize modes
         header = self.table.horizontalHeader()
@@ -352,12 +528,14 @@ class TracksView(QWidget):
         header.setSectionResizeMode(8, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(9, QHeaderView.ResizeMode.Interactive)
         header.setSectionResizeMode(10, QHeaderView.ResizeMode.Interactive)
-        header.setSectionResizeMode(11, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(11, QHeaderView.ResizeMode.Interactive)
+        header.setSectionResizeMode(12, QHeaderView.ResizeMode.Stretch)
 
-        self.table.setColumnWidth(1, 200)  # Title
-        self.table.setColumnWidth(2, 140)  # Artist
-        self.table.setColumnWidth(9, 150)  # Tags
-        self.table.setColumnWidth(10, 170)  # Playlists
+        self.table.setColumnWidth(1, 190)  # Title
+        self.table.setColumnWidth(2, 130)  # Artist
+        self.table.setColumnWidth(9, 140)  # Tags
+        self.table.setColumnWidth(10, 160)  # Playlists
+        self.table.setColumnWidth(11, 150)  # Folder
 
         # Center align metric headers
         for col in (0, 3, 4, 5, 6, 7, 8):
@@ -382,7 +560,8 @@ class TracksView(QWidget):
             8: "Sort by File Type (MP3, AIFF, FLAC, etc.)",
             9: "Sort by Tags",
             10: "Sort by Real Playlists",
-            11: "Sort by File Location (Folder & File)",
+            11: "Sort by Folder (Ctrl+Click or Cmd+Click cell to open in Finder)",
+            12: "Sort by File Name (Ctrl+Click or Cmd+Click cell to reveal with highlight in Finder)",
         }
         for col, tip in header_tooltips.items():
             h_item = self.table.horizontalHeaderItem(col)
@@ -466,7 +645,7 @@ class TracksView(QWidget):
         self.notify_status.emit(f"Error loading tracks: {err_msg}")
 
     def _populate_table(self) -> None:
-        """Render records into the 12-column read-only table."""
+        """Render records into the 13-column read-only table."""
         self.table.setSortingEnabled(False)
         self.table.setRowCount(0)
 
@@ -565,14 +744,31 @@ class TracksView(QWidget):
             item_pl.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
             self.table.setItem(row_idx, 10, item_pl)
 
-            # Col 11: Location (containing_folder/filename)
-            loc_disp = t.get("location_display") or t.get("filename") or t.get("folder_path") or "—"
-            item_loc = QTableWidgetItem(loc_disp)
-            full_path = t.get("folder_path") or t.get("filename") or ""
-            item_loc.setToolTip(full_path)
-            item_loc.setForeground(QColor(COLOR_TEXT_MUTED))
-            item_loc.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
-            self.table.setItem(row_idx, 11, item_loc)
+            # Col 11: Folder (Containing directory)
+            folder_name = t.get("folder_name") or "—"
+            folder_dir = t.get("folder_dir") or t.get("folder_path") or ""
+            item_folder = QTableWidgetItem(folder_name)
+            item_folder.setData(Qt.ItemDataRole.UserRole, folder_dir)
+            item_folder.setToolTip(
+                f"Folder: {folder_dir}\n💡 Ctrl+Click or Cmd+Click to open folder in Finder"
+                if folder_dir else "Folder: (None)"
+            )
+            item_folder.setForeground(QColor(COLOR_TEXT_MUTED))
+            item_folder.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+            self.table.setItem(row_idx, 11, item_folder)
+
+            # Col 12: File Name (Track file with highlight reveal)
+            file_name = t.get("file_name") or t.get("filename") or "—"
+            file_path = t.get("file_path") or t.get("folder_path") or ""
+            item_file = QTableWidgetItem(file_name)
+            item_file.setData(Qt.ItemDataRole.UserRole, file_path)
+            item_file.setToolTip(
+                f"File: {file_path}\n💡 Ctrl+Click or Cmd+Click to reveal with highlight in Finder"
+                if file_path else "File: (None)"
+            )
+            item_file.setForeground(QColor(COLOR_TEXT_MUTED))
+            item_file.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+            self.table.setItem(row_idx, 12, item_file)
 
         self.table.setSortingEnabled(True)
 
@@ -590,7 +786,8 @@ class TracksView(QWidget):
             8: "file_type",
             9: "tags",
             10: "playlists",
-            11: "location",
+            11: "folder",
+            12: "filename",
         }
         if logical_index not in col_map:
             return
@@ -611,6 +808,97 @@ class TracksView(QWidget):
 
         self.current_sort_field = sort_field
         self._execute_search()
+
+    def _on_open_folder(self, folder_path: str) -> None:
+        """Open containing folder in system file manager (Finder/Explorer)."""
+        if not folder_path or folder_path == "—":
+            msg = "⚠️ No folder path available."
+            self.status_label.setText(msg)
+            self.notify_status.emit(msg)
+            return
+        if folder_path.startswith("apple-music:") or folder_path.startswith("spotify:"):
+            msg = f"Streaming track URI: {folder_path}"
+            self.status_label.setText(msg)
+            self.notify_status.emit(msg)
+            return
+
+        success = open_in_folder(folder_path)
+        if success:
+            msg = f"📂 Opened folder: {os.path.basename(folder_path) or folder_path}"
+        else:
+            msg = f"❌ Folder not found on disk: {folder_path}"
+        self.status_label.setText(msg)
+        self.notify_status.emit(msg)
+
+    def _on_reveal_file(self, file_path: str) -> None:
+        """Reveal and select file in system file manager (Finder/Explorer)."""
+        if not file_path or file_path == "—":
+            msg = "⚠️ No file path available."
+            self.status_label.setText(msg)
+            self.notify_status.emit(msg)
+            return
+        if file_path.startswith("apple-music:") or file_path.startswith("spotify:"):
+            msg = f"Streaming track URI: {file_path}"
+            self.status_label.setText(msg)
+            self.notify_status.emit(msg)
+            return
+
+        success = reveal_in_file_manager(file_path)
+        if success:
+            msg = f"🔍 Revealed in Finder: {os.path.basename(file_path)}"
+        else:
+            # Fallback to folder if file not found
+            folder = os.path.dirname(file_path) if os.path.splitext(file_path)[1] else file_path
+            if folder and open_in_folder(folder):
+                msg = f"⚠️ File missing on disk, opened folder: {os.path.basename(folder)}"
+            else:
+                msg = f"❌ File not found on disk: {file_path}"
+        self.status_label.setText(msg)
+        self.notify_status.emit(msg)
+
+    def _on_table_context_menu(self, pos: QPoint) -> None:
+        """Show contextual menu for table rows to open/reveal paths."""
+        item = self.table.itemAt(pos)
+        if not item:
+            return
+        row = item.row()
+        if row < 0 or row >= len(self.records):
+            return
+
+        track = self.records[row]
+        folder_dir = track.get("folder_dir") or track.get("folder_path") or ""
+        file_path = track.get("file_path") or track.get("filename") or ""
+        title = track.get("title") or ""
+        artist = track.get("artist") or ""
+
+        menu = QMenu(self)
+        act_open_folder = menu.addAction("📁 Open Containing Folder")
+        act_reveal_file = menu.addAction("🔍 Reveal in Finder")
+        menu.addSeparator()
+        act_copy_file = menu.addAction("📋 Copy File Path")
+        act_copy_folder = menu.addAction("📋 Copy Folder Path")
+        act_copy_track = menu.addAction("📋 Copy Track (Artist - Title)")
+
+        action = menu.exec(self.table.viewport().mapToGlobal(pos))
+        if action == act_open_folder:
+            self._on_open_folder(folder_dir)
+        elif action == act_reveal_file:
+            self._on_reveal_file(file_path)
+        elif action == act_copy_file:
+            cb = QApplication.clipboard()
+            if cb and file_path:
+                cb.setText(file_path)
+                self.notify_status.emit("📋 Copied file path to clipboard!")
+        elif action == act_copy_folder:
+            cb = QApplication.clipboard()
+            if cb and folder_dir:
+                cb.setText(folder_dir)
+                self.notify_status.emit("📋 Copied folder path to clipboard!")
+        elif action == act_copy_track:
+            cb = QApplication.clipboard()
+            if cb:
+                cb.setText(f"{artist} - {title}")
+                self.notify_status.emit(f"📋 Copied '{artist} - {title}' to clipboard!")
 
     def _on_copy_tracklist(self) -> None:
         """Copy formatted tracklist (01. Artist - Title) to system clipboard."""

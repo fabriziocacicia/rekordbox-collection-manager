@@ -670,7 +670,10 @@ class TestTracksView(unittest.TestCase):
                 "file_type": "MP3",
                 "tags": ["Electro", "Club"],
                 "playlists": ["Mainstage - BP", "Festival"],
-                "comment": "Club hit",
+                "folder_name": "Music",
+                "folder_dir": "/Music",
+                "file_name": "Titanium.mp3",
+                "file_path": "/Music/Titanium.mp3",
                 "folder_path": "/Music/Titanium.mp3",
                 "filename": "Titanium.mp3",
                 "location_display": "Music/Titanium.mp3",
@@ -693,6 +696,10 @@ class TestTracksView(unittest.TestCase):
                 "file_type": "AIFF",
                 "tags": ["French Touch"],
                 "playlists": [],
+                "folder_name": "Music",
+                "folder_dir": "/Music",
+                "file_name": "OneMoreTime.aiff",
+                "file_path": "/Music/OneMoreTime.aiff",
                 "comment": "",
                 "folder_path": "/Music/OneMoreTime.aiff",
                 "filename": "OneMoreTime.aiff",
@@ -702,7 +709,7 @@ class TestTracksView(unittest.TestCase):
 
     def test_tracks_view_initial_ui(self):
         self.assertEqual(self.view.tracks_header_label.text(), "TRACKS")
-        self.assertEqual(self.view.table.columnCount(), 12)
+        self.assertEqual(self.view.table.columnCount(), 13)
         expected_headers = [
             "#",
             "Title",
@@ -715,7 +722,8 @@ class TestTracksView(unittest.TestCase):
             "Type",
             "Tags",
             "Playlists",
-            "Location",
+            "Folder",
+            "File Name",
         ]
         for idx, text in enumerate(expected_headers):
             self.assertEqual(self.view.table.horizontalHeaderItem(idx).text(), text)
@@ -723,6 +731,8 @@ class TestTracksView(unittest.TestCase):
         self.assertIsNotNone(self.view.table.itemDelegateForColumn(8))
         self.assertIsNotNone(self.view.table.itemDelegateForColumn(9))
         self.assertIsNotNone(self.view.table.itemDelegateForColumn(10))
+        self.assertIsNotNone(self.view.table.itemDelegateForColumn(11))
+        self.assertIsNotNone(self.view.table.itemDelegateForColumn(12))
 
         self.assertEqual(self.view.filter_combo.count(), 3)
         self.assertEqual(self.view.filter_combo.itemText(0), "All Tracks")
@@ -750,10 +760,13 @@ class TestTracksView(unittest.TestCase):
         self.assertEqual(self.view.table.item(0, 9).data(Qt.ItemDataRole.UserRole), ["Electro", "Club"])
         self.assertEqual(self.view.table.item(0, 10).text(), "Mainstage - BP, Festival")
         self.assertEqual(self.view.table.item(0, 10).data(Qt.ItemDataRole.UserRole), ["Mainstage - BP", "Festival"])
-        self.assertEqual(self.view.table.item(0, 11).text(), "Music/Titanium.mp3")
+        self.assertEqual(self.view.table.item(0, 11).text(), "Music")
+        self.assertEqual(self.view.table.item(0, 11).data(Qt.ItemDataRole.UserRole), "/Music")
+        self.assertEqual(self.view.table.item(0, 12).text(), "Titanium.mp3")
+        self.assertEqual(self.view.table.item(0, 12).data(Qt.ItemDataRole.UserRole), "/Music/Titanium.mp3")
 
         # Verify all items in Row 0 are read-only (not editable)
-        for col in range(12):
+        for col in range(13):
             item = self.view.table.item(0, col)
             self.assertIsNotNone(item)
             self.assertFalse(item.flags() & Qt.ItemFlag.ItemIsEditable)
@@ -767,7 +780,8 @@ class TestTracksView(unittest.TestCase):
         self.assertEqual(self.view.table.item(1, 8).text(), "AIFF")
         self.assertEqual(self.view.table.item(1, 9).text(), "French Touch")
         self.assertEqual(self.view.table.item(1, 10).text(), "—")
-        self.assertEqual(self.view.table.item(1, 11).text(), "Music/OneMoreTime.aiff")
+        self.assertEqual(self.view.table.item(1, 11).text(), "Music")
+        self.assertEqual(self.view.table.item(1, 12).text(), "OneMoreTime.aiff")
 
     def test_tracks_view_search_success_updates_header_and_table(self):
         self.view._on_search_success("test", self.mock_records)
@@ -785,6 +799,18 @@ class TestTracksView(unittest.TestCase):
         text = clipboard.text()
         self.assertIn("01. David Guetta - Titanium", text)
         self.assertIn("02. Daft Punk - One More Time", text)
+
+    def test_tracks_view_folder_open_and_file_reveal_handlers(self):
+        with patch("rekordbox_collection_manager.gui.tracks_view.open_in_folder", return_value=True) as mock_open:
+            self.view._on_open_folder("/Music")
+            mock_open.assert_called_once_with("/Music")
+            self.assertIn("Opened folder", self.view.status_label.text())
+
+        with patch("rekordbox_collection_manager.gui.tracks_view.reveal_in_file_manager", return_value=True) as mock_reveal:
+            self.view._on_reveal_file("/Music/Titanium.mp3")
+            mock_reveal.assert_called_once_with("/Music/Titanium.mp3")
+            self.assertIn("Revealed in Finder", self.view.status_label.text())
+
 
 
 class TestMainWindowDbBadge(unittest.TestCase):
