@@ -129,6 +129,36 @@ uv run rekordbox-manager -d /Volumes/USB/PIONEER/exportLibrary.db
 
 ---
 
+### 4. Backup & Restore Scripts (`scripts/`)
+
+Safeguard and restore your entire macOS Rekordbox collection (`master.db`, playlists, sync caches, and configs) with dedicated disaster-recovery scripts:
+
+#### Create Backup:
+```bash
+./scripts/backup_rekordbox_mac.sh
+```
+- Creates a timestamped backup folder on your Desktop: `~/Desktop/rekordbox_mac_backup_YYYYMMDD_HHMMSS/`
+- Backs up both `~/Library/Pioneer/rekordbox` (database, XMLs, sync caches) and `~/Library/Application Support/Pioneer/rekordbox`.
+- Confirms Rekordbox is closed beforehand to prevent database locking issues.
+
+#### Restore Backup:
+```bash
+# Auto-detects Desktop backups and interactively prompts for selection:
+./scripts/restore_rekordbox_mac.sh
+
+# Or restore a specific backup folder directly:
+./scripts/restore_rekordbox_mac.sh ~/Desktop/rekordbox_mac_backup_20260920_002628
+
+# Non-interactive mode (auto-confirms):
+./scripts/restore_rekordbox_mac.sh -y ~/Desktop/rekordbox_mac_backup_20260920_002628
+```
+Features & Safety Safeguards:
+- **Pre-Restore Safety Snapshot**: Automatically creates an emergency snapshot (`~/Desktop/rekordbox_pre_restore_safety_*`) of your *current* live library before touching anything, so you can always roll back.
+- **Clean Sync**: Restores all database files and purges stale/orphaned WAL and SHM journal files.
+- **Auto-Discovery**: Scans `~/Desktop` for `rekordbox_mac_backup_*` folders and lets you choose (defaulting to the latest).
+- **Process Check**: Warns and halts if Rekordbox is running to protect against concurrent file writes.
+
+---
 
 ## Adding New Tools to this Repo
 
