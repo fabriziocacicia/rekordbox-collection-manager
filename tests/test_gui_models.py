@@ -1030,6 +1030,49 @@ class TestTracksTableWidget(unittest.TestCase):
         self.assertIn("01. CamelPhat - Breathe", text)
         self.assertIn("02. Bicep - Glue", text)
 
+    def test_chip_badge_delegate_and_column_widths(self):
+        from PySide6.QtGui import QColor, QImage, QPainter
+        from PySide6.QtWidgets import QStyleOptionViewItem
+        from rekordbox_collection_manager.gui.track_table import (
+            DEFAULT_COLLECTION_COLUMNS,
+            ChipBadgeDelegate,
+            TrackColumn,
+            TrackTableConfig,
+            TracksTableWidget,
+        )
+
+        table = TracksTableWidget(config=TrackTableConfig(columns=list(DEFAULT_COLLECTION_COLUMNS)))
+        tags_idx = list(DEFAULT_COLLECTION_COLUMNS).index(TrackColumn.TAGS)
+        playlists_idx = list(DEFAULT_COLLECTION_COLUMNS).index(TrackColumn.PLAYLISTS)
+
+        self.assertEqual(table.columnWidth(tags_idx), 220)
+        self.assertEqual(table.columnWidth(playlists_idx), 270)
+
+        delegate = ChipBadgeDelegate(
+            bg_color=QColor(50, 50, 50),
+            border_color=QColor(80, 80, 80),
+            text_color=QColor(255, 255, 255),
+        )
+
+        # Test paint on QImage
+        img = QImage(300, 40, QImage.Format.Format_ARGB32)
+        img.fill(0)
+        painter = QPainter(img)
+        opt = QStyleOptionViewItem()
+        opt.rect = table.rect()
+
+        table.set_tracks(self.mock_tracks)
+        model_idx = table.model().index(0, tags_idx)
+
+        # Ensure delegate paint executes cleanly
+        delegate.paint(painter, opt, model_idx)
+        painter.end()
+
+        # Test sizeHint
+        hint = delegate.sizeHint(opt, model_idx)
+        self.assertGreater(hint.width(), 0)
+        self.assertEqual(hint.height(), 36)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -254,33 +254,43 @@ class ChipBadgeDelegate(QStyledItemDelegate):
         if isinstance(items, str):
             items = [items]
 
-        chip_h = 20
+        chip_h = 18
         y = option.rect.y() + (option.rect.height() - chip_h) // 2
-        x = option.rect.x() + 6
-        max_x = option.rect.right() - 6
+        x = option.rect.x() + 5
+        max_x = option.rect.right() - 5
 
         font = QFont(painter.font())
-        font.setPointSize(10)
-        font.setBold(True)
+        font.setPointSize(9)
+        font.setWeight(QFont.Weight.DemiBold)
         painter.setFont(font)
         fm = QFontMetrics(font)
 
+        max_chip_w = 140
+
         for i, text_val in enumerate(items):
             text_str = str(text_val)
-            text_w = fm.horizontalAdvance(text_str)
-            chip_w = text_w + 14  # 7px horizontal padding each side
+            raw_w = fm.horizontalAdvance(text_str)
+            if raw_w + 10 > max_chip_w:
+                display_str = fm.elidedText(
+                    text_str, Qt.TextElideMode.ElideRight, max_chip_w - 10
+                )
+                chip_w = fm.horizontalAdvance(display_str) + 10
+            else:
+                display_str = text_str
+                chip_w = raw_w + 10
 
             if x + chip_w > max_x:
                 remaining = len(items) - i
-                if remaining > 0 and x + 24 <= max_x:
+                if remaining > 0:
                     rem_str = f"+{remaining}"
-                    rem_w = fm.horizontalAdvance(rem_str) + 10
-                    rem_rect = QRectF(x, y, rem_w, chip_h)
-                    painter.setBrush(QBrush(QColor(40, 40, 50, 180)))
-                    painter.setPen(QPen(QColor(80, 80, 95), 1))
-                    painter.drawRoundedRect(rem_rect, 4, 4)
-                    painter.setPen(QColor(COLOR_TEXT_SECONDARY))
-                    painter.drawText(rem_rect, Qt.AlignmentFlag.AlignCenter, rem_str)
+                    rem_w = fm.horizontalAdvance(rem_str) + 8
+                    if x + rem_w <= max_x:
+                        rem_rect = QRectF(x, y, rem_w, chip_h)
+                        painter.setBrush(QBrush(QColor(40, 40, 50, 180)))
+                        painter.setPen(QPen(QColor(80, 80, 95), 1))
+                        painter.drawRoundedRect(rem_rect, 4, 4)
+                        painter.setPen(QColor(COLOR_TEXT_SECONDARY))
+                        painter.drawText(rem_rect, Qt.AlignmentFlag.AlignCenter, rem_str)
                 break
 
             chip_rect = QRectF(x, y, chip_w, chip_h)
@@ -289,8 +299,8 @@ class ChipBadgeDelegate(QStyledItemDelegate):
             painter.drawRoundedRect(chip_rect, 4, 4)
 
             painter.setPen(self.text_color)
-            painter.drawText(chip_rect, Qt.AlignmentFlag.AlignCenter, text_str)
-            x += chip_w + 5
+            painter.drawText(chip_rect, Qt.AlignmentFlag.AlignCenter, display_str)
+            x += chip_w + 4
 
         painter.restore()
 
@@ -301,13 +311,13 @@ class ChipBadgeDelegate(QStyledItemDelegate):
         if isinstance(items, str):
             items = [items]
         font = QFont(option.font)
-        font.setPointSize(10)
-        font.setBold(True)
+        font.setPointSize(9)
+        font.setWeight(QFont.Weight.DemiBold)
         fm = QFontMetrics(font)
-        total_w = 12
+        total_w = 10
         for t in items:
-            total_w += fm.horizontalAdvance(str(t)) + 14 + 5
-        return QSize(min(total_w, 350), 36)
+            total_w += min(fm.horizontalAdvance(str(t)) + 10, 140) + 4
+        return QSize(min(total_w, 400), 36)
 
 
 class FileTypeBadgeDelegate(QStyledItemDelegate):
@@ -505,10 +515,10 @@ class TracksTableWidget(QTableWidget):
                 header.setSectionResizeMode(col_idx, QHeaderView.ResizeMode.ResizeToContents)
             elif col_name == TrackColumn.TAGS:
                 header.setSectionResizeMode(col_idx, QHeaderView.ResizeMode.Interactive)
-                self.setColumnWidth(col_idx, 140)
+                self.setColumnWidth(col_idx, 220)
             elif col_name == TrackColumn.PLAYLISTS:
                 header.setSectionResizeMode(col_idx, QHeaderView.ResizeMode.Interactive)
-                self.setColumnWidth(col_idx, 160)
+                self.setColumnWidth(col_idx, 270)
             elif col_name == TrackColumn.FOLDER:
                 header.setSectionResizeMode(col_idx, QHeaderView.ResizeMode.Interactive)
                 self.setColumnWidth(col_idx, 150)
