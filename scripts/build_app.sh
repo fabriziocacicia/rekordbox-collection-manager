@@ -34,7 +34,12 @@ if [ -f "$PROJECT_ROOT/assets/icon.icns" ]; then
 fi
 
 # 3. Write Info.plist
-cat << 'EOF' > "$APP_DIR/Contents/Info.plist"
+APP_VERSION=$(grep -m 1 '^version = ' "$PROJECT_ROOT/pyproject.toml" | cut -d '"' -f 2)
+if [ -z "$APP_VERSION" ]; then
+    APP_VERSION="0.2.0"
+fi
+
+cat << EOF > "$APP_DIR/Contents/Info.plist"
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -56,9 +61,9 @@ cat << 'EOF' > "$APP_DIR/Contents/Info.plist"
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.1.0</string>
+    <string>${APP_VERSION}</string>
     <key>CFBundleVersion</key>
-    <string>0.1.0</string>
+    <string>${APP_VERSION}</string>
     <key>NSHighResolutionCapable</key>
     <true/>
 </dict>

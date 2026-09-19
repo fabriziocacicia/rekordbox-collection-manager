@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 )
 from sqlalchemy.engine import Engine
 
+from rekordbox_collection_manager import __version__
 from rekordbox_collection_manager.gui.assets import get_app_icon, get_asset_path, get_refresh_icon
 from rekordbox_collection_manager.gui.history_view import HistoryView
 from rekordbox_collection_manager.gui.play_count_view import PlayCountView
@@ -260,7 +261,7 @@ class MainWindow(QMainWindow):
 
         sidebar_layout.addStretch(1)
 
-        self.app_ver = QLabel("v0.1.0 • Python 3.12")
+        self.app_ver = QLabel(f"v{__version__}")
         self.app_ver.setStyleSheet(f"color: {COLOR_TEXT_MUTED}; font-size: 11px; padding: 12px;")
         sidebar_layout.addWidget(self.app_ver)
 
