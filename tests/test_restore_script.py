@@ -46,10 +46,10 @@ class TestRestoreScript(unittest.TestCase):
             self.assertNotEqual(res.returncode, 0)
             self.assertIn("master.db", res.stdout)
 
-    def test_no_backups_found_on_desktop(self):
+    def test_no_backups_found_in_backups_folder(self):
         with tempfile.TemporaryDirectory() as fake_home:
-            desktop = Path(fake_home) / "Desktop"
-            desktop.mkdir()
+            backups_dir = Path(fake_home) / "Music" / "rekordbox" / "Backups"
+            backups_dir.mkdir(parents=True)
             res = self.run_script([], custom_env={"HOME": fake_home})
             self.assertNotEqual(res.returncode, 0)
             self.assertIn("Nessun backup Rekordbox trovato", res.stdout)
@@ -57,8 +57,8 @@ class TestRestoreScript(unittest.TestCase):
     def test_successful_restore_explicit_path_with_yes_flag(self):
         with tempfile.TemporaryDirectory() as fake_home:
             home = Path(fake_home)
-            desktop = home / "Desktop"
-            desktop.mkdir()
+            backups_dir = home / "Music" / "rekordbox" / "Backups"
+            backups_dir.mkdir(parents=True)
 
             # Create existing active Rekordbox library
             live_pioneer = home / "Library" / "Pioneer" / "rekordbox"
@@ -67,7 +67,7 @@ class TestRestoreScript(unittest.TestCase):
             (live_pioneer / "master.db-wal").write_text("OLD_ORPHAN_WAL")
 
             # Create backup folder
-            backup_dir = desktop / "rekordbox_mac_backup_20260901_120000"
+            backup_dir = backups_dir / "rekordbox_mac_backup_20260901_120000"
             backup_pioneer = backup_dir / "Pioneer_Library"
             backup_pioneer.mkdir(parents=True)
             (backup_pioneer / "master.db").write_text("BACKED_UP_DB_CONTENT")
@@ -86,8 +86,8 @@ class TestRestoreScript(unittest.TestCase):
             # Verify orphan master.db-wal was deleted
             self.assertFalse((live_pioneer / "master.db-wal").exists())
 
-            # Verify safety pre-restore backup was created on Desktop
-            safety_backups = list(desktop.glob("rekordbox_pre_restore_safety_*"))
+            # Verify safety pre-restore backup was created in Backups folder
+            safety_backups = list(backups_dir.glob("rekordbox_pre_restore_safety_*"))
             self.assertEqual(len(safety_backups), 1)
             safety_db = safety_backups[0] / "Pioneer_Library" / "master.db"
             self.assertTrue(safety_db.exists())
@@ -96,19 +96,19 @@ class TestRestoreScript(unittest.TestCase):
     def test_successful_restore_with_multiple_backups_interactive_choice(self):
         with tempfile.TemporaryDirectory() as fake_home:
             home = Path(fake_home)
-            desktop = home / "Desktop"
-            desktop.mkdir()
+            backups_dir = home / "Music" / "rekordbox" / "Backups"
+            backups_dir.mkdir(parents=True)
 
             live_pioneer = home / "Library" / "Pioneer" / "rekordbox"
             live_pioneer.mkdir(parents=True)
             (live_pioneer / "master.db").write_text("CURRENT")
 
             # Create 2 backups: backup 1 (older), backup 2 (newer)
-            b1 = desktop / "rekordbox_mac_backup_20260901_100000" / "Pioneer_Library"
+            b1 = backups_dir / "rekordbox_mac_backup_20260901_100000" / "Pioneer_Library"
             b1.mkdir(parents=True)
             (b1 / "master.db").write_text("OLDER_BACKUP")
 
-            b2 = desktop / "rekordbox_mac_backup_20260902_200000" / "Pioneer_Library"
+            b2 = backups_dir / "rekordbox_mac_backup_20260902_200000" / "Pioneer_Library"
             b2.mkdir(parents=True)
             (b2 / "master.db").write_text("NEWER_BACKUP")
 
@@ -122,8 +122,8 @@ class TestRestoreScript(unittest.TestCase):
     def test_restore_application_support_when_present(self):
         with tempfile.TemporaryDirectory() as fake_home:
             home = Path(fake_home)
-            desktop = home / "Desktop"
-            desktop.mkdir()
+            backups_dir = home / "Music" / "rekordbox" / "Backups"
+            backups_dir.mkdir(parents=True)
 
             live_pioneer = home / "Library" / "Pioneer" / "rekordbox"
             live_pioneer.mkdir(parents=True)
@@ -133,7 +133,7 @@ class TestRestoreScript(unittest.TestCase):
             live_appsupport.mkdir(parents=True)
             (live_appsupport / "config.json").write_text('{"ver": 1}')
 
-            backup_dir = desktop / "rekordbox_mac_backup_20260903_150000"
+            backup_dir = backups_dir / "rekordbox_mac_backup_20260903_150000"
             (backup_dir / "Pioneer_Library").mkdir(parents=True)
             (backup_dir / "Pioneer_Library" / "master.db").write_text("RESTORED_DB")
 

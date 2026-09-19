@@ -100,7 +100,7 @@ Features:
   - Dedicated `[-]` and `[+]` quick stepper buttons on each row.
   - Keyboard shortcuts (`+` and `-` keys adjust selected track).
   - Multi-select batch actions (+1, -1, reset to 0, or set custom value).
-- **Quick Backup**: One-click desktop snapshot of your database file.
+- **Quick Backup & Native macOS Menu Bar**: 1-click instant snapshot to `~/Music/rekordbox/Backups/`, native macOS `Database` menu (`Cmd+O` switch, `Cmd+R` reload, `Cmd+Shift+B` backup) and a guided `Restore from Backup...` dialog.
 
 #### Launching the Desktop App
 
@@ -129,34 +129,41 @@ uv run rekordbox-manager -d /Volumes/USB/PIONEER/exportLibrary.db
 
 ---
 
-### 4. Backup & Restore Scripts (`scripts/`)
+### 4. Backup & Restore Operations
 
-Safeguard and restore your entire macOS Rekordbox collection (`master.db`, playlists, sync caches, and configs) with dedicated disaster-recovery scripts:
+Safeguard and restore your entire macOS Rekordbox collection (`master.db`, playlists, sync caches, and configs) both inside the GUI application and via standalone CLI scripts:
 
-#### Create Backup:
+#### Stored in a Dedicated Location:
+Backups are organized in `~/Music/rekordbox/Backups/` (alongside Rekordbox's `Recording/` and `Sampler/` folders), keeping your Desktop clean and preventing unwanted iCloud Drive auto-sync uploads.
+
+#### A. In the Desktop App:
+- **`📦 Quick Backup` Header Button**: 1-click snapshot saved straight to `~/Music/rekordbox/Backups/` with prompt to reveal in Finder.
+- **`Database` Menu**:
+  - `📁 Switch Database...` (`Cmd+O`)
+  - `🔄 Reload Database` (`Cmd+R`)
+  - `📦 Create Backup...` (`Cmd+Shift+B`)
+  - `📥 Restore from Backup...`: Opens the guided **Restore Dialog** listing all snapshots with creation timestamps, sizes, Rekordbox process safety guard, and automatic collection reloading.
+  - `📂 Reveal Database in Finder` & `🗂️ Reveal Backups in Finder`
+
+#### B. Standalone Shell Scripts (`scripts/`):
 ```bash
+# Create timestamped collection snapshot:
 ./scripts/backup_rekordbox_mac.sh
-```
-- Creates a timestamped backup folder on your Desktop: `~/Desktop/rekordbox_mac_backup_YYYYMMDD_HHMMSS/`
-- Backs up both `~/Library/Pioneer/rekordbox` (database, XMLs, sync caches) and `~/Library/Application Support/Pioneer/rekordbox`.
-- Confirms Rekordbox is closed beforehand to prevent database locking issues.
 
-#### Restore Backup:
-```bash
-# Auto-detects Desktop backups and interactively prompts for selection:
+# Guided interactive restore (lists backups, prompts for choice):
 ./scripts/restore_rekordbox_mac.sh
 
-# Or restore a specific backup folder directly:
-./scripts/restore_rekordbox_mac.sh ~/Desktop/rekordbox_mac_backup_20260920_002628
+# Restore specific backup directly:
+./scripts/restore_rekordbox_mac.sh ~/Music/rekordbox/Backups/rekordbox_mac_backup_20260920_002628
 
 # Non-interactive mode (auto-confirms):
-./scripts/restore_rekordbox_mac.sh -y ~/Desktop/rekordbox_mac_backup_20260920_002628
+./scripts/restore_rekordbox_mac.sh -y ~/Music/rekordbox/Backups/rekordbox_mac_backup_20260920_002628
 ```
-Features & Safety Safeguards:
-- **Pre-Restore Safety Snapshot**: Automatically creates an emergency snapshot (`~/Desktop/rekordbox_pre_restore_safety_*`) of your *current* live library before touching anything, so you can always roll back.
-- **Clean Sync**: Restores all database files and purges stale/orphaned WAL and SHM journal files.
-- **Auto-Discovery**: Scans `~/Desktop` for `rekordbox_mac_backup_*` folders and lets you choose (defaulting to the latest).
-- **Process Check**: Warns and halts if Rekordbox is running to protect against concurrent file writes.
+
+Features & Safeguards:
+- **Pre-Restore Safety Snapshot**: Automatically creates an emergency snapshot (`rekordbox_pre_restore_safety_*`) of your live library before touching any files, ensuring you can always revert.
+- **Clean Sync (`rsync -aI --delete`)**: Eliminates stale or orphaned WAL and SHM journal files.
+- **Process Guard**: Prohibits restoration if Rekordbox is actively running.
 
 ---
 

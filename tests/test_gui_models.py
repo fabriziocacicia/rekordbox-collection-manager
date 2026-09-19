@@ -856,7 +856,7 @@ class TestMainWindowDbBadge(unittest.TestCase):
         self.assertIsNotNone(self.window.db_badge)
         self.assertEqual(self.window.db_badge.objectName(), "dbBadge")
         self.assertEqual(self.window.db_badge.height(), 28)
-        self.assertEqual(self.window.db_badge.cursor().shape(), Qt.CursorShape.PointingHandCursor)
+        self.assertEqual(self.window.db_badge.cursor().shape(), Qt.CursorShape.ArrowCursor)
         self.assertIsNotNone(self.window.db_icon_label.pixmap())
         self.assertIn("Resolving", self.window.db_label.text())
 

@@ -8,6 +8,7 @@ set -euo pipefail
 # l'applicazione 'Rekordbox Collection Manager'.
 # ==============================================================================
 
+BACKUP_ROOT="${HOME}/Music/rekordbox/Backups"
 DIR_PIONEER="${HOME}/Library/Pioneer/rekordbox"
 DIR_APPSUPPORT="${HOME}/Library/Application Support/Pioneer/rekordbox"
 
@@ -21,22 +22,23 @@ Descrizione:
   a partire da un backup precedentemente creato.
   
   Se non viene specificato alcun percorso, lo script cerca automaticamente
-  i backup presenti sulla Scrivania (~/Desktop) e permette di scegliere
-  quale ripristinare (proponendo come predefinito il più recente).
+  i backup presenti nella cartella predefinita:
+    ~/Music/rekordbox/Backups
+  e permette di scegliere quale ripristinare (proponendo come predefinito il più recente).
 
 Opzioni:
   -y, --yes      Salta la richiesta di conferma interattiva (modalità automatica)
   -h, --help     Mostra questo messaggio di aiuto ed esce
 
 Esempi:
-  # Cerca i backup sul Desktop e chiedi conferma interattiva:
+  # Cerca i backup in ~/Music/rekordbox/Backups e chiedi conferma interattiva:
   ./scripts/restore_rekordbox_mac.sh
 
   # Ripristina una specifica cartella di backup:
-  ./scripts/restore_rekordbox_mac.sh ~/Desktop/rekordbox_mac_backup_20260920_002628
+  ./scripts/restore_rekordbox_mac.sh ~/Music/rekordbox/Backups/rekordbox_mac_backup_20260920_002628
 
   # Ripristina senza prompt di conferma (scripting/CI):
-  ./scripts/restore_rekordbox_mac.sh -y ~/Desktop/rekordbox_mac_backup_20260920_002628
+  ./scripts/restore_rekordbox_mac.sh -y ~/Music/rekordbox/Backups/rekordbox_mac_backup_20260920_002628
 EOF
 }
 
@@ -96,23 +98,24 @@ if [ -n "${CUSTOM_BACKUP_PATH}" ]; then
     fi
     SELECTED_BACKUP="${CUSTOM_BACKUP_PATH}"
 else
-    # Ricerca automatica dei backup sul Desktop
+    # Ricerca automatica dei backup nella cartella predefinita
+    mkdir -p "${BACKUP_ROOT}"
     BACKUP_CANDIDATES=()
     while IFS= read -r -d $'\0' dir; do
         BACKUP_CANDIDATES+=("$dir")
-    done < <(find "${HOME}/Desktop" -maxdepth 1 -type d \( -name "rekordbox_mac_backup_*" -o -name "rekordbox_backup_*" \) -print0 2>/dev/null | sort -zr)
+    done < <(find "${BACKUP_ROOT}" -maxdepth 1 -type d \( -name "rekordbox_mac_backup_*" -o -name "rekordbox_backup_*" \) -print0 2>/dev/null | sort -zr)
 
     if [ ${#BACKUP_CANDIDATES[@]} -eq 0 ]; then
-        echo "❌ Nessun backup Rekordbox trovato sulla Scrivania (${HOME}/Desktop)."
+        echo "❌ Nessun backup Rekordbox trovato in: ${BACKUP_ROOT}"
         echo "   Puoi specificare manualmente il percorso della cartella:"
         echo "   $0 /percorso/alla/cartella_backup"
         exit 1
     elif [ ${#BACKUP_CANDIDATES[@]} -eq 1 ]; then
         SELECTED_BACKUP="${BACKUP_CANDIDATES[0]}"
-        echo "📦 Trovato 1 backup sulla Scrivania:"
+        echo "📦 Trovato 1 backup in ${BACKUP_ROOT}:"
         echo "   ${SELECTED_BACKUP}"
     else
-        echo "📦 Trovati ${#BACKUP_CANDIDATES[@]} backup sulla Scrivania:"
+        echo "📦 Trovati ${#BACKUP_CANDIDATES[@]} backup in ${BACKUP_ROOT}:"
         for i in "${!BACKUP_CANDIDATES[@]}"; do
             idx=$((i + 1))
             bname=$(basename "${BACKUP_CANDIDATES[$i]}")
@@ -191,7 +194,7 @@ fi
 
 # 6. Creazione Backup di Emergenza (Safety Pre-Restore Snapshot)
 SAFETY_TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-SAFETY_BACKUP_DIR="${HOME}/Desktop/rekordbox_pre_restore_safety_${SAFETY_TIMESTAMP}"
+SAFETY_BACKUP_DIR="${BACKUP_ROOT}/rekordbox_pre_restore_safety_${SAFETY_TIMESTAMP}"
 
 echo "🛡️  1/3 Creazione backup di emergenza dello stato attuale..."
 mkdir -p "${SAFETY_BACKUP_DIR}/Pioneer_Library"

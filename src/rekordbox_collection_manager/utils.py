@@ -351,6 +351,17 @@ def parse_year_month(date_str: Optional[str]) -> Tuple[Optional[int], Optional[i
     return None, None
 
 
+def format_file_size(size_bytes: int) -> str:
+    """Format file size in bytes to human-readable MB or KB string."""
+    if not size_bytes or size_bytes <= 0:
+        return "—"
+    mb = size_bytes / (1024 * 1024)
+    if mb >= 1.0:
+        return f"{mb:.1f} MB"
+    kb = size_bytes / 1024
+    return f"{kb:.0f} KB"
+
+
 def extract_date_from_name(name: Optional[str]) -> Optional[str]:
     """Extract YYYY-MM-DD date string from history/track/file name if present."""
     if not name:

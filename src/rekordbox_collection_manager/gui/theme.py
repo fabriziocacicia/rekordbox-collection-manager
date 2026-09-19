@@ -415,11 +415,6 @@ QFrame#dbBadge QLabel {{
     padding: 0px;
 }}
 
-QFrame#dbBadge:hover {{
-    background-color: {COLOR_BG_HOVER};
-    border-color: {COLOR_BORDER_LIGHT};
-}}
-
 /* Status Bar */
 QStatusBar {{
     background-color: {COLOR_BG_PANEL};

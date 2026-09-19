@@ -8,12 +8,13 @@ if pgrep -il rekordbox > /dev/null 2>&1; then
 fi
 
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-BACKUP_DIR="${HOME}/Desktop/rekordbox_mac_backup_${TIMESTAMP}"
+BACKUP_PARENT_DIR="${HOME}/Music/rekordbox/Backups"
+BACKUP_DIR="${BACKUP_PARENT_DIR}/rekordbox_mac_backup_${TIMESTAMP}"
 
 DIR_PIONEER="${HOME}/Library/Pioneer/rekordbox"
 DIR_APPSUPPORT="${HOME}/Library/Application Support/Pioneer/rekordbox"
 
-echo "📦 Creazione cartella backup sul Desktop..."
+echo "📦 Creazione cartella backup in ${BACKUP_PARENT_DIR}..."
 mkdir -p "${BACKUP_DIR}/Pioneer_Library"
 
 # 1. Backup del Database principale (master.db, backup, XML, sync)

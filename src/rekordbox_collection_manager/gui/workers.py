@@ -350,3 +350,56 @@ class TrackMergeWorker(QThread):
         except Exception as e:
             self.error.emit(str(e))
 
+
+class BackupWorker(QThread):
+    """Worker to create database backups in background without blocking UI."""
+
+    success = Signal(dict)
+    error = Signal(str)
+
+    def __init__(
+        self,
+        db_path: Optional[str] = None,
+        backup_dir: Optional[Any] = None,
+        parent: Optional[Any] = None,
+    ):
+        super().__init__(parent)
+        self.db_path = db_path
+        self.backup_dir = backup_dir
+
+    def run(self) -> None:
+        try:
+            from rekordbox_collection_manager.backup_restore import create_database_backup
+
+            res = create_database_backup(db_path=self.db_path, backup_dir=self.backup_dir)
+            self.success.emit(res)
+        except Exception as e:
+            self.error.emit(str(e))
+
+
+class RestoreWorker(QThread):
+    """Worker to perform database restoration in background without blocking UI."""
+
+    success = Signal(dict)
+    error = Signal(str)
+
+    def __init__(
+        self,
+        backup_path: Any,
+        backup_root: Optional[Any] = None,
+        parent: Optional[Any] = None,
+    ):
+        super().__init__(parent)
+        self.backup_path = backup_path
+        self.backup_root = backup_root
+
+    def run(self) -> None:
+        try:
+            from rekordbox_collection_manager.backup_restore import perform_restore
+
+            res = perform_restore(backup_path=self.backup_path, backup_root=self.backup_root)
+            self.success.emit(res)
+        except Exception as e:
+            self.error.emit(str(e))
+
+

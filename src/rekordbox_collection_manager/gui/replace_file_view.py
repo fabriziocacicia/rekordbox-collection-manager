@@ -1039,14 +1039,14 @@ class ReplaceFileView(QWidget):
 
         msg = (
             f"Are you sure you want to replace the audio file for:\n\n"
-            f"🎵 <b>{title}</b>\n\n"
-            f"• Upgrade: MP3 ➔ <b>AIFF</b>\n"
-            f"• Play count preserved: <b>{self.selected_track.get('play_count', 0)}</b> plays\n"
-            f"• Original Date Added preserved: <b>{self.selected_track.get('date_added')}</b>\n"
-            f"• History sessions preserved: <b>100% intact</b>\n"
-            f"• Cue points preserved: <b>100% intact</b>\n"
-            f"• Beatgrid & Waveform: <b>Queued for fresh Rekordbox analysis</b>\n"
-            f"• Old file action: <b>{action_text}</b>\n\n"
+            f"🎵 {title}\n\n"
+            f"• Upgrade: MP3 ➔ AIFF\n"
+            f"• Play count preserved: {self.selected_track.get('play_count', 0)} plays\n"
+            f"• Original Date Added preserved: {self.selected_track.get('date_added')}\n"
+            f"• History sessions preserved: 100% intact\n"
+            f"• Cue points preserved: 100% intact\n"
+            f"• Beatgrid & Waveform: Queued for fresh Rekordbox analysis\n"
+            f"• Old file action: {action_text}\n\n"
             "Proceed with replacement?"
         )
         reply = QMessageBox.question(
@@ -1088,14 +1088,14 @@ class ReplaceFileView(QWidget):
         self.mode1_status_label.setText("✅ Audio file successfully replaced!")
 
         success_msg = (
-            f"🎉 <b>Successfully Replaced Audio File!</b>\n\n"
-            f"Track: <b>{res['title']}</b> (ID: {res['content_id']})\n"
-            f"New File: <b>{res['new_file']['filename']}</b> ({res['new_file']['format']}, {res['new_file']['bitrate']} kbps)\n\n"
-            f"✅ <b>{res['play_count']}</b> plays preserved\n"
-            f"✅ Date added <b>{res['stock_date']}</b> preserved\n"
-            f"✅ <b>{res['history_plays_preserved']}</b> history session plays preserved\n"
-            f"✅ <b>{res['cues_preserved']}</b> cue points preserved\n"
-            f"✅ <b>{res['playlists_preserved']}</b> playlist assignments preserved\n"
+            f"🎉 Successfully Replaced Audio File!\n\n"
+            f"Track: {res['title']} (ID: {res['content_id']})\n"
+            f"New File: {res['new_file']['filename']} ({res['new_file']['format']}, {res['new_file']['bitrate']} kbps)\n\n"
+            f"✅ {res['play_count']} plays preserved\n"
+            f"✅ Date added {res['stock_date']} preserved\n"
+            f"✅ {res['history_plays_preserved']} history session plays preserved\n"
+            f"✅ {res['cues_preserved']} cue points preserved\n"
+            f"✅ {res['playlists_preserved']} playlist assignments preserved\n"
         )
         QMessageBox.information(self, "Replacement Complete", success_msg)
         self.notify_status.emit(f"Replaced audio file for '{res['title']}' with {res['new_file']['format']}")
@@ -1213,10 +1213,11 @@ class ReplaceFileView(QWidget):
 
         msg = (
             f"Merge and transfer all collection metadata from:\n\n"
-            f"Old MP3 Track: <b>{src_title}</b> ({src_plays} plays, Added: {src_added})\n"
-            f"➔ Into Target AIFF Track: <b>{tgt_title}</b>\n\n"
+            f"Old MP3 Track: {src_title} ({src_plays} plays, Added: {src_added})\n"
+            f"➔ Into Target AIFF Track: {tgt_title}\n\n"
             "This will transfer all history plays, play count, original date added, playlists, and cues, "
-            "and soft-delete the old MP3 duplicate track. Proceed?"
+            "and soft-delete the old MP3 duplicate track.\n\n"
+            "Proceed with replacement?"
         )
         reply = QMessageBox.question(
             self,
@@ -1249,12 +1250,12 @@ class ReplaceFileView(QWidget):
         self.merge_status_label.setText("✅ Tracks successfully merged!")
 
         msg = (
-            f"🎉 <b>Successfully Merged Tracks!</b>\n\n"
-            f"Target: <b>{res['title']}</b> (ID: {res['target_id']})\n"
-            f"✅ Transferred <b>{res['play_count_transferred']}</b> plays\n"
-            f"✅ Transferred Date Added: <b>{res['stock_date_transferred']}</b>\n"
-            f"✅ Transferred <b>{res['history_transferred']}</b> history sessions\n"
-            f"✅ Transferred <b>{res['playlists_transferred']}</b> playlist memberships\n"
+            f"🎉 Successfully Merged Tracks!\n\n"
+            f"Target: {res['title']} (ID: {res['target_id']})\n\n"
+            f"✅ Transferred {res['play_count_transferred']} plays\n"
+            f"✅ Transferred Date Added: {res['stock_date_transferred']}\n"
+            f"✅ Transferred {res['history_transferred']} history sessions\n"
+            f"✅ Transferred {res['playlists_transferred']} playlist memberships\n"
             f"✅ Old duplicate track archived.\n"
         )
         QMessageBox.information(self, "Merge Complete", msg)

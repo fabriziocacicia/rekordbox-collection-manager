@@ -2,11 +2,12 @@
 
 import os
 import shutil
+import subprocess
 import sys
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 from PySide6.QtCore import Property, QEasingCurve, QPropertyAnimation, QSize, QTimer, Qt
-from PySide6.QtGui import QKeySequence, QPixmap, QShortcut
+from PySide6.QtGui import QAction, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QButtonGroup,
     QFileDialog,
@@ -26,6 +27,10 @@ from PySide6.QtWidgets import (
 from sqlalchemy.engine import Engine
 
 from rekordbox_collection_manager import __version__
+from rekordbox_collection_manager.backup_restore import (
+    create_database_backup,
+    get_default_backup_dir,
+)
 from rekordbox_collection_manager.gui.assets import (
     get_app_icon,
     get_asset_path,
@@ -35,6 +40,7 @@ from rekordbox_collection_manager.gui.assets import (
 from rekordbox_collection_manager.gui.history_view import HistoryView
 from rekordbox_collection_manager.gui.play_count_view import PlayCountView
 from rekordbox_collection_manager.gui.replace_file_view import ReplaceFileView
+from rekordbox_collection_manager.gui.restore_dialog import RestoreDialog
 from rekordbox_collection_manager.gui.tracks_view import TracksView
 from rekordbox_collection_manager.gui.theme import (
     COLOR_AMBER,
@@ -45,7 +51,7 @@ from rekordbox_collection_manager.gui.theme import (
     COLOR_TEXT_PRIMARY,
     COLOR_TEXT_SECONDARY,
 )
-from rekordbox_collection_manager.gui.workers import DatabaseLoaderWorker
+from rekordbox_collection_manager.gui.workers import BackupWorker, DatabaseLoaderWorker
 from rekordbox_collection_manager.utils import (
     get_default_master_db_path,
     is_rekordbox_running,
@@ -117,6 +123,7 @@ class MainWindow(QMainWindow):
         self.history_records: List[Dict[str, Any]] = []
         self.total_tracks: int = 0
         self.is_sidebar_collapsed: bool = False
+        self._backup_worker: Optional[BackupWorker] = None
 
         self.nav_items = [
             {
@@ -207,15 +214,11 @@ class MainWindow(QMainWindow):
 
         header_layout.addStretch(1)
 
-        # Active Database Chip & Actions
+        # Active Database Chip (read-only status)
         self.db_badge = QFrame()
         self.db_badge.setObjectName("dbBadge")
         self.db_badge.setFixedHeight(28)
-        self.db_badge.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.db_badge.setToolTip("Active Rekordbox Database\nClick to switch database.")
-        self.db_badge.mousePressEvent = (
-            lambda ev: self._on_browse_db() if ev.button() == Qt.MouseButton.LeftButton else None
-        )
+        self.db_badge.setToolTip("Active Rekordbox Database")
 
         db_badge_layout = QHBoxLayout(self.db_badge)
         db_badge_layout.setContentsMargins(9, 0, 11, 0)
@@ -234,16 +237,11 @@ class MainWindow(QMainWindow):
 
         header_layout.addWidget(self.db_badge)
 
-        browse_btn = QPushButton("📁 Switch DB...")
-        browse_btn.setToolTip("Open custom master.db or USB exportLibrary.db")
-        browse_btn.clicked.connect(self._on_browse_db)
-        header_layout.addWidget(browse_btn)
-
         # Quick Backup Button
-        backup_btn = QPushButton("📦 Quick Backup")
-        backup_btn.setToolTip("Create instant timestamped backup of the database on Desktop")
-        backup_btn.clicked.connect(self._on_quick_backup)
-        header_layout.addWidget(backup_btn)
+        self.backup_btn = QPushButton("📦 Quick Backup")
+        self.backup_btn.setToolTip("Create instant timestamped backup in ~/Music/rekordbox/Backups")
+        self.backup_btn.clicked.connect(self._on_quick_backup)
+        header_layout.addWidget(self.backup_btn)
 
         root_layout.addWidget(header_frame)
 
@@ -358,6 +356,9 @@ class MainWindow(QMainWindow):
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
         self.status_bar.showMessage("Initializing Rekordbox Collection Manager...")
+
+        # 4. Native Application Menu Bar
+        self._setup_menu_bar()
 
     def _on_nav_clicked(self, page_id: int) -> None:
         curr = self.stacked_widget.currentIndex()
@@ -517,7 +518,7 @@ class MainWindow(QMainWindow):
 
         self.db_icon_label.setPixmap(get_database_pixmap(COLOR_BLUE, size=14))
         self.db_label.setText(display_html)
-        tip_text = f"Active Database:\n{path}\n\nClick to switch database."
+        tip_text = f"Active Database:\n{path}"
         self.db_badge.setToolTip(tip_text)
         self.db_label.setToolTip(tip_text)
 
@@ -556,7 +557,7 @@ class MainWindow(QMainWindow):
         self.db_label.setText(
             f'<span style="color: {COLOR_RED}; font-size: 11px; font-weight: 500;">DB Error</span>'
         )
-        tip_error = f"Database Error:\n{err_msg}\n\nClick to select a database."
+        tip_error = f"Database Error:\n{err_msg}"
         self.db_badge.setToolTip(tip_error)
         self.db_label.setToolTip(tip_error)
         QMessageBox.critical(
@@ -577,37 +578,120 @@ class MainWindow(QMainWindow):
         if file_path:
             self.load_database(file_path)
 
+    def _setup_menu_bar(self) -> None:
+        """Set up native application menu bar (Database & View menus)."""
+        menu_bar = self.menuBar()
+
+        # --- 1. Database Menu ---
+        db_menu = menu_bar.addMenu("&Database")
+
+        act_switch_db = QAction("📁 Switch Database...", self)
+        act_switch_db.setShortcut(QKeySequence.StandardKey.Open)
+        act_switch_db.triggered.connect(self._on_browse_db)
+        db_menu.addAction(act_switch_db)
+
+        act_reload_db = QAction("🔄 Reload Database", self)
+        act_reload_db.setShortcut(QKeySequence.StandardKey.Refresh)
+        act_reload_db.triggered.connect(lambda: self.load_database(self.db_path))
+        db_menu.addAction(act_reload_db)
+
+        db_menu.addSeparator()
+
+        act_backup = QAction("📦 Create Backup...", self)
+        act_backup.setShortcut(QKeySequence("Ctrl+Shift+B"))
+        act_backup.triggered.connect(self._on_quick_backup)
+        db_menu.addAction(act_backup)
+
+        act_restore = QAction("📥 Restore from Backup...", self)
+        act_restore.triggered.connect(self._on_open_restore_dialog)
+        db_menu.addAction(act_restore)
+
+        db_menu.addSeparator()
+
+        act_reveal_db = QAction("📂 Reveal Database in Finder", self)
+        act_reveal_db.triggered.connect(self._on_reveal_db_in_finder)
+        db_menu.addAction(act_reveal_db)
+
+        act_reveal_backups = QAction("🗂️ Reveal Backups in Finder", self)
+        act_reveal_backups.triggered.connect(self._on_reveal_backups_in_finder)
+        db_menu.addAction(act_reveal_backups)
+
+    def _switch_to_tab(self, index: int) -> None:
+        """Switch navigation to tab by index."""
+        if 0 <= index < len(self.nav_buttons):
+            self.nav_buttons[index].setChecked(True)
+            self._on_nav_clicked(index)
+
     def _on_quick_backup(self) -> None:
-        """Create a quick timestamped backup of the current database on the Desktop."""
+        """Create a quick timestamped backup in ~/Music/rekordbox/Backups asynchronously."""
         if not self.db_path or not os.path.exists(self.db_path):
             QMessageBox.warning(self, "Backup Warning", "No valid database is currently open to back up.")
             return
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        desktop_dir = os.path.expanduser("~/Desktop")
-        backup_folder = os.path.join(desktop_dir, f"rekordbox_backup_{timestamp}")
+        if self._backup_worker and self._backup_worker.isRunning():
+            return
 
-        try:
-            os.makedirs(backup_folder, exist_ok=True)
-            db_filename = os.path.basename(self.db_path)
-            dest_file = os.path.join(backup_folder, db_filename)
-            shutil.copy2(self.db_path, dest_file)
+        self.backup_btn.setEnabled(False)
+        self.backup_btn.setText("⏳ Backing up...")
+        self.status_bar.showMessage("⏳ Creating backup snapshot in ~/Music/rekordbox/Backups...", 0)
 
-            # Also copy .edb or wal/shm if present
-            for ext in ["-wal", "-shm"]:
-                extra_file = self.db_path + ext
-                if os.path.exists(extra_file):
-                    shutil.copy2(extra_file, os.path.join(backup_folder, os.path.basename(extra_file)))
+        self._backup_worker = BackupWorker(db_path=self.db_path, parent=self)
+        self._backup_worker.success.connect(self._on_backup_success)
+        self._backup_worker.error.connect(self._on_backup_error)
+        self._backup_worker.start()
 
-            self.status_bar.showMessage(f"✅ Backup created at: {backup_folder}", 7000)
-            QMessageBox.information(
-                self,
-                "Backup Successful",
-                f"Database snapshot successfully saved to:\n{backup_folder}\n\n"
-                f"File: {db_filename}",
-            )
-        except Exception as e:
-            QMessageBox.critical(self, "Backup Failed", f"Failed to create backup:\n{e}")
+    def _on_backup_success(self, res: Dict[str, Any]) -> None:
+        self.backup_btn.setEnabled(True)
+        self.backup_btn.setText("📦 Quick Backup")
+        self.status_bar.showMessage(f"✅ Backup created in: {res['backup_folder']}", 7000)
+        ans = QMessageBox.information(
+            self,
+            "Backup Successful",
+            f"Collection snapshot successfully created!\n\n"
+            f"Type: {res['type']}\n"
+            f"Folder: {res['backup_folder']}\n"
+            f"Size: {res['db_size_formatted']}",
+            QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Open,
+            QMessageBox.StandardButton.Ok,
+        )
+        if ans == QMessageBox.StandardButton.Open:
+            self._on_reveal_backups_in_finder()
+
+    def _on_backup_error(self, err_msg: str) -> None:
+        self.backup_btn.setEnabled(True)
+        self.backup_btn.setText("📦 Quick Backup")
+        self.status_bar.showMessage(f"❌ Backup failed: {err_msg}", 7000)
+        QMessageBox.critical(self, "Backup Failed", f"Failed to create backup:\n{err_msg}")
+
+    def _on_open_restore_dialog(self) -> None:
+        """Open guided Restore dialog."""
+        dlg = RestoreDialog(parent=self, current_db_path=self.db_path)
+        dlg.restore_completed.connect(self._on_restore_completed)
+        dlg.exec()
+
+    def _on_restore_completed(self, restored_path: str) -> None:
+        """Handle completion of restore operation and reload database."""
+        self.status_bar.showMessage("✅ Collection restored. Reloading database...", 6000)
+        self.load_database(self.db_path)
+
+    def _on_reveal_db_in_finder(self) -> None:
+        """Reveal active database file in macOS Finder."""
+        if self.db_path and os.path.exists(self.db_path):
+            if sys.platform == "darwin":
+                subprocess.run(["open", "-R", self.db_path], check=False)
+            else:
+                subprocess.run(["xdg-open", os.path.dirname(self.db_path)], check=False)
+        else:
+            QMessageBox.warning(self, "Reveal in Finder", "Database file not found on disk.")
+
+    def _on_reveal_backups_in_finder(self) -> None:
+        """Open default Backups folder in macOS Finder."""
+        backup_dir = get_default_backup_dir()
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        if sys.platform == "darwin":
+            subprocess.run(["open", str(backup_dir)], check=False)
+        else:
+            subprocess.run(["xdg-open", str(backup_dir)], check=False)
 
     def _show_status_message(self, msg: str) -> None:
         self.status_bar.showMessage(msg, 5000)
