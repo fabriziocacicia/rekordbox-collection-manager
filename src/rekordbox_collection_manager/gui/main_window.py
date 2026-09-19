@@ -34,6 +34,7 @@ from rekordbox_collection_manager.gui.assets import (
 )
 from rekordbox_collection_manager.gui.history_view import HistoryView
 from rekordbox_collection_manager.gui.play_count_view import PlayCountView
+from rekordbox_collection_manager.gui.replace_file_view import ReplaceFileView
 from rekordbox_collection_manager.gui.tracks_view import TracksView
 from rekordbox_collection_manager.gui.theme import (
     COLOR_AMBER,
@@ -135,6 +136,11 @@ class MainWindow(QMainWindow):
             },
             {
                 "id": 3,
+                "icon": "🔄",
+                "title": "Replace File",
+            },
+            {
+                "id": 4,
                 "icon": "ℹ️",
                 "title": "Collection Info",
             },
@@ -293,7 +299,8 @@ class MainWindow(QMainWindow):
         self.btn_history = self.nav_buttons[0]
         self.btn_tracks = self.nav_buttons[1]
         self.btn_play_count = self.nav_buttons[2]
-        self.btn_info = self.nav_buttons[3]
+        self.btn_replace_file = self.nav_buttons[3]
+        self.btn_info = self.nav_buttons[4]
 
         sidebar_layout.addStretch(1)
 
@@ -332,6 +339,15 @@ class MainWindow(QMainWindow):
         self.play_count_view.open_history_session_requested.connect(self.open_history_session)
         self.stacked_widget.addWidget(self.play_count_view)
 
+        self.replace_file_view = ReplaceFileView(self)
+        self.replace_file_view.notify_status.connect(self._show_status_message)
+        self.replace_file_view.open_history_session_requested.connect(self.open_history_session)
+        self.stacked_widget.addWidget(self.replace_file_view)
+
+        self.tracks_view.replace_file_requested.connect(self.open_replace_file_for_track)
+        self.history_view.replace_file_requested.connect(self.open_replace_file_for_track)
+        self.play_count_view.replace_file_requested.connect(self.open_replace_file_for_track)
+
         self.info_view = InfoView(self)
         self.stacked_widget.addWidget(self.info_view)
 
@@ -360,6 +376,13 @@ class MainWindow(QMainWindow):
             self.nav_buttons[0].setChecked(True)
         self.stacked_widget.setCurrentIndex(0)
         self.history_view.open_session_by_id(history_id)
+
+    def open_replace_file_for_track(self, track_data: Dict[str, Any]) -> None:
+        """Switch navigation to Replace File tab and preselect track."""
+        if self.nav_buttons and len(self.nav_buttons) > 3:
+            self.nav_buttons[3].setChecked(True)
+        self.stacked_widget.setCurrentIndex(3)
+        self.replace_file_view.preselect_track(track_data)
 
     def toggle_sidebar(self) -> None:
         """Toggle sidebar between expanded and collapsed icon-only mode."""
@@ -510,6 +533,7 @@ class MainWindow(QMainWindow):
         self.history_view.set_data(engine, history_records, db_path=path)
         self.tracks_view.set_engine(engine, total_tracks=total_tracks, db_path=path)
         self.play_count_view.set_engine(engine, db_path=path)
+        self.replace_file_view.set_engine(engine, db_path=path)
 
         self.info_view.set_info({
             "Database File": path,

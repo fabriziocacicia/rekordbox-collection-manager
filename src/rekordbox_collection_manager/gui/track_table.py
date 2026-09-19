@@ -400,6 +400,7 @@ class TracksTableWidget(QTableWidget):
     sort_requested = Signal(str, Qt.SortOrder)
     status_message = Signal(str)
     track_detail_requested = Signal(dict)
+    replace_file_requested = Signal(dict)
 
     def __init__(
         self,
@@ -889,6 +890,17 @@ class TracksTableWidget(QTableWidget):
 
         menu = QMenu(self)
         act_details = menu.addAction("ℹ️ View Track Details...")
+
+        is_mp3 = (
+            str(track.get("file_type", "")).upper() == "MP3"
+            or str(track.get("file_name", "")).lower().endswith(".mp3")
+            or str(file_path).lower().endswith(".mp3")
+        )
+        if is_mp3:
+            act_replace = menu.addAction("🔄 Upgrade MP3 to AIFF...")
+        else:
+            act_replace = menu.addAction("🔄 Upgrade to AIFF (MP3 only)")
+            act_replace.setEnabled(False)
         menu.addSeparator()
         act_open_folder = menu.addAction("📁 Open Containing Folder")
         act_reveal_file = menu.addAction("🔍 Reveal in Finder")
@@ -900,6 +912,8 @@ class TracksTableWidget(QTableWidget):
         action = menu.exec(self.viewport().mapToGlobal(pos))
         if action == act_details:
             self.track_detail_requested.emit(track)
+        elif action == act_replace:
+            self.replace_file_requested.emit(track)
         elif action == act_open_folder:
             self.open_folder(folder_dir)
         elif action == act_reveal_file:

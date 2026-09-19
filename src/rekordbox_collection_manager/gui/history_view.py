@@ -50,6 +50,7 @@ class HistoryView(QWidget):
 
     notify_status = Signal(str)
     request_reload = Signal()
+    replace_file_requested = Signal(dict)
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -208,6 +209,7 @@ class HistoryView(QWidget):
         self.track_detail_view.open_history_session_requested.connect(self._open_session_detail)
         self.track_detail_view.status_message.connect(self.notify_status.emit)
         self.track_detail_view.track_changed.connect(self._on_track_detail_changed)
+        self.track_detail_view.replace_file_requested.connect(self.replace_file_requested.emit)
         self.stack.addWidget(self.track_detail_view)
 
     def set_data(

@@ -399,6 +399,7 @@ class TestMainWindowSidebar(unittest.TestCase):
         self.assertEqual(self.window.btn_history.text(), "🕒  History Sessions")
         self.assertEqual(self.window.btn_tracks.text(), "🎵  Tracks")
         self.assertEqual(self.window.btn_play_count.text(), "🔢  Play Counts")
+        self.assertEqual(self.window.btn_replace_file.text(), "🔄  Replace File")
         self.assertEqual(self.window.btn_info.text(), "ℹ️  Collection Info")
         self.assertFalse(self.window.sidebar_section_label.isHidden())
         self.assertFalse(self.window.app_ver.isHidden())
@@ -411,6 +412,7 @@ class TestMainWindowSidebar(unittest.TestCase):
         self.assertEqual(self.window.btn_history.text(), "🕒")
         self.assertEqual(self.window.btn_tracks.text(), "🎵")
         self.assertEqual(self.window.btn_play_count.text(), "🔢")
+        self.assertEqual(self.window.btn_replace_file.text(), "🔄")
         self.assertEqual(self.window.btn_info.text(), "ℹ️")
         self.assertTrue(self.window.sidebar_section_label.isHidden())
         self.assertTrue(self.window.app_ver.isHidden())
@@ -418,6 +420,7 @@ class TestMainWindowSidebar(unittest.TestCase):
         self.assertEqual(self.window.btn_history.toolTip(), "History Sessions")
         self.assertEqual(self.window.btn_tracks.toolTip(), "Tracks")
         self.assertEqual(self.window.btn_play_count.toolTip(), "Play Counts")
+        self.assertEqual(self.window.btn_replace_file.toolTip(), "Replace File")
         self.assertEqual(self.window.btn_info.toolTip(), "Collection Info")
 
     def test_sidebar_expand(self):
@@ -444,8 +447,10 @@ class TestMainWindowSidebar(unittest.TestCase):
         self.assertEqual(self.window.stacked_widget.currentIndex(), 1)
         self.window.btn_play_count.click()
         self.assertEqual(self.window.stacked_widget.currentIndex(), 2)
-        self.window.btn_info.click()
+        self.window.btn_replace_file.click()
         self.assertEqual(self.window.stacked_widget.currentIndex(), 3)
+        self.window.btn_info.click()
+        self.assertEqual(self.window.stacked_widget.currentIndex(), 4)
 
     def test_refresh_button_icon_and_action(self):
         from rekordbox_collection_manager.gui.assets import get_refresh_icon

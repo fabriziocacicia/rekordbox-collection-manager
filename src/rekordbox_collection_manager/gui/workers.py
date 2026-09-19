@@ -260,3 +260,93 @@ class TrackDetailWorker(QThread):
         except Exception as e:
             self.error.emit(str(e))
 
+
+class AudioInspectWorker(QThread):
+    """Worker to extract audio file specs without freezing UI."""
+
+    success = Signal(dict)  # audio specs dict
+    error = Signal(str)
+
+    def __init__(self, file_path: str, parent: Optional[Any] = None):
+        super().__init__(parent)
+        self.file_path = file_path
+
+    def run(self) -> None:
+        try:
+            from rekordbox_collection_manager.replace_file import inspect_audio_file
+
+            info = inspect_audio_file(self.file_path)
+            self.success.emit(info)
+        except Exception as e:
+            self.error.emit(str(e))
+
+
+class TrackReplaceWorker(QThread):
+    """Worker to perform track audio file replacement in background."""
+
+    success = Signal(dict)  # result dict
+    error = Signal(str)
+
+    def __init__(
+        self,
+        engine: Engine,
+        content_id: str,
+        new_file_path: str,
+        options: Optional[Dict[str, Any]] = None,
+        parent: Optional[Any] = None,
+    ):
+        super().__init__(parent)
+        self.engine = engine
+        self.content_id = content_id
+        self.new_file_path = new_file_path
+        self.options = options or {}
+
+    def run(self) -> None:
+        try:
+            from rekordbox_collection_manager.replace_file import replace_track_audio_file
+
+            res = replace_track_audio_file(
+                self.engine,
+                self.content_id,
+                self.new_file_path,
+                options=self.options,
+            )
+            self.success.emit(res)
+        except Exception as e:
+            self.error.emit(str(e))
+
+
+class TrackMergeWorker(QThread):
+    """Worker to merge old collection track into a newly imported track in background."""
+
+    success = Signal(dict)  # result dict
+    error = Signal(str)
+
+    def __init__(
+        self,
+        engine: Engine,
+        source_content_id: str,
+        target_content_id: str,
+        options: Optional[Dict[str, Any]] = None,
+        parent: Optional[Any] = None,
+    ):
+        super().__init__(parent)
+        self.engine = engine
+        self.source_content_id = source_content_id
+        self.target_content_id = target_content_id
+        self.options = options or {}
+
+    def run(self) -> None:
+        try:
+            from rekordbox_collection_manager.replace_file import merge_imported_tracks
+
+            res = merge_imported_tracks(
+                self.engine,
+                self.source_content_id,
+                self.target_content_id,
+                options=self.options,
+            )
+            self.success.emit(res)
+        except Exception as e:
+            self.error.emit(str(e))
+

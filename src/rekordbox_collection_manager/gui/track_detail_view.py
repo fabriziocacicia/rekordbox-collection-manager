@@ -93,6 +93,7 @@ class TrackDetailView(QWidget):
     open_history_session_requested = Signal(str)  # Emits history_id
     status_message = Signal(str)
     track_changed = Signal(int, dict)  # Emits (current_index, track_dict)
+    replace_file_requested = Signal(dict)  # Emits track_dict to open Replace File tool
 
     def __init__(
         self,
@@ -158,6 +159,12 @@ class TrackDetailView(QWidget):
         self.next_btn.setToolTip("Next track in collection (Right Arrow)")
         self.next_btn.clicked.connect(self._on_next_track)
         top_bar.addWidget(self.next_btn)
+
+        self.replace_btn = QPushButton("🔄 Replace File...")
+        self.replace_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.replace_btn.setToolTip("Upgrade or replace this track's audio file on disk")
+        self.replace_btn.clicked.connect(lambda: self.replace_file_requested.emit(self.track))
+        top_bar.addWidget(self.replace_btn)
 
         root_layout.addLayout(top_bar)
 
@@ -657,6 +664,21 @@ class TrackDetailView(QWidget):
             self.pos_indicator.setText("")
             self.prev_btn.setEnabled(False)
             self.next_btn.setEnabled(False)
+
+        # Replace File Button (MP3 to AIFF only)
+        is_mp3 = (
+            str(file_type).upper() == "MP3"
+            or str(t.get("file_name", "")).lower().endswith(".mp3")
+            or str(fp).lower().endswith(".mp3")
+        )
+        if is_mp3:
+            self.replace_btn.setEnabled(True)
+            self.replace_btn.setText("🔄 Replace File (MP3 ➔ AIFF)...")
+            self.replace_btn.setToolTip("Upgrade this MP3 track to AIFF while preserving plays, date added, cues, and history")
+        else:
+            self.replace_btn.setEnabled(False)
+            self.replace_btn.setText("🔄 Replace File (MP3 only)")
+            self.replace_btn.setToolTip(f"Replace File currently only supports MP3 tracks ({file_type} not supported)")
 
         # History plays table (if preloaded)
         history_plays = t.get("history_plays")

@@ -41,6 +41,7 @@ class TracksView(QWidget):
 
     notify_status = Signal(str)
     open_history_session_requested = Signal(str)
+    replace_file_requested = Signal(dict)
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -142,6 +143,7 @@ class TracksView(QWidget):
         self.table.folder_clicked.connect(self._on_open_folder)
         self.table.file_clicked.connect(self._on_reveal_file)
         self.table.track_detail_requested.connect(self._open_track_detail)
+        self.table.replace_file_requested.connect(self.replace_file_requested.emit)
         main_layout.addWidget(self.table, stretch=1)
 
         # 3. Bottom Status Bar
@@ -158,6 +160,7 @@ class TracksView(QWidget):
         self.detail_view.open_history_session_requested.connect(self.open_history_session_requested.emit)
         self.detail_view.status_message.connect(self._on_table_status_message)
         self.detail_view.track_changed.connect(self._on_detail_track_changed)
+        self.detail_view.replace_file_requested.connect(self.replace_file_requested.emit)
         self.stack.addWidget(self.detail_view)
 
     def reset_to_list(self) -> None:
