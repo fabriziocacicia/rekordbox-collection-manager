@@ -70,9 +70,10 @@ class TrackSearchWorker(QThread):
         self,
         engine: Engine,
         query: str,
-        limit: int = 150,
+        limit: Optional[int] = 150,
         sort_by: str = "title",
         sort_order: str = "asc",
+        play_count_filter: Optional[str] = "all",
         parent: Optional[Any] = None,
     ):
         super().__init__(parent)
@@ -81,6 +82,7 @@ class TrackSearchWorker(QThread):
         self.limit = limit
         self.sort_by = sort_by
         self.sort_order = sort_order
+        self.play_count_filter = play_count_filter
 
     def run(self) -> None:
         try:
@@ -90,6 +92,7 @@ class TrackSearchWorker(QThread):
                 limit=self.limit,
                 sort_by=self.sort_by,
                 sort_order=self.sort_order,
+                play_count_filter=self.play_count_filter,
             )
             self.success.emit(self.query, records)
         except Exception as e:

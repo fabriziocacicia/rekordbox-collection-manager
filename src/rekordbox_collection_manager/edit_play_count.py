@@ -69,12 +69,18 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
 def search_tracks(
     engine: Engine,
     query: str,
-    limit: int = 50,
+    limit: Optional[int] = 50,
     table_name: Optional[str] = None,
     sort_by: str = "title",
     sort_order: str = "asc",
+    play_count_filter: Optional[str] = "all",
 ) -> List[Dict[str, Any]]:
-    """Search for tracks matching query string in Title, SearchStr, or Artist Name."""
+    """Search for tracks matching query string with rich metadata support.
+
+    Dynamically queries djmdContent (or generic content table) and joins
+    artist, album, genre, and key tables when present. Supports text searching,
+    play count filtering ('all', 'played', 'unplayed'), and column sorting.
+    """
     if table_name is None:
         table_name = detect_content_table(engine)
 
@@ -84,91 +90,189 @@ def search_tracks(
     is_desc = str(sort_order).lower() == "desc"
     order_dir = "DESC" if is_desc else "ASC"
 
-    records = []
+    records: List[Dict[str, Any]] = []
     with engine.connect() as conn:
         cols = {
             r[1]
             for r in conn.exec_driver_sql(f"PRAGMA table_info({table_name});").fetchall()
         }
 
-        res = conn.exec_driver_sql(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('djmdArtist', 'artist');"
+        all_tables_res = conn.exec_driver_sql(
+            "SELECT name FROM sqlite_master WHERE type='table';"
         ).fetchall()
-        artist_tables = {r[0] for r in res}
-        artist_table = "djmdArtist" if "djmdArtist" in artist_tables else ("artist" if "artist" in artist_tables else None)
+        existing_tables = {r[0] for r in all_tables_res}
 
         if table_name == "djmdContent":
-            join_clause = ""
-            artist_col_expr = "c.SrcArtistName"
-            if artist_table == "djmdArtist":
-                join_clause = "LEFT JOIN djmdArtist a ON c.ArtistID = a.ID"
+            joins = []
+            if "djmdArtist" in existing_tables and "ArtistID" in cols:
+                joins.append("LEFT JOIN djmdArtist a ON c.ArtistID = a.ID")
                 artist_col_expr = "COALESCE(a.Name, c.SrcArtistName, 'Unknown Artist')"
+            elif "SrcArtistName" in cols:
+                artist_col_expr = "COALESCE(c.SrcArtistName, 'Unknown Artist')"
+            else:
+                artist_col_expr = "'Unknown Artist'"
 
+            if "djmdAlbum" in existing_tables and "AlbumID" in cols:
+                joins.append("LEFT JOIN djmdAlbum al ON c.AlbumID = al.ID")
+                album_col_expr = "al.Name"
+            else:
+                album_col_expr = "NULL"
+
+            if "djmdGenre" in existing_tables and "GenreID" in cols:
+                joins.append("LEFT JOIN djmdGenre g ON c.GenreID = g.ID")
+                genre_col_expr = "g.Name"
+            else:
+                genre_col_expr = "NULL"
+
+            if "djmdKey" in existing_tables and "KeyID" in cols:
+                joins.append("LEFT JOIN djmdKey k ON c.KeyID = k.ID")
+                key_col_expr = "k.ScaleName"
+            else:
+                key_col_expr = "NULL"
+
+            join_clause = "\n".join(joins)
+
+            # Columns
+            bpm_expr = "c.BPM" if "BPM" in cols else "0 AS BPM"
+            length_expr = "c.Length" if "Length" in cols else "0 AS Length"
+            play_col = "c.DJPlayCount" if "DJPlayCount" in cols else ("c.PlayCount" if "PlayCount" in cols else "0")
+            play_expr = f"{play_col} AS DJPlayCount"
+            rating_expr = "c.Rating" if "Rating" in cols else "0 AS Rating"
+            year_expr = "c.ReleaseYear" if "ReleaseYear" in cols else "0 AS ReleaseYear"
+            bitrate_expr = "c.BitRate" if "BitRate" in cols else "0 AS BitRate"
+            comment_expr = "c.Commnt" if "Commnt" in cols else "'' AS Commnt"
+            folder_expr = "c.FolderPath" if "FolderPath" in cols else "'' AS FolderPath"
+            filename_expr = "c.FileNameL" if "FileNameL" in cols else "'' AS FileNameL"
+
+            # Deleted filter
             deleted_filter = "AND (c.rb_local_deleted = 0 OR c.rb_local_deleted IS NULL)" if "rb_local_deleted" in cols else ""
 
+            # Play count filter
+            play_filter = ""
+            if play_count_filter == "played":
+                play_filter = f"AND ({play_col} > 0)"
+            elif play_count_filter == "unplayed":
+                play_filter = f"AND ({play_col} = 0 OR {play_col} IS NULL)"
+
+            # Search condition
+            search_condition = ""
+            if query_str:
+                search_parts = ["c.Title LIKE :pattern"]
+                if "SearchStr" in cols:
+                    search_parts.append("c.SearchStr LIKE :pattern")
+                if "djmdArtist" in existing_tables and "ArtistID" in cols:
+                    search_parts.append("a.Name LIKE :pattern")
+                if "SrcArtistName" in cols:
+                    search_parts.append("c.SrcArtistName LIKE :pattern")
+                if "FileNameL" in cols:
+                    search_parts.append("c.FileNameL LIKE :pattern")
+                if "djmdAlbum" in existing_tables and "AlbumID" in cols:
+                    search_parts.append("al.Name LIKE :pattern")
+                if "djmdGenre" in existing_tables and "GenreID" in cols:
+                    search_parts.append("g.Name LIKE :pattern")
+                if "djmdKey" in existing_tables and "KeyID" in cols:
+                    search_parts.append("k.ScaleName LIKE :pattern")
+                search_condition = "AND (" + " OR ".join(search_parts) + ")"
+
+            # Order clause
             if sort_by == "play_count":
-                order_clause = f"c.DJPlayCount {order_dir}, c.Title ASC"
+                order_clause = f"{play_col} {order_dir}, c.Title ASC"
             elif sort_by == "artist":
                 order_clause = f"{artist_col_expr} {order_dir}, c.Title ASC"
+            elif sort_by == "album":
+                order_clause = f"{album_col_expr} {order_dir}, c.Title ASC"
+            elif sort_by == "key":
+                order_clause = f"{key_col_expr} {order_dir}, c.Title ASC"
+            elif sort_by == "bpm":
+                order_clause = f"c.BPM {order_dir}, c.Title ASC" if "BPM" in cols else "c.Title ASC"
+            elif sort_by in ("duration", "time"):
+                order_clause = f"c.Length {order_dir}, c.Title ASC" if "Length" in cols else "c.Title ASC"
+            elif sort_by == "bitrate":
+                order_clause = f"c.BitRate {order_dir}, c.Title ASC" if "BitRate" in cols else "c.Title ASC"
             elif sort_by == "location":
-                order_clause = f"c.FileNameL {order_dir}, c.Title ASC"
+                order_clause = f"c.FileNameL {order_dir}, c.Title ASC" if "FileNameL" in cols else "c.Title ASC"
             elif sort_by == "title" and is_desc:
                 order_clause = "c.Title DESC"
+            elif sort_by == "title" and not is_desc and query_str:
+                order_clause = """CASE 
+                    WHEN lower(c.Title) = lower(:exact) THEN 1
+                    WHEN lower(c.Title) LIKE lower(:starts_with) THEN 2
+                    ELSE 3
+                END, c.Title ASC"""
             else:
-                if query_str:
-                    order_clause = """CASE 
-                        WHEN lower(c.Title) = lower(:exact) THEN 1
-                        WHEN lower(c.Title) LIKE lower(:starts_with) THEN 2
-                        ELSE 3
-                    END, c.Title ASC"""
-                else:
-                    order_clause = "c.Title ASC"
+                order_clause = "c.Title ASC"
+
+            limit_clause = "LIMIT :limit" if (limit and limit > 0) else ""
 
             sql = f"""
                 SELECT 
                     c.ID, 
                     c.Title, 
                     {artist_col_expr} AS ArtistName, 
-                    c.DJPlayCount,
-                    c.FolderPath,
-                    c.FileNameL
+                    {album_col_expr} AS AlbumName,
+                    {genre_col_expr} AS GenreName,
+                    {key_col_expr} AS KeyName,
+                    {bpm_expr},
+                    {length_expr},
+                    {play_expr},
+                    {rating_expr},
+                    {year_expr},
+                    {bitrate_expr},
+                    {comment_expr},
+                    {folder_expr},
+                    {filename_expr}
                 FROM djmdContent c
                 {join_clause}
-                WHERE 1=1 {deleted_filter}
-                  AND (
-                      c.Title LIKE :pattern 
-                      OR c.SearchStr LIKE :pattern 
-                      {"OR a.Name LIKE :pattern" if artist_table == "djmdArtist" else ""}
-                      OR c.SrcArtistName LIKE :pattern
-                      OR c.FileNameL LIKE :pattern
-                  )
+                WHERE 1=1 {deleted_filter} {play_filter} {search_condition}
                 ORDER BY {order_clause}
-                LIMIT :limit;
+                {limit_clause};
             """
-            rows = conn.execute(
-                text(sql),
-                {
-                    "pattern": pattern,
-                    "exact": query_str,
-                    "starts_with": starts_with,
-                    "limit": limit,
-                },
-            ).fetchall()
+            params: Dict[str, Any] = {
+                "pattern": pattern,
+                "exact": query_str,
+                "starts_with": starts_with,
+            }
+            if limit and limit > 0:
+                params["limit"] = limit
+
+            rows = conn.execute(text(sql), params).mappings().fetchall()
 
             for r in rows:
-                raw_count = r[3]
+                raw_count = r.get("DJPlayCount")
                 try:
                     count_int = int(raw_count) if raw_count is not None else 0
                 except (ValueError, TypeError):
                     count_int = 0
 
+                bpm_raw = r.get("BPM")
+                bpm_val = round(float(bpm_raw) / 100.0, 1) if bpm_raw and bpm_raw > 0 else 0.0
+
+                duration_sec = int(r.get("Length") or 0)
+                if duration_sec > 0:
+                    mins = duration_sec // 60
+                    secs = duration_sec % 60
+                    dur_str = f"{mins}:{secs:02d}"
+                else:
+                    dur_str = "--:--"
+
                 records.append({
-                    "id": str(r[0]),
-                    "title": r[1] or "(Untitled)",
-                    "artist": r[2] or "Unknown Artist",
+                    "id": str(r.get("ID")),
+                    "content_id": str(r.get("ID")),
+                    "title": r.get("Title") or "(Untitled)",
+                    "artist": r.get("ArtistName") or "Unknown Artist",
+                    "album": r.get("AlbumName") or "",
+                    "genre": r.get("GenreName") or "",
+                    "key": r.get("KeyName") or "",
+                    "bpm": bpm_val,
+                    "duration_sec": duration_sec,
+                    "duration_str": dur_str,
                     "play_count": count_int,
-                    "folder_path": r[4] or "",
-                    "filename": r[5] or "",
+                    "rating": int(r.get("Rating") or 0),
+                    "year": int(r.get("ReleaseYear") or 0),
+                    "bitrate": int(r.get("BitRate") or 0),
+                    "comment": r.get("Commnt") or "",
+                    "folder_path": r.get("FolderPath") or "",
+                    "filename": r.get("FileNameL") or "",
                     "table": "djmdContent",
                 })
 
@@ -177,6 +281,12 @@ def search_tracks(
             count_col = "DJPlayCount" if "DJPlayCount" in cols else ("PlayCount" if "PlayCount" in cols else None)
             count_expr = count_col if count_col else "0"
 
+            play_filter = ""
+            if play_count_filter == "played" and count_col:
+                play_filter = f"AND ({count_col} > 0)"
+            elif play_count_filter == "unplayed" and count_col:
+                play_filter = f"AND ({count_col} = 0 OR {count_col} IS NULL)"
+
             if sort_by == "play_count":
                 fallback_order = f"{count_expr} {order_dir}, Title ASC"
             elif sort_by == "title" and is_desc:
@@ -184,28 +294,42 @@ def search_tracks(
             else:
                 fallback_order = "Title ASC"
 
+            limit_clause = "LIMIT :limit" if (limit and limit > 0) else ""
+
             sql = f"""
-                SELECT ID, Title, {count_expr}
+                SELECT ID, Title, {count_expr} AS DJPlayCount
                 FROM {table_name}
-                WHERE Title LIKE :pattern
+                WHERE Title LIKE :pattern {play_filter}
                 ORDER BY {fallback_order}
-                LIMIT :limit;
+                {limit_clause};
             """
-            rows = conn.execute(
-                text(sql),
-                {"pattern": pattern, "limit": limit},
-            ).fetchall()
+            params = {"pattern": pattern}
+            if limit and limit > 0:
+                params["limit"] = limit
+
+            rows = conn.execute(text(sql), params).mappings().fetchall()
             for r in rows:
-                raw_count = r[2] if len(r) > 2 else 0
+                raw_count = r.get("DJPlayCount")
                 try:
                     count_int = int(raw_count) if raw_count is not None else 0
                 except (ValueError, TypeError):
                     count_int = 0
                 records.append({
-                    "id": str(r[0]),
-                    "title": r[1] or "(Untitled)",
+                    "id": str(r.get("ID")),
+                    "content_id": str(r.get("ID")),
+                    "title": r.get("Title") or "(Untitled)",
                     "artist": "Unknown Artist",
+                    "album": "",
+                    "genre": "",
+                    "key": "",
+                    "bpm": 0.0,
+                    "duration_sec": 0,
+                    "duration_str": "--:--",
                     "play_count": count_int,
+                    "rating": 0,
+                    "year": 0,
+                    "bitrate": 0,
+                    "comment": "",
                     "folder_path": "",
                     "filename": "",
                     "table": table_name,

@@ -20,6 +20,7 @@ from rekordbox_collection_manager.edit_play_count import (
 from rekordbox_collection_manager.gui.history_detail_view import HistoryDetailView
 from rekordbox_collection_manager.gui.history_view import HistoryView
 from rekordbox_collection_manager.gui.play_count_view import PlayCountView
+from rekordbox_collection_manager.gui.tracks_view import TracksView
 from rekordbox_collection_manager.rename_history import (
     batch_update_history_records,
     fetch_history_records,
@@ -379,6 +380,7 @@ class TestMainWindowSidebar(unittest.TestCase):
         self.assertFalse(self.window.is_sidebar_collapsed)
         self.assertEqual(self.window.sidebar_frame.width(), 200)
         self.assertEqual(self.window.btn_history.text(), "🕒  History Sessions")
+        self.assertEqual(self.window.btn_tracks.text(), "🎵  Tracks")
         self.assertEqual(self.window.btn_play_count.text(), "🔢  Play Counts")
         self.assertEqual(self.window.btn_info.text(), "ℹ️  Collection Info")
         self.assertFalse(self.window.sidebar_section_label.isHidden())
@@ -390,12 +392,14 @@ class TestMainWindowSidebar(unittest.TestCase):
         self.assertTrue(self.window.is_sidebar_collapsed)
         self.assertEqual(self.window.sidebar_frame.width(), 60)
         self.assertEqual(self.window.btn_history.text(), "🕒")
+        self.assertEqual(self.window.btn_tracks.text(), "🎵")
         self.assertEqual(self.window.btn_play_count.text(), "🔢")
         self.assertEqual(self.window.btn_info.text(), "ℹ️")
         self.assertTrue(self.window.sidebar_section_label.isHidden())
         self.assertTrue(self.window.app_ver.isHidden())
         self.assertEqual(self.window.btn_collapse_sidebar.text(), "▶")
         self.assertEqual(self.window.btn_history.toolTip(), "History Sessions")
+        self.assertEqual(self.window.btn_tracks.toolTip(), "Tracks")
         self.assertEqual(self.window.btn_play_count.toolTip(), "Play Counts")
         self.assertEqual(self.window.btn_info.toolTip(), "Collection Info")
 
@@ -405,6 +409,7 @@ class TestMainWindowSidebar(unittest.TestCase):
         self.assertFalse(self.window.is_sidebar_collapsed)
         self.assertEqual(self.window.sidebar_frame.width(), 200)
         self.assertEqual(self.window.btn_history.text(), "🕒  History Sessions")
+        self.assertEqual(self.window.btn_tracks.text(), "🎵  Tracks")
         self.assertFalse(self.window.sidebar_section_label.isHidden())
         self.assertFalse(self.window.app_ver.isHidden())
         self.assertEqual(self.window.btn_collapse_sidebar.text(), "◀")
@@ -418,10 +423,12 @@ class TestMainWindowSidebar(unittest.TestCase):
     def test_nav_page_switching_while_collapsed(self):
         self.window.set_sidebar_collapsed(True, animate=False)
         self.assertEqual(self.window.stacked_widget.currentIndex(), 0)
-        self.window.btn_play_count.click()
+        self.window.btn_tracks.click()
         self.assertEqual(self.window.stacked_widget.currentIndex(), 1)
-        self.window.btn_info.click()
+        self.window.btn_play_count.click()
         self.assertEqual(self.window.stacked_widget.currentIndex(), 2)
+        self.window.btn_info.click()
+        self.assertEqual(self.window.stacked_widget.currentIndex(), 3)
 
     def test_refresh_button_icon_and_action(self):
         from rekordbox_collection_manager.gui.assets import get_refresh_icon
@@ -637,6 +644,125 @@ class TestHistoryViewDetailIntegration(unittest.TestCase):
         # Prev session
         self.history_view._on_prev_session()
         self.assertEqual(self.history_view.current_detail_id, "h1")
+
+
+class TestTracksView(unittest.TestCase):
+    """Unit tests for the TracksView component."""
+
+    def setUp(self):
+        self.view = TracksView()
+        self.mock_records = [
+            {
+                "id": "1",
+                "content_id": "1",
+                "title": "Titanium",
+                "artist": "David Guetta",
+                "album": "Nothing But the Beat",
+                "genre": "Dance",
+                "key": "8A",
+                "bpm": 126.0,
+                "duration_sec": 245,
+                "duration_str": "4:05",
+                "play_count": 5,
+                "rating": 5,
+                "year": 2011,
+                "bitrate": 320,
+                "comment": "Club hit",
+                "folder_path": "/Music/Titanium.mp3",
+                "filename": "Titanium.mp3",
+            },
+            {
+                "id": "2",
+                "content_id": "2",
+                "title": "One More Time",
+                "artist": "Daft Punk",
+                "album": "Discovery",
+                "genre": "French House",
+                "key": "11B",
+                "bpm": 123.0,
+                "duration_sec": 320,
+                "duration_str": "5:20",
+                "play_count": 0,
+                "rating": 4,
+                "year": 2001,
+                "bitrate": 320,
+                "comment": "",
+                "folder_path": "/Music/OneMoreTime.mp3",
+                "filename": "OneMoreTime.mp3",
+            },
+        ]
+
+    def test_tracks_view_initial_ui(self):
+        self.assertEqual(self.view.tracks_header_label.text(), "TRACKS")
+        self.assertEqual(self.view.table.columnCount(), 10)
+        expected_headers = [
+            "#",
+            "Title",
+            "Artist",
+            "Album",
+            "Key",
+            "BPM",
+            "Time",
+            "Plays",
+            "Bitrate",
+            "Location",
+        ]
+        for idx, text in enumerate(expected_headers):
+            self.assertEqual(self.view.table.horizontalHeaderItem(idx).text(), text)
+
+        self.assertEqual(self.view.filter_combo.count(), 3)
+        self.assertEqual(self.view.filter_combo.itemText(0), "All Tracks")
+        self.assertEqual(self.view.filter_combo.itemText(1), "Played Tracks (> 0)")
+        self.assertEqual(self.view.filter_combo.itemText(2), "Unplayed (0)")
+        self.assertEqual(self.view.limit_combo.currentIndex(), 1)  # Default: Limit 100
+
+    def test_tracks_view_population_and_read_only(self):
+        self.view.records = list(self.mock_records)
+        self.view._populate_table()
+
+        self.assertEqual(self.view.table.rowCount(), 2)
+
+        # Check Row 0
+        self.assertEqual(self.view.table.item(0, 0).text(), "1")
+        self.assertEqual(self.view.table.item(0, 1).text(), "Titanium")
+        self.assertEqual(self.view.table.item(0, 2).text(), "David Guetta")
+        self.assertEqual(self.view.table.item(0, 3).text(), "Nothing But the Beat")
+        self.assertEqual(self.view.table.item(0, 4).text(), "8A")
+        self.assertEqual(self.view.table.item(0, 5).text(), "126.0")
+        self.assertEqual(self.view.table.item(0, 6).text(), "4:05")
+        self.assertEqual(self.view.table.item(0, 7).text(), "5")
+        self.assertEqual(self.view.table.item(0, 8).text(), "320 kbps")
+        self.assertEqual(self.view.table.item(0, 9).text(), "Titanium.mp3")
+
+        # Verify all items in Row 0 are read-only (not editable)
+        for col in range(10):
+            item = self.view.table.item(0, col)
+            self.assertIsNotNone(item)
+            self.assertFalse(item.flags() & Qt.ItemFlag.ItemIsEditable)
+
+        # Check Row 1
+        self.assertEqual(self.view.table.item(1, 0).text(), "2")
+        self.assertEqual(self.view.table.item(1, 1).text(), "One More Time")
+        self.assertEqual(self.view.table.item(1, 4).text(), "11B")
+        self.assertEqual(self.view.table.item(1, 5).text(), "123.0")
+        self.assertEqual(self.view.table.item(1, 7).text(), "0")
+
+    def test_tracks_view_search_success_updates_header_and_table(self):
+        self.view._on_search_success("test", self.mock_records)
+
+        self.assertEqual(self.view.tracks_header_label.text(), "TRACKS (2)")
+        self.assertEqual(self.view.table.rowCount(), 2)
+        self.assertIn("Showing 2 tracks matching 'test'", self.view.status_label.text())
+
+    def test_tracks_view_copy_tracklist(self):
+        self.view.records = list(self.mock_records)
+        self.view._on_copy_tracklist()
+
+        clipboard = QApplication.clipboard()
+        self.assertIsNotNone(clipboard)
+        text = clipboard.text()
+        self.assertIn("01. David Guetta - Titanium", text)
+        self.assertIn("02. Daft Punk - One More Time", text)
 
 
 if __name__ == "__main__":

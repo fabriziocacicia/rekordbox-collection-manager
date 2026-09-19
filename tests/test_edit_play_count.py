@@ -142,6 +142,27 @@ class TestEditPlayCount(unittest.TestCase):
         res_title = search_tracks(self.engine, "", sort_by="title", sort_order="desc")
         self.assertEqual(res_title[0]["title"], "Zero Plays Song")
 
+    def test_search_tracks_play_count_filtering(self):
+        # Played tracks only (> 0)
+        played = search_tracks(self.engine, "", play_count_filter="played")
+        for p in played:
+            self.assertGreater(p["play_count"], 0)
+        played_ids = {p["id"] for p in played}
+        self.assertIn("1", played_ids)  # Titanium (5)
+        self.assertIn("2", played_ids)  # One More Time (2)
+        self.assertIn("6", played_ids)  # Titanium Remix (1)
+        self.assertNotIn("3", played_ids)  # Zero Plays Song (0)
+        self.assertNotIn("5", played_ids)  # Null Count Track (None -> 0)
+
+        # Unplayed tracks only (0 or NULL)
+        unplayed = search_tracks(self.engine, "", play_count_filter="unplayed")
+        for u in unplayed:
+            self.assertEqual(u["play_count"], 0)
+        unplayed_ids = {u["id"] for u in unplayed}
+        self.assertIn("3", unplayed_ids)
+        self.assertIn("5", unplayed_ids)
+        self.assertNotIn("1", unplayed_ids)
+
     def test_update_track_play_count_increment(self):
         old_count, new_count = update_track_play_count(self.engine, "1", delta=1)
         self.assertEqual(old_count, 5)

@@ -29,6 +29,7 @@ from rekordbox_collection_manager import __version__
 from rekordbox_collection_manager.gui.assets import get_app_icon, get_asset_path, get_refresh_icon
 from rekordbox_collection_manager.gui.history_view import HistoryView
 from rekordbox_collection_manager.gui.play_count_view import PlayCountView
+from rekordbox_collection_manager.gui.tracks_view import TracksView
 from rekordbox_collection_manager.gui.theme import (
     COLOR_BLUE,
     COLOR_BORDER,
@@ -117,11 +118,16 @@ class MainWindow(QMainWindow):
             },
             {
                 "id": 1,
+                "icon": "🎵",
+                "title": "Tracks",
+            },
+            {
+                "id": 2,
                 "icon": "🔢",
                 "title": "Play Counts",
             },
             {
-                "id": 2,
+                "id": 3,
                 "icon": "ℹ️",
                 "title": "Collection Info",
             },
@@ -256,8 +262,9 @@ class MainWindow(QMainWindow):
             self.nav_buttons.append(btn)
 
         self.btn_history = self.nav_buttons[0]
-        self.btn_play_count = self.nav_buttons[1]
-        self.btn_info = self.nav_buttons[2]
+        self.btn_tracks = self.nav_buttons[1]
+        self.btn_play_count = self.nav_buttons[2]
+        self.btn_info = self.nav_buttons[3]
 
         sidebar_layout.addStretch(1)
 
@@ -285,6 +292,10 @@ class MainWindow(QMainWindow):
         self.history_view.notify_status.connect(self._show_status_message)
         self.history_view.request_reload.connect(lambda: self.load_database(self.db_path))
         self.stacked_widget.addWidget(self.history_view)
+
+        self.tracks_view = TracksView(self)
+        self.tracks_view.notify_status.connect(self._show_status_message)
+        self.stacked_widget.addWidget(self.tracks_view)
 
         self.play_count_view = PlayCountView(self)
         self.play_count_view.notify_status.connect(self._show_status_message)
@@ -434,6 +445,7 @@ class MainWindow(QMainWindow):
 
         # Populate Views
         self.history_view.set_data(engine, history_records)
+        self.tracks_view.set_engine(engine, total_tracks=total_tracks)
         self.play_count_view.set_engine(engine)
 
         self.info_view.set_info({
