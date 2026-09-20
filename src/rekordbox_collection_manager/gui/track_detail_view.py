@@ -7,25 +7,32 @@ Embedded as an in-place view within the application with breadcrumb and back nav
 """
 
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QPoint, QRect, QRectF, QSize, QStringListModel, Qt, Signal
 from PySide6.QtGui import (
     QColor,
+    QCursor,
     QFont,
     QIcon,
     QKeyEvent,
     QPainter,
     QPainterPath,
+    QPen,
     QPixmap,
 )
 from PySide6.QtWidgets import (
     QApplication,
+    QCompleter,
     QDialog,
     QFrame,
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QLayout,
+    QLayoutItem,
+    QLineEdit,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -36,6 +43,12 @@ from PySide6.QtWidgets import (
 )
 from sqlalchemy.engine import Engine
 
+from rekordbox_collection_manager.edit_play_count import (
+    add_track_to_playlist,
+    fetch_all_playlists,
+    remove_track_from_playlist,
+)
+from rekordbox_collection_manager.gui.chip import BadgeChip, PlaylistChip
 from rekordbox_collection_manager.gui.theme import (
     COLOR_AMBER,
     COLOR_AMBER_BG,
@@ -43,21 +56,26 @@ from rekordbox_collection_manager.gui.theme import (
     COLOR_BG_CARD,
     COLOR_BG_DARK,
     COLOR_BG_HOVER,
+    COLOR_BG_INPUT,
     COLOR_BG_PANEL,
     COLOR_BLUE,
     COLOR_BLUE_BG,
     COLOR_BLUE_PRESSED,
     COLOR_BORDER,
+    COLOR_BORDER_FOCUS,
     COLOR_BORDER_LIGHT,
     COLOR_GREEN,
     COLOR_GREEN_BG,
     COLOR_GREEN_BORDER,
+    COLOR_RED,
+    COLOR_RED_BG,
     COLOR_TEXT_MUTED,
     COLOR_TEXT_PRIMARY,
     COLOR_TEXT_SECONDARY,
 )
 from rekordbox_collection_manager.gui.workers import TrackDetailWorker
 from rekordbox_collection_manager.utils import (
+    is_rekordbox_running,
     open_in_folder,
     parse_history_name,
     reveal_in_file_manager,
@@ -84,6 +102,342 @@ def format_rating_stars(rating: int) -> str:
     else:
         stars = max(1, min(5, rating))
     return "★" * stars + "☆" * (5 - stars)
+
+
+class FlowLayout(QLayout):
+    """Layout that arranges child widgets horizontally, wrapping onto new lines."""
+
+    def __init__(
+        self,
+        parent: Optional[QWidget] = None,
+        margin: int = 0,
+        spacing: int = 6,
+    ):
+        super().__init__(parent)
+        self._items: List[QLayoutItem] = []
+        self.setContentsMargins(margin, margin, margin, margin)
+        self._spacing = spacing
+
+    def addItem(self, item: QLayoutItem) -> None:
+        self._items.append(item)
+
+    def count(self) -> int:
+        return len(self._items)
+
+    def itemAt(self, index: int) -> Optional[QLayoutItem]:
+        if 0 <= index < len(self._items):
+            return self._items[index]
+        return None
+
+    def takeAt(self, index: int) -> Optional[QLayoutItem]:
+        if 0 <= index < len(self._items):
+            return self._items.pop(index)
+        return None
+
+    def expandingDirections(self) -> Qt.Orientation:
+        return Qt.Orientation(0)
+
+    def hasHeightForWidth(self) -> bool:
+        return True
+
+    def heightForWidth(self, width: int) -> int:
+        return self._do_layout(QRect(0, 0, width, 0), True)
+
+    def setGeometry(self, rect: QRect) -> None:
+        super().setGeometry(rect)
+        self._do_layout(rect, False)
+
+    def sizeHint(self) -> QSize:
+        return self.minimumSize()
+
+    def minimumSize(self) -> QSize:
+        size = QSize()
+        for item in self._items:
+            widget = item.widget()
+            if widget and widget.isHidden():
+                continue
+            size = size.expandedTo(item.minimumSize())
+        m = self.contentsMargins()
+        size += QSize(m.left() + m.right(), m.top() + m.bottom())
+        return size
+
+    def _do_layout(self, rect: QRect, test_only: bool) -> int:
+        m = self.contentsMargins()
+        effective_rect = rect.adjusted(m.left(), m.top(), -m.right(), -m.bottom())
+        x = effective_rect.x()
+        y = effective_rect.y()
+        line_height = 0
+
+        for item in self._items:
+            widget = item.widget()
+            if widget and widget.isHidden():
+                continue
+            space_x = self._spacing
+            space_y = self._spacing
+            item_w = item.sizeHint().width()
+            item_h = item.sizeHint().height()
+            next_x = x + item_w + space_x
+            if next_x - space_x > effective_rect.right() and line_height > 0:
+                x = effective_rect.x()
+                y = y + line_height + space_y
+                next_x = x + item_w + space_x
+                line_height = 0
+
+            if not test_only:
+                item.setGeometry(QRect(QPoint(x, y), item.sizeHint()))
+
+            x = next_x
+            line_height = max(line_height, item_h)
+
+        return y + line_height - rect.y() + m.bottom()
+
+
+class PlaylistSearchLineEdit(QLineEdit):
+    """Line edit that notifies parent when Escape is pressed or focus is lost."""
+
+    escape_pressed = Signal()
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        if event.key() == Qt.Key.Key_Escape:
+            self.escape_pressed.emit()
+            event.accept()
+            return
+        elif event.key() == Qt.Key.Key_Down and not self.text():
+            completer = self.completer()
+            if completer:
+                completer.setCompletionPrefix("")
+                completer.complete()
+                event.accept()
+                return
+        super().keyPressEvent(event)
+
+    def focusOutEvent(self, event: Any) -> None:
+        completer = self.completer()
+        if completer and completer.popup() and completer.popup().isVisible():
+            super().focusOutEvent(event)
+            return
+        super().focusOutEvent(event)
+        self.escape_pressed.emit()
+
+
+class PlaylistChipsContainer(QWidget):
+    """Editable playlist chips container with autocompletable dropdown and inline search."""
+
+    playlist_added = Signal(str)
+    playlist_removed = Signal(str)
+    editing_state_changed = Signal(bool)
+
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.setObjectName("playlistChipsContainer")
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setMinimumHeight(28)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+
+        self.flow_layout = FlowLayout(self, margin=0, spacing=6)
+
+        self.playlists: List[str] = []
+        self.all_available_playlists: List[str] = []
+        self.chips: List[PlaylistChip] = []
+
+        # Empty state prompt
+        self.empty_label = QLabel("Not in any playlist (click here to add)")
+        self.empty_label.setStyleSheet(
+            f"color: {COLOR_TEXT_MUTED}; font-size: 11px; font-style: italic; background: transparent;"
+        )
+        self.empty_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.flow_layout.addWidget(self.empty_label)
+
+        # Inline search input
+        self.input_edit = PlaylistSearchLineEdit(self)
+        self.input_edit.setPlaceholderText("Search playlist to add...")
+        self.input_edit.setFixedHeight(24)
+        self.input_edit.setMinimumWidth(180)
+        self.input_edit.setMaximumWidth(260)
+        self.input_edit.setStyleSheet(
+            f"QLineEdit {{ "
+            f"  background-color: {COLOR_BG_INPUT}; "
+            f"  color: {COLOR_TEXT_PRIMARY}; "
+            f"  border: 1px solid {COLOR_BORDER_FOCUS}; "
+            f"  border-radius: 6px; "
+            f"  padding: 2px 8px; "
+            f"  font-size: 11px; "
+            f"}}"
+        )
+        self.input_edit.setVisible(False)
+        self.input_edit.escape_pressed.connect(self.hide_add_input)
+        self.input_edit.returnPressed.connect(self._on_input_return_pressed)
+
+        # Autocompleter
+        self.completer_model = QStringListModel(self)
+        self.completer = QCompleter(self.completer_model, self.input_edit)
+        self.completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self.completer.setFilterMode(Qt.MatchFlag.MatchContains)
+        self.completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+
+        popup = self.completer.popup()
+        if popup:
+            popup.setStyleSheet(
+                f"QAbstractItemView {{ "
+                f"  background-color: {COLOR_BG_PANEL}; "
+                f"  color: {COLOR_TEXT_PRIMARY}; "
+                f"  border: 1px solid {COLOR_BORDER}; "
+                f"  border-radius: 6px; "
+                f"  padding: 4px; "
+                f"  selection-background-color: {COLOR_BLUE_BG}; "
+                f"  selection-color: {COLOR_BLUE}; "
+                f"  font-size: 11px; "
+                f"  outline: none; "
+                f"}} "
+                f"QAbstractItemView::item {{ "
+                f"  padding: 6px 10px; "
+                f"  border-radius: 4px; "
+                f"}} "
+                f"QAbstractItemView::item:hover {{ "
+                f"  background-color: {COLOR_BG_HOVER}; "
+                f"}} "
+                f"QAbstractItemView::item:selected {{ "
+                f"  background-color: {COLOR_BLUE_BG}; "
+                f"  color: #38bdf8; "
+                f"}}"
+            )
+        self.completer.activated.connect(self._on_playlist_chosen)
+        self.input_edit.setCompleter(self.completer)
+
+        # input_edit is appended after chips
+        self.flow_layout.addWidget(self.input_edit)
+
+    def set_available_playlists(self, playlists: List[str]) -> None:
+        self.all_available_playlists = list(playlists)
+
+    def set_playlists(self, playlists: List[str]) -> None:
+        self.playlists = list(playlists)
+        # Clear existing chips
+        for chip in list(self.chips):
+            self.flow_layout.removeWidget(chip)
+            chip.deleteLater()
+        self.chips.clear()
+
+        # Temporarily remove input_edit so chips come first
+        self.flow_layout.removeWidget(self.input_edit)
+
+        # Re-add chips
+        for name in self.playlists:
+            chip = PlaylistChip(name, self)
+            chip.delete_requested.connect(self._on_chip_delete)
+            self.chips.append(chip)
+            self.flow_layout.addWidget(chip)
+
+        # Re-add input_edit at the very end
+        self.flow_layout.addWidget(self.input_edit)
+
+        self._refresh_visibility()
+        self.updateGeometry()
+        self.flow_layout.activate()
+
+    def get_playlists(self) -> List[str]:
+        return list(self.playlists)
+
+    def _refresh_visibility(self) -> None:
+        has_chips = len(self.chips) > 0
+        is_editing = not self.input_edit.isHidden()
+
+        if is_editing:
+            self.empty_label.setVisible(False)
+        else:
+            self.empty_label.setVisible(not has_chips)
+
+    def mousePressEvent(self, event: Any) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+            child = self.childAt(pos)
+            if child is None or child is self or child is self.empty_label:
+                self.show_add_input()
+                event.accept()
+                return
+        super().mousePressEvent(event)
+
+    def show_add_input(self) -> None:
+        if self.is_input_active():
+            self.input_edit.setFocus()
+            return
+
+        assigned_lower = {p.lower() for p in self.playlists}
+        candidates = [p for p in self.all_available_playlists if p.lower() not in assigned_lower]
+        self.completer_model.setStringList(candidates)
+
+        self.empty_label.setVisible(False)
+        self.input_edit.clear()
+        self.input_edit.setVisible(True)
+        self.input_edit.setFocus()
+        self._refresh_visibility()
+        self.updateGeometry()
+        self.flow_layout.activate()
+        self.editing_state_changed.emit(True)
+
+    def hide_add_input(self) -> None:
+        self.input_edit.setVisible(False)
+        self._refresh_visibility()
+        self.updateGeometry()
+        self.flow_layout.activate()
+        self.editing_state_changed.emit(False)
+
+    def is_input_active(self) -> bool:
+        return not self.input_edit.isHidden()
+
+    def _on_input_return_pressed(self) -> None:
+        text = self.input_edit.text().strip()
+        if not text:
+            self.hide_add_input()
+            return
+
+        matched = None
+        for p in self.all_available_playlists:
+            if p.lower() == text.lower():
+                matched = p
+                break
+        if not matched and self.completer.currentCompletion():
+            matched = self.completer.currentCompletion()
+
+        if matched:
+            self._on_playlist_chosen(matched)
+        else:
+            self.hide_add_input()
+
+    def _on_playlist_chosen(self, name: str) -> None:
+        self.hide_add_input()
+        if name in self.playlists:
+            return
+
+        self.playlists.append(name)
+        chip = PlaylistChip(name, self)
+        chip.delete_requested.connect(self._on_chip_delete)
+        self.chips.append(chip)
+
+        # Reorder so chip is before input_edit
+        self.flow_layout.removeWidget(self.input_edit)
+        self.flow_layout.addWidget(chip)
+        self.flow_layout.addWidget(self.input_edit)
+
+        self._refresh_visibility()
+        self.updateGeometry()
+        self.flow_layout.activate()
+        self.playlist_added.emit(name)
+
+    def _on_chip_delete(self, name: str) -> None:
+        if name in self.playlists:
+            self.playlists.remove(name)
+        for chip in list(self.chips):
+            if chip.name == name:
+                self.chips.remove(chip)
+                self.flow_layout.removeWidget(chip)
+                chip.deleteLater()
+                break
+
+        self._refresh_visibility()
+        self.updateGeometry()
+        self.flow_layout.activate()
+        self.playlist_removed.emit(name)
 
 
 class TrackDetailView(QWidget):
@@ -113,8 +467,13 @@ class TrackDetailView(QWidget):
         self.current_index = current_index
         self.active_worker: Optional[TrackDetailWorker] = None
 
+        self.original_playlists: List[str] = []
+        self.current_playlists: List[str] = []
+        self.cached_all_playlists: List[str] = []
+
         self._init_ui(back_button_text)
         if self.engine and self.track:
+            self._load_available_playlists()
             self._populate_track_data(self.track)
             self._load_full_details_async()
 
@@ -274,9 +633,10 @@ class TrackDetailView(QWidget):
 
         # 2.2 Quick Stats / KPI Metric Cards Grid (6 Cards)
         stats_frame = QFrame()
+        stats_frame.setObjectName("statsFrame")
         stats_frame.setStyleSheet(
-            f"background-color: {COLOR_BG_CARD}; border: 1px solid {COLOR_BORDER}; "
-            "border-radius: 8px; padding: 6px;"
+            f"QFrame#statsFrame {{ background-color: {COLOR_BG_CARD}; border: 1px solid {COLOR_BORDER}; "
+            "border-radius: 8px; padding: 6px; }"
         )
         stats_layout = QHBoxLayout(stats_frame)
         stats_layout.setContentsMargins(10, 8, 10, 8)
@@ -293,9 +653,10 @@ class TrackDetailView(QWidget):
 
         # 2.3 Categorization Card: Tags, Playlists, Comments
         cat_card = QFrame()
+        cat_card.setObjectName("catCard")
         cat_card.setStyleSheet(
-            f"background-color: {COLOR_BG_PANEL}; border: 1px solid {COLOR_BORDER}; "
-            "border-radius: 8px;"
+            f"QFrame#catCard {{ background-color: {COLOR_BG_PANEL}; border: 1px solid {COLOR_BORDER}; "
+            "border-radius: 8px; }"
         )
         cat_layout = QVBoxLayout(cat_card)
         cat_layout.setContentsMargins(14, 12, 14, 12)
@@ -324,11 +685,9 @@ class TrackDetailView(QWidget):
         playlists_header_layout.addStretch(1)
         cat_layout.addLayout(playlists_header_layout)
 
-        self.playlists_container = QWidget()
-        self.playlists_layout = QHBoxLayout(self.playlists_container)
-        self.playlists_layout.setContentsMargins(0, 0, 0, 0)
-        self.playlists_layout.setSpacing(6)
-        self.playlists_layout.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        self.playlists_container = PlaylistChipsContainer(parent=self)
+        self.playlists_container.playlist_added.connect(self._on_playlist_added_or_removed)
+        self.playlists_container.playlist_removed.connect(self._on_playlist_added_or_removed)
         cat_layout.addWidget(self.playlists_container)
 
         # Comments (if present)
@@ -355,9 +714,10 @@ class TrackDetailView(QWidget):
 
         # 2.4 File Location & Quick Actions Card
         loc_card = QFrame()
+        loc_card.setObjectName("locCard")
         loc_card.setStyleSheet(
-            f"background-color: {COLOR_BG_PANEL}; border: 1px solid {COLOR_BORDER}; "
-            "border-radius: 8px;"
+            f"QFrame#locCard {{ background-color: {COLOR_BG_PANEL}; border: 1px solid {COLOR_BORDER}; "
+            "border-radius: 8px; }"
         )
         loc_layout = QVBoxLayout(loc_card)
         loc_layout.setContentsMargins(14, 12, 14, 12)
@@ -504,6 +864,39 @@ class TrackDetailView(QWidget):
         scroll_area.setWidget(content_widget)
         root_layout.addWidget(scroll_area, stretch=1)
 
+        # 3. Bottom Save/Discard Bar (Hidden by default; appears when staged edits exist)
+        self.bottom_bar = QFrame()
+        self.bottom_bar.setObjectName("bottomActionBar")
+        self.bottom_bar.setStyleSheet(
+            f"QFrame#bottomActionBar {{ "
+            f"  background-color: {COLOR_BG_PANEL}; "
+            f"  border-top: 1px solid {COLOR_BORDER}; "
+            f"  border-radius: 6px; "
+            f"}}"
+        )
+        bottom_layout = QHBoxLayout(self.bottom_bar)
+        bottom_layout.setContentsMargins(16, 10, 16, 10)
+        bottom_layout.setSpacing(12)
+
+        self.staged_status_label = QLabel("⚠️ You have unsaved playlist modifications")
+        self.staged_status_label.setStyleSheet(f"color: {COLOR_AMBER}; font-size: 12px; font-weight: 600;")
+        bottom_layout.addWidget(self.staged_status_label)
+        bottom_layout.addStretch(1)
+
+        self.discard_btn = QPushButton("Discard Changes")
+        self.discard_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.discard_btn.clicked.connect(self._on_discard_playlist_changes)
+        bottom_layout.addWidget(self.discard_btn)
+
+        self.save_btn = QPushButton("💾 Save Changes")
+        self.save_btn.setObjectName("primaryButton")
+        self.save_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.save_btn.clicked.connect(self._on_save_playlist_changes)
+        bottom_layout.addWidget(self.save_btn)
+
+        self.bottom_bar.setVisible(False)
+        root_layout.addWidget(self.bottom_bar)
+
     def load_track(
         self,
         engine: Engine,
@@ -521,6 +914,7 @@ class TrackDetailView(QWidget):
         self.tracks_list = tracks_list or []
         self.current_index = current_index
         self.set_back_button_text(back_button_text)
+        self._load_available_playlists()
         self._populate_track_data(self.track)
         self._load_full_details_async()
 
@@ -621,22 +1015,15 @@ class TrackDetailView(QWidget):
         self._populate_chips(
             self.tags_layout,
             tags,
-            bg_color="rgba(139, 92, 246, 0.15)",
-            border_color="rgba(167, 139, 250, 0.38)",
-            text_color="#d8b4fe",
+            scheme="purple",
             empty_text="No tags assigned",
         )
 
         # Playlists
-        playlists = t.get("playlists") or []
-        self._populate_chips(
-            self.playlists_layout,
-            playlists,
-            bg_color="rgba(20, 184, 166, 0.15)",
-            border_color="rgba(45, 212, 191, 0.38)",
-            text_color="#5eead4",
-            empty_text="Not in any playlist",
-        )
+        self.original_playlists = list(t.get("playlists") or [])
+        self.current_playlists = list(self.original_playlists)
+        self.playlists_container.set_playlists(self.current_playlists)
+        self._update_staged_changes_ui()
 
         # Comments
         comments = (t.get("comments") or "").strip()
@@ -710,10 +1097,11 @@ class TrackDetailView(QWidget):
         self,
         layout: QHBoxLayout,
         items: List[str],
-        bg_color: str,
-        border_color: str,
-        text_color: str,
+        scheme: str = "purple",
         empty_text: str = "None",
+        bg_color: Optional[str] = None,
+        border_color: Optional[str] = None,
+        text_color: Optional[str] = None,
     ) -> None:
         """Render flowing badge chips inside the target layout."""
         # Clear existing chips
@@ -730,11 +1118,7 @@ class TrackDetailView(QWidget):
             return
 
         for item in items:
-            chip = QLabel(item)
-            chip.setStyleSheet(
-                f"background-color: {bg_color}; color: {text_color}; border: 1px solid {border_color}; "
-                "border-radius: 4px; padding: 2px 8px; font-size: 11px; font-weight: 500;"
-            )
+            chip = BadgeChip(item, scheme=scheme)
             layout.addWidget(chip)
 
         layout.addStretch(1)
@@ -874,6 +1258,15 @@ class TrackDetailView(QWidget):
         )
         self._populate_history_plays(history_plays)
 
+        # Update playlists if not currently modified in staged edits
+        if set(self.current_playlists) == set(self.original_playlists):
+            db_playlists = full_details.get("playlists")
+            if db_playlists is not None:
+                self.original_playlists = list(db_playlists)
+                self.current_playlists = list(self.original_playlists)
+                self.playlists_container.set_playlists(self.current_playlists)
+                self._update_staged_changes_ui()
+
     def _on_details_error(self, err_msg: str) -> None:
         self.status_message.emit(f"Error loading track details: {err_msg}")
 
@@ -997,14 +1390,119 @@ class TrackDetailView(QWidget):
         self._terminate_worker()
         self.open_history_session_requested.emit(str(history_id))
 
+    def _load_available_playlists(self) -> None:
+        """Fetch all user playlists to feed autocomplete dropdown."""
+        if not self.engine:
+            return
+        try:
+            pls = fetch_all_playlists(self.engine)
+            names = [p["name"] for p in pls if p.get("name")]
+            self.cached_all_playlists = names
+            self.playlists_container.set_available_playlists(names)
+        except Exception:
+            pass
+
+    def _on_playlist_added_or_removed(self, name: str) -> None:
+        """Update staged playlists state when a chip is added or deleted."""
+        self.current_playlists = self.playlists_container.get_playlists()
+        self._update_staged_changes_ui()
+
+    def _update_staged_changes_ui(self) -> None:
+        """Refresh the bottom bar visibility and message according to staged edits."""
+        staged = set(self.current_playlists) != set(self.original_playlists)
+        self.bottom_bar.setVisible(staged)
+        if staged:
+            added = set(self.current_playlists) - set(self.original_playlists)
+            removed = set(self.original_playlists) - set(self.current_playlists)
+            parts = []
+            if added:
+                parts.append(f"+{len(added)} added")
+            if removed:
+                parts.append(f"-{len(removed)} removed")
+            summary = ", ".join(parts)
+            self.staged_status_label.setText(
+                f"⚠️ Unsaved playlist modifications ({summary}) — click Save Changes to commit."
+            )
+
+    def _on_discard_playlist_changes(self) -> None:
+        """Discard staged playlist modifications and revert chips to original state."""
+        self.current_playlists = list(self.original_playlists)
+        self.playlists_container.set_playlists(self.current_playlists)
+        self._update_staged_changes_ui()
+        self.status_message.emit("Playlist changes discarded.")
+
+    def _on_save_playlist_changes(self) -> None:
+        """Save staged playlist changes to the Rekordbox database."""
+        if is_rekordbox_running():
+            QMessageBox.warning(
+                self,
+                "Rekordbox is Running",
+                "Please close Rekordbox before saving modifications to the database.",
+            )
+            return
+
+        content_id = self.track.get("id") or self.track.get("content_id")
+        if not content_id or not self.engine:
+            return
+
+        added = set(self.current_playlists) - set(self.original_playlists)
+        removed = set(self.original_playlists) - set(self.current_playlists)
+        try:
+            for name in added:
+                add_track_to_playlist(self.engine, str(content_id), name)
+            for name in removed:
+                remove_track_from_playlist(self.engine, str(content_id), name)
+        except Exception as e:
+            QMessageBox.critical(
+                self, "Save Failed", f"Database error while saving playlist changes:\n{e}"
+            )
+            return
+
+        self.original_playlists = list(self.current_playlists)
+        self.track["playlists"] = list(self.current_playlists)
+        if self.tracks_list and 0 <= self.current_index < len(self.tracks_list):
+            self.tracks_list[self.current_index]["playlists"] = list(self.current_playlists)
+
+        self._update_staged_changes_ui()
+        self.track_changed.emit(self.current_index, self.track)
+        self.status_message.emit("✅ Playlist changes saved successfully.")
+
+    def _confirm_unsaved_changes(self) -> bool:
+        """Prompt user if there are unsaved playlist changes before navigating away.
+
+        Returns True if safe to navigate, False if action was cancelled.
+        """
+        if set(self.current_playlists) != set(self.original_playlists):
+            reply = QMessageBox.question(
+                self,
+                "Unsaved Playlist Changes",
+                "You have unsaved playlist modifications. Do you want to save them before leaving?",
+                QMessageBox.StandardButton.Save
+                | QMessageBox.StandardButton.Discard
+                | QMessageBox.StandardButton.Cancel,
+            )
+            if reply == QMessageBox.StandardButton.Save:
+                self._on_save_playlist_changes()
+                return set(self.current_playlists) == set(self.original_playlists)
+            elif reply == QMessageBox.StandardButton.Discard:
+                self._on_discard_playlist_changes()
+                return True
+            else:
+                return False
+        return True
+
     def _on_back_clicked(self) -> None:
         """Handle back button click."""
+        if not self._confirm_unsaved_changes():
+            return
         self._terminate_worker()
         self.back_clicked.emit()
 
     def _on_prev_track(self) -> None:
         """Switch view to display previous track in collection."""
         if self.tracks_list and self.current_index > 0:
+            if not self._confirm_unsaved_changes():
+                return
             self._terminate_worker()
             self.current_index -= 1
             self.track = dict(self.tracks_list[self.current_index])
@@ -1015,6 +1513,8 @@ class TrackDetailView(QWidget):
     def _on_next_track(self) -> None:
         """Switch view to display next track in collection."""
         if self.tracks_list and self.current_index < len(self.tracks_list) - 1:
+            if not self._confirm_unsaved_changes():
+                return
             self._terminate_worker()
             self.current_index += 1
             self.track = dict(self.tracks_list[self.current_index])
@@ -1077,6 +1577,11 @@ class TrackDetailView(QWidget):
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
         """Handle keyboard navigation: Left/Right arrow keys for Prev/Next, Esc to go back."""
+        if hasattr(self, "playlists_container") and self.playlists_container.is_input_active():
+            if event.key() == Qt.Key.Key_Escape:
+                self.playlists_container.hide_add_input()
+                event.accept()
+                return
         if event.key() == Qt.Key.Key_Escape:
             self._on_back_clicked()
             event.accept()

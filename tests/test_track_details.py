@@ -13,7 +13,10 @@ from PySide6.QtWidgets import QApplication, QPushButton
 from sqlalchemy import create_engine
 
 from rekordbox_collection_manager.edit_play_count import (
+    add_track_to_playlist,
+    fetch_all_playlists,
     fetch_track_full_details,
+    remove_track_from_playlist,
     search_tracks,
 )
 from rekordbox_collection_manager.gui.history_view import HistoryView
@@ -23,7 +26,11 @@ from rekordbox_collection_manager.gui.track_detail_dialog import (
     format_file_size,
     format_rating_stars,
 )
-from rekordbox_collection_manager.gui.track_detail_view import TrackDetailView
+from rekordbox_collection_manager.gui.track_detail_view import (
+    PlaylistChip,
+    PlaylistChipsContainer,
+    TrackDetailView,
+)
 from rekordbox_collection_manager.gui.tracks_view import TracksView
 from rekordbox_collection_manager.gui.workers import TrackDetailWorker
 from rekordbox_collection_manager.rename_history import fetch_track_history_plays
@@ -119,6 +126,84 @@ class TestTrackDetailsBackend(unittest.TestCase):
                     ('sh_3', 'hist_del', '101', 5, '2026-08-01 12:05:00.000 +00:00', 0),
                     ('sh_del_row', 'hist_1', '101', 99, '2026-09-10 14:00:00.000 +00:00', 1);
             """)
+
+            conn.exec_driver_sql("""
+                CREATE TABLE djmdPlaylist (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    Name VARCHAR(255),
+                    Attribute INTEGER DEFAULT 0,
+                    ParentID VARCHAR(255),
+                    rb_local_deleted INTEGER DEFAULT 0
+                );
+            """)
+            conn.exec_driver_sql("""
+                CREATE TABLE djmdSongPlaylist (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    PlaylistID VARCHAR(255),
+                    ContentID VARCHAR(255),
+                    TrackNo INTEGER,
+                    created_at VARCHAR(255),
+                    updated_at VARCHAR(255),
+                    rb_local_deleted INTEGER DEFAULT 0
+                );
+            """)
+            conn.exec_driver_sql("""
+                INSERT INTO djmdPlaylist (ID, Name, Attribute, ParentID, rb_local_deleted)
+                VALUES 
+                    ('pl_1', 'Afro House', 0, 'root', 0),
+                    ('pl_2', 'Deep Tech', 0, 'root', 0),
+                    ('pl_3', 'Melodic Techno', 0, 'root', 0),
+                    ('pl_smart', 'Smart Playlist', 4, 'root', 0),
+                    ('pl_del', 'Deleted Playlist', 0, 'root', 1);
+            """)
+            conn.exec_driver_sql("""
+                INSERT INTO djmdSongPlaylist (ID, PlaylistID, ContentID, TrackNo, rb_local_deleted)
+                VALUES 
+                    ('sp_1', 'pl_1', '101', 1, 0),
+                    ('sp_2', 'pl_2', '101', 2, 0);
+            """)
+
+    def test_fetch_all_playlists(self):
+        """Verify fetch_all_playlists retrieves active standard playlists sorted by name."""
+        pls = fetch_all_playlists(self.engine)
+        names = [p["name"] for p in pls]
+        self.assertEqual(names, ["Afro House", "Deep Tech", "Melodic Techno"])
+        self.assertNotIn("Smart Playlist", names)
+        self.assertNotIn("Deleted Playlist", names)
+
+    def test_add_track_to_playlist_new_and_reactivate(self):
+        """Verify adding track to playlist creates row or reactivates soft-deleted row."""
+        # Add to Melodic Techno
+        added = add_track_to_playlist(self.engine, "101", "Melodic Techno")
+        self.assertTrue(added)
+
+        with self.engine.connect() as conn:
+            row = conn.exec_driver_sql(
+                "SELECT TrackNo, rb_local_deleted FROM djmdSongPlaylist WHERE PlaylistID = 'pl_3' AND ContentID = '101';"
+            ).fetchone()
+            self.assertIsNotNone(row)
+            self.assertEqual(row[0], 1)
+            self.assertEqual(row[1], 0)
+
+        # Soft delete it
+        removed = remove_track_from_playlist(self.engine, "101", "Melodic Techno")
+        self.assertTrue(removed)
+
+        with self.engine.connect() as conn:
+            is_del = conn.exec_driver_sql(
+                "SELECT rb_local_deleted FROM djmdSongPlaylist WHERE PlaylistID = 'pl_3' AND ContentID = '101';"
+            ).scalar()
+            self.assertEqual(is_del, 1)
+
+        # Re-add it (reactivation)
+        readded = add_track_to_playlist(self.engine, "101", "Melodic Techno")
+        self.assertTrue(readded)
+
+        with self.engine.connect() as conn:
+            is_active = conn.exec_driver_sql(
+                "SELECT rb_local_deleted FROM djmdSongPlaylist WHERE PlaylistID = 'pl_3' AND ContentID = '101';"
+            ).scalar()
+            self.assertEqual(is_active, 0)
 
     def test_fetch_track_history_plays(self):
         """Verify fetch_track_history_plays retrieves active sessions with parsed metadata."""
@@ -516,6 +601,203 @@ class TestTrackDetailViewIntegration(unittest.TestCase):
         self.assertIn("DC-10", view.history_table.item(0, 3).text())
         self.assertIn("Seth Troxler", view.history_table.item(0, 4).text())
         self.assertEqual(view.history_table.item(0, 5).text(), "02:15:00")
+
+
+class TestPlaylistChipsUI(unittest.TestCase):
+    """Test interactive editable playlist chips, autocompletion, and staged changes."""
+
+    def setUp(self):
+        self.engine = create_engine("sqlite:///:memory:")
+        with self.engine.begin() as conn:
+            conn.exec_driver_sql("""
+                CREATE TABLE djmdContent (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    Title VARCHAR(255),
+                    SrcArtistName VARCHAR(255),
+                    rb_local_deleted INTEGER DEFAULT 0
+                );
+            """)
+            conn.exec_driver_sql("""
+                CREATE TABLE djmdPlaylist (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    Name VARCHAR(255),
+                    Attribute INTEGER DEFAULT 0,
+                    ParentID VARCHAR(255),
+                    rb_local_deleted INTEGER DEFAULT 0
+                );
+            """)
+            conn.exec_driver_sql("""
+                CREATE TABLE djmdSongPlaylist (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    PlaylistID VARCHAR(255),
+                    ContentID VARCHAR(255),
+                    TrackNo INTEGER,
+                    created_at VARCHAR(255),
+                    updated_at VARCHAR(255),
+                    rb_local_deleted INTEGER DEFAULT 0
+                );
+            """)
+            conn.exec_driver_sql("""
+                INSERT INTO djmdPlaylist (ID, Name, Attribute) VALUES 
+                    ('pl_1', 'Afro House', 0),
+                    ('pl_2', 'Deep House', 0),
+                    ('pl_3', 'Techno Peak', 0);
+            """)
+            conn.exec_driver_sql("""
+                INSERT INTO djmdContent (ID, Title, SrcArtistName) VALUES ('10', 'Sunset Track', 'DJ Test');
+            """)
+            conn.exec_driver_sql("""
+                INSERT INTO djmdSongPlaylist (ID, PlaylistID, ContentID, TrackNo) VALUES ('sp_1', 'pl_1', '10', 1);
+            """)
+
+        self.track_data = {
+            "id": "10",
+            "content_id": "10",
+            "title": "Sunset Track",
+            "artist": "DJ Test",
+            "playlists": ["Afro House"],
+        }
+
+    def test_playlist_chip_hover_and_delete(self):
+        """Verify '✕' button becomes visible on hover and emits delete_requested on click."""
+        chip = PlaylistChip("Afro House")
+        chip.show()
+        self.assertFalse(chip.x_btn.isVisible(), "'✕' should be hidden by default")
+
+        # Simulate mouse enter
+        enter_ev = QEvent(QEvent.Type.Enter)
+        chip.enterEvent(enter_ev)
+        self.assertTrue(chip.x_btn.isVisible(), "'✕' should be visible on hover")
+
+        # Click '✕'
+        deleted = []
+        chip.delete_requested.connect(lambda name: deleted.append(name))
+        chip.x_btn.click()
+        self.assertEqual(deleted, ["Afro House"])
+
+    def test_container_empty_space_click_opens_autocomplete(self):
+        """Verify clicking empty space opens input field and autocompleter positioned to the right of chips."""
+        container = PlaylistChipsContainer()
+        container.resize(600, 100)
+        container.show()
+        container.set_available_playlists(["Afro House", "Deep House", "Techno Peak"])
+        container.set_playlists(["Afro House"])
+
+        self.assertFalse(container.input_edit.isVisible())
+        self.assertEqual(len(container.chips), 1)
+
+        # Trigger show_add_input
+        container.show_add_input()
+        QApplication.processEvents()
+        self.assertTrue(container.input_edit.isVisible())
+        self.assertTrue(container.is_input_active())
+
+        # Ensure input is positioned to the right of the chip, NOT overlapping
+        chip_geom = container.chips[0].geometry()
+        input_geom = container.input_edit.geometry()
+        self.assertGreater(input_geom.x(), chip_geom.x() + chip_geom.width() - 5, "Input must appear to the right of chips")
+        self.assertFalse(chip_geom.intersects(input_geom), "Chip and search input must never overlap")
+
+        # Check candidates in completer model (should exclude already assigned 'Afro House')
+        candidates = container.completer_model.stringList()
+        self.assertIn("Deep House", candidates)
+        self.assertIn("Techno Peak", candidates)
+        self.assertNotIn("Afro House", candidates)
+
+        # Press Escape to hide
+        container.hide_add_input()
+        self.assertFalse(container.input_edit.isVisible())
+
+    def test_container_select_autocomplete_attaches_chip(self):
+        """Verify selecting a playlist from autocomplete attaches new chip and emits signal in order."""
+        container = PlaylistChipsContainer()
+        container.resize(600, 100)
+        container.show()
+        container.set_available_playlists(["Afro House", "Deep House", "Techno Peak"])
+        container.set_playlists(["Afro House"])
+
+        added = []
+        container.playlist_added.connect(lambda name: added.append(name))
+
+        # Select 'Deep House'
+        container._on_playlist_chosen("Deep House")
+        QApplication.processEvents()
+        self.assertEqual(added, ["Deep House"])
+        self.assertEqual(container.get_playlists(), ["Afro House", "Deep House"])
+        self.assertEqual(len(container.chips), 2)
+        self.assertEqual(container.chips[1].name, "Deep House")
+
+        # Verify chips are positioned sequentially horizontally without overlap
+        chip0_geom = container.chips[0].geometry()
+        chip1_geom = container.chips[1].geometry()
+        self.assertGreater(chip1_geom.x(), chip0_geom.x(), "Second chip must be to the right of first chip")
+        self.assertFalse(chip0_geom.intersects(chip1_geom), "Chips must not overlap")
+
+    def test_save_discard_buttons_visibility_and_workflow(self):
+        """Verify bottom bar appears on staged edit and disappears on save or discard."""
+        view = TrackDetailView(
+            engine=self.engine,
+            track_data=self.track_data,
+            tracks_list=[self.track_data],
+            current_index=0,
+        )
+        view.show()
+        self.assertFalse(view.bottom_bar.isVisible(), "Bottom bar should be hidden initially")
+
+        # Stage an addition
+        view.playlists_container._on_playlist_chosen("Deep House")
+        self.assertTrue(view.bottom_bar.isVisible(), "Bottom bar should appear when changes are staged")
+        self.assertIn("Deep House", view.current_playlists)
+
+        # Discard changes
+        view.discard_btn.click()
+        self.assertFalse(view.bottom_bar.isVisible(), "Bottom bar should hide after discarding")
+        self.assertEqual(view.current_playlists, ["Afro House"])
+        self.assertEqual(view.playlists_container.get_playlists(), ["Afro House"])
+
+        # Stage a removal
+        view.playlists_container._on_chip_delete("Afro House")
+        self.assertTrue(view.bottom_bar.isVisible(), "Bottom bar should appear after deleting a chip")
+        self.assertEqual(view.current_playlists, [])
+
+        # Save changes
+        with patch("rekordbox_collection_manager.gui.track_detail_view.is_rekordbox_running", return_value=False):
+            view.save_btn.click()
+
+        self.assertFalse(view.bottom_bar.isVisible(), "Bottom bar should hide after saving")
+        self.assertEqual(view.original_playlists, [])
+
+        # Verify in SQLite DB
+        with self.engine.connect() as conn:
+            is_del = conn.exec_driver_sql(
+                "SELECT rb_local_deleted FROM djmdSongPlaylist WHERE PlaylistID = 'pl_1' AND ContentID = '10';"
+            ).scalar()
+            self.assertEqual(is_del, 1, "Track should be marked soft-deleted in database")
+
+    def test_escape_key_handling(self):
+        """Verify Escape dismisses search input when active, or navigates back when inactive."""
+        view = TrackDetailView(
+            engine=self.engine,
+            track_data=self.track_data,
+            tracks_list=[self.track_data],
+            current_index=0,
+        )
+        view.show()
+        view.playlists_container.show_add_input()
+        self.assertTrue(view.playlists_container.is_input_active())
+
+        back_called = []
+        view.back_clicked.connect(lambda: back_called.append(True))
+
+        # First Escape: should dismiss search input without navigating back
+        esc_event = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Escape, Qt.KeyboardModifier.NoModifier)
+        view.keyPressEvent(esc_event)
+        self.assertFalse(view.playlists_container.is_input_active())
+        self.assertEqual(len(back_called), 0)
+
+        # Second Escape: should trigger back navigation
+        view.keyPressEvent(esc_event)
+        self.assertEqual(len(back_called), 1)
 
 
 if __name__ == "__main__":

@@ -329,7 +329,11 @@ class TracksView(QWidget):
         self.stack.setCurrentIndex(0)
 
     def _on_detail_track_changed(self, idx: int, track: Dict[str, Any]) -> None:
-        """Select and scroll to track in table when detail view navigates."""
+        """Select, scroll, and update track in table when detail view navigates or changes."""
+        if 0 <= idx < len(self.records):
+            self.records[idx].update(track)
+            if "playlists" in track:
+                self.table.update_track_playlists(idx, track["playlists"])
         if 0 <= idx < self.table.rowCount():
             self.table.selectRow(idx)
             self.table.scrollToItem(self.table.item(idx, 0))

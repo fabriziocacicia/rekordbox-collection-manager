@@ -3,6 +3,7 @@
 import argparse
 import os
 import sys
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -521,6 +522,207 @@ def fetch_track_full_details(
     track["artwork_path"] = resolve_artwork_path(raw_img, db_path=db_path)
     track["history_plays"] = fetch_track_history_plays(engine, str(content_id))
     return track
+
+
+def fetch_all_playlists(engine: Engine) -> List[Dict[str, Any]]:
+    """Fetch all standard user playlists from Rekordbox database.
+
+    Filters for standard playlists (Attribute = 0) and non-deleted entries.
+    Returns a list of dicts: [{'id': str, 'name': str, 'parent_id': Optional[str]}],
+    sorted alphabetically by Name.
+    """
+    with engine.connect() as conn:
+        cols = {
+            r[1]
+            for r in conn.exec_driver_sql("PRAGMA table_info(djmdPlaylist);").fetchall()
+        }
+        if not cols:
+            return []
+
+        attr_clause = "AND Attribute = 0" if "Attribute" in cols else ""
+        del_clause = (
+            "AND (rb_local_deleted = 0 OR rb_local_deleted IS NULL)"
+            if "rb_local_deleted" in cols
+            else ""
+        )
+        parent_col = "ParentID" if "ParentID" in cols else "NULL AS ParentID"
+
+        sql = f"""
+            SELECT ID, Name, {parent_col}
+            FROM djmdPlaylist
+            WHERE 1=1 {attr_clause} {del_clause}
+              AND Name IS NOT NULL AND TRIM(Name) != ''
+            ORDER BY lower(Name) ASC;
+        """
+        rows = conn.execute(text(sql)).fetchall()
+        return [
+            {
+                "id": str(r[0]),
+                "name": str(r[1]).strip(),
+                "parent_id": str(r[2]) if r[2] else None,
+            }
+            for r in rows
+            if r[1] and str(r[1]).strip()
+        ]
+
+
+def add_track_to_playlist(
+    engine: Engine,
+    content_id: str,
+    playlist_name_or_id: str,
+) -> bool:
+    """Add a track to a playlist in Rekordbox database.
+
+    If association was previously soft-deleted, reactivates it (rb_local_deleted = 0).
+    Otherwise creates a new djmdSongPlaylist record with auto-incremented TrackNo.
+    Returns True if successfully added or already present.
+    """
+    now_utc = get_rekordbox_timestamp()
+
+    with engine.begin() as conn:
+        pl_cols = {
+            r[1]
+            for r in conn.exec_driver_sql("PRAGMA table_info(djmdPlaylist);").fetchall()
+        }
+        sp_cols = {
+            r[1]
+            for r in conn.exec_driver_sql("PRAGMA table_info(djmdSongPlaylist);").fetchall()
+        }
+
+        if not pl_cols or not sp_cols:
+            raise ValueError("Required playlist tables (djmdPlaylist, djmdSongPlaylist) not found.")
+
+        # Find playlist by ID or Name
+        pl_del = "AND (rb_local_deleted = 0 OR rb_local_deleted IS NULL)" if "rb_local_deleted" in pl_cols else ""
+        pl_attr = "AND Attribute = 0" if "Attribute" in pl_cols else ""
+
+        # Try ID match first
+        find_sql = f"SELECT ID, Name FROM djmdPlaylist WHERE ID = :query {pl_del} LIMIT 1;"
+        pl_row = conn.execute(text(find_sql), {"query": playlist_name_or_id}).fetchone()
+
+        if not pl_row:
+            # Try Name match (case-insensitive)
+            find_sql = f"SELECT ID, Name FROM djmdPlaylist WHERE lower(Name) = lower(:query) {pl_attr} {pl_del} LIMIT 1;"
+            pl_row = conn.execute(text(find_sql), {"query": playlist_name_or_id.strip()}).fetchone()
+
+        if not pl_row:
+            raise ValueError(f"Playlist '{playlist_name_or_id}' not found.")
+
+        pl_id = str(pl_row[0])
+        content_id_str = str(content_id)
+
+        # Check existing membership in djmdSongPlaylist
+        has_rb_del = "rb_local_deleted" in sp_cols
+        check_sql = (
+            "SELECT ID"
+            + (", rb_local_deleted" if has_rb_del else "")
+            + " FROM djmdSongPlaylist WHERE PlaylistID = :pl_id AND ContentID = :c_id LIMIT 1;"
+        )
+        existing = conn.execute(text(check_sql), {"pl_id": pl_id, "c_id": content_id_str}).fetchone()
+
+        if existing:
+            entry_id = str(existing[0])
+            if has_rb_del:
+                is_del = existing[1]
+                if is_del == 0 or is_del is None:
+                    # Already active
+                    return True
+                # Reactivate soft-deleted row
+                update_parts = ["rb_local_deleted = 0"]
+                params: Dict[str, Any] = {"id": entry_id}
+                if "updated_at" in sp_cols:
+                    update_parts.append("updated_at = :now")
+                    params["now"] = now_utc
+                if "rb_local_synced" in sp_cols:
+                    update_parts.append("rb_local_synced = 1")
+                update_sql = f"UPDATE djmdSongPlaylist SET {', '.join(update_parts)} WHERE ID = :id;"
+                conn.execute(text(update_sql), params)
+                return True
+            else:
+                return True
+
+        # Calculate next TrackNo
+        track_no_sql = "SELECT COALESCE(MAX(TrackNo), 0) + 1 FROM djmdSongPlaylist WHERE PlaylistID = :pl_id;"
+        next_track_no = conn.execute(text(track_no_sql), {"pl_id": pl_id}).scalar() or 1
+
+        new_id = str(uuid.uuid4())
+        record_data = {
+            "ID": new_id,
+            "PlaylistID": pl_id,
+            "ContentID": content_id_str,
+            "TrackNo": int(next_track_no),
+            "UUID": new_id,
+            "rb_data_status": 0,
+            "rb_local_data_status": 0,
+            "rb_local_deleted": 0,
+            "rb_local_synced": 1,
+            "created_at": now_utc,
+            "updated_at": now_utc,
+        }
+        insert_cols = [k for k in record_data if k in sp_cols]
+        col_names = ", ".join(insert_cols)
+        placeholders = ", ".join(f":{k}" for k in insert_cols)
+        insert_sql = f"INSERT INTO djmdSongPlaylist ({col_names}) VALUES ({placeholders});"
+        conn.execute(text(insert_sql), {k: record_data[k] for k in insert_cols})
+        return True
+
+
+def remove_track_from_playlist(
+    engine: Engine,
+    content_id: str,
+    playlist_name_or_id: str,
+) -> bool:
+    """Remove a track from a playlist in Rekordbox database.
+
+    If rb_local_deleted column exists, performs a soft delete (rb_local_deleted = 1).
+    Otherwise performs a standard DELETE.
+    Returns True if removed.
+    """
+    now_utc = get_rekordbox_timestamp()
+
+    with engine.begin() as conn:
+        pl_cols = {
+            r[1]
+            for r in conn.exec_driver_sql("PRAGMA table_info(djmdPlaylist);").fetchall()
+        }
+        sp_cols = {
+            r[1]
+            for r in conn.exec_driver_sql("PRAGMA table_info(djmdSongPlaylist);").fetchall()
+        }
+
+        if not pl_cols or not sp_cols:
+            return False
+
+        # Find playlist ID
+        find_sql = "SELECT ID FROM djmdPlaylist WHERE ID = :query LIMIT 1;"
+        pl_row = conn.execute(text(find_sql), {"query": playlist_name_or_id}).fetchone()
+
+        if not pl_row:
+            find_sql = "SELECT ID FROM djmdPlaylist WHERE lower(Name) = lower(:query) LIMIT 1;"
+            pl_row = conn.execute(text(find_sql), {"query": playlist_name_or_id.strip()}).fetchone()
+
+        if not pl_row:
+            return False
+
+        pl_id = str(pl_row[0])
+        content_id_str = str(content_id)
+
+        if "rb_local_deleted" in sp_cols:
+            update_parts = ["rb_local_deleted = 1"]
+            params: Dict[str, Any] = {"pl_id": pl_id, "c_id": content_id_str}
+            if "updated_at" in sp_cols:
+                update_parts.append("updated_at = :now")
+                params["now"] = now_utc
+            sql = (
+                f"UPDATE djmdSongPlaylist SET {', '.join(update_parts)} "
+                "WHERE PlaylistID = :pl_id AND ContentID = :c_id AND (rb_local_deleted = 0 OR rb_local_deleted IS NULL);"
+            )
+            res = conn.execute(text(sql), params)
+            return (res.rowcount or 0) > 0
+        else:
+            del_sql = "DELETE FROM djmdSongPlaylist WHERE PlaylistID = :pl_id AND ContentID = :c_id;"
+            res = conn.execute(text(del_sql), {"pl_id": pl_id, "c_id": content_id_str})
+            return (res.rowcount or 0) > 0
 
 
 def update_track_play_count(

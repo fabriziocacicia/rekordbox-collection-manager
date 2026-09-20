@@ -699,6 +699,22 @@ class TracksTableWidget(QTableWidget):
         if self.config.sorting_mode == "client":
             self.setSortingEnabled(True)
 
+    def update_track_playlists(self, row_idx: int, playlists: List[str]) -> None:
+        """Update the playlists column cell for a specific row without rebuilding table."""
+        if TrackColumn.PLAYLISTS in self.config.columns and 0 <= row_idx < self.rowCount():
+            col_idx = self.config.columns.index(TrackColumn.PLAYLISTS)
+            item = QTableWidgetItem(", ".join(playlists) if playlists else "—")
+            item.setData(Qt.ItemDataRole.UserRole, playlists)
+            item.setToolTip(
+                f"Playlists: {', '.join(playlists)}"
+                if playlists
+                else "Not in any playlist"
+            )
+            item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+            self.setItem(row_idx, col_idx, item)
+            if 0 <= row_idx < len(self.records):
+                self.records[row_idx]["playlists"] = list(playlists)
+
     def _create_item_for_column(
         self, col_name: str, t: Dict[str, Any], row_idx: int
     ) -> QTableWidgetItem:
