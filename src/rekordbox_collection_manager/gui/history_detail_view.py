@@ -26,6 +26,12 @@ from rekordbox_collection_manager.gui.theme import (
     COLOR_BLUE,
     COLOR_BORDER,
     COLOR_BORDER_LIGHT,
+    COLOR_GREEN,
+    COLOR_GREEN_BG,
+    COLOR_GREEN_BORDER,
+    COLOR_RED,
+    COLOR_RED_BG,
+    COLOR_RED_BORDER,
     COLOR_TEXT_MUTED,
     COLOR_TEXT_PRIMARY,
     COLOR_TEXT_SECONDARY,
@@ -54,11 +60,13 @@ class HistoryDetailView(QWidget):
     notify_status = Signal(str)
     open_history_session_requested = Signal(str)
     track_detail_requested = Signal(dict, int)  # Emits (track_dict, track_index)
+    restore_session_requested = Signal(str)  # Emits history_id
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.engine: Optional[Engine] = None
         self.db_path: Optional[str] = None
+        self.history_id: Optional[str] = None
         self.session_data: Dict[str, Any] = {}
         self.all_tracks: List[Dict[str, Any]] = []
         self.displayed_tracks: List[Dict[str, Any]] = []
@@ -87,6 +95,27 @@ class HistoryDetailView(QWidget):
             f"color: {COLOR_TEXT_MUTED}; font-size: 11px; font-weight: 700; letter-spacing: 0.5px;"
         )
         nav_bar.addWidget(self.breadcrumb_label, stretch=1)
+
+        self.restore_btn = QPushButton("♻️ Restore Session")
+        self.restore_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.restore_btn.setToolTip("Restore this deleted session back to active collection")
+        self.restore_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLOR_GREEN_BG};
+                color: {COLOR_GREEN};
+                border: 1px solid {COLOR_GREEN_BORDER};
+                border-radius: 6px;
+                padding: 4px 10px;
+                font-weight: 600;
+            }}
+            QPushButton:hover {{
+                background-color: {COLOR_GREEN};
+                color: #ffffff;
+            }}
+        """)
+        self.restore_btn.setVisible(False)
+        self.restore_btn.clicked.connect(self._on_restore_clicked)
+        nav_bar.addWidget(self.restore_btn)
 
         self.prev_btn = QPushButton("◀ Prev")
         self.prev_btn.setToolTip("View previous chronological session")
@@ -139,6 +168,14 @@ class HistoryDetailView(QWidget):
             f"color: {COLOR_TEXT_PRIMARY}; font-size: 16px; font-weight: 700; letter-spacing: -0.2px; background: transparent;"
         )
         title_layout.addWidget(self.session_title_label)
+
+        self.deleted_badge = QLabel("🗑️ DELETED")
+        self.deleted_badge.setStyleSheet(
+            f"background-color: {COLOR_RED_BG}; color: {COLOR_RED}; border: 1px solid {COLOR_RED_BORDER}; "
+            f"border-radius: 4px; padding: 2px 8px; font-size: 11px; font-weight: 700;"
+        )
+        self.deleted_badge.setVisible(False)
+        title_layout.addWidget(self.deleted_badge)
 
         title_layout.addStretch(1)
 
@@ -322,6 +359,7 @@ class HistoryDetailView(QWidget):
         """Load session details and tracklist asynchronously."""
         self.engine = engine
         self.db_path = db_path
+        self.history_id = str(history_id)
 
         base_name, location, artist = parse_history_name(session_title)
         self.session_title_label.setText(base_name or f"History Session {history_id}")
@@ -359,6 +397,12 @@ class HistoryDetailView(QWidget):
         self.active_worker.error.connect(self._on_data_error)
         self.active_worker.start()
 
+    def _on_restore_clicked(self) -> None:
+        session = self.session_data.get("session", {})
+        hid = session.get("id") or getattr(self, "history_id", None)
+        if hid:
+            self.restore_session_requested.emit(str(hid))
+
     def _on_data_loaded(self, data: Dict[str, Any]) -> None:
         """Handle loaded session details and track records."""
         self.session_data = data
@@ -371,6 +415,18 @@ class HistoryDetailView(QWidget):
 
         base_name, location, artist = parse_history_name(s_name)
         self.session_title_label.setText(base_name or s_name)
+
+        is_del = bool(session.get("is_deleted", False))
+        self.deleted_badge.setVisible(is_del)
+        self.restore_btn.setVisible(is_del)
+
+        if is_del:
+            y, m = extract_year_month_from_name_or_date(s_name, s_date)
+            if y and m:
+                m_name = MONTH_INT_TO_NAME.get(m, f"{m:02d}").upper()
+                self.breadcrumb_label.setText(f"HISTORY  ›  🗑️ DELETED SESSIONS  ›  {y}  ›  {m:02d} {m_name}")
+            else:
+                self.breadcrumb_label.setText("HISTORY  ›  🗑️ DELETED SESSIONS")
 
         if location:
             self.location_val_label.setText(location)

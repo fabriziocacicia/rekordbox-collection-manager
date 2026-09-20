@@ -17,6 +17,8 @@ from rekordbox_collection_manager.rename_history import (
     fetch_history_records,
     fetch_session_tracks,
     realign_history_order,
+    restore_history_session,
+    soft_delete_history_session,
 )
 from rekordbox_collection_manager.utils import (
     detect_content_table,
@@ -42,7 +44,7 @@ class DatabaseLoaderWorker(QThread):
             engine, _ = open_database(resolved_path)
 
             history_table = detect_history_table(engine)
-            history_records = fetch_history_records(engine, history_table)
+            history_records = fetch_history_records(engine, history_table, include_deleted=True)
 
             # Count total tracks
             total_tracks = 0
@@ -401,5 +403,50 @@ class RestoreWorker(QThread):
             self.success.emit(res)
         except Exception as e:
             self.error.emit(str(e))
+
+
+class HistoryDeleteWorker(QThread):
+    """Worker to soft-delete a history session in background."""
+
+    success = Signal(str)  # history_id
+    error = Signal(str, str)  # history_id, error_message
+
+    def __init__(self, engine: Engine, history_id: str, parent: Optional[Any] = None):
+        super().__init__(parent)
+        self.engine = engine
+        self.history_id = history_id
+
+    def run(self) -> None:
+        try:
+            ok = soft_delete_history_session(self.engine, self.history_id)
+            if ok:
+                self.success.emit(self.history_id)
+            else:
+                self.error.emit(self.history_id, f"Session {self.history_id} could not be deleted.")
+        except Exception as e:
+            self.error.emit(self.history_id, str(e))
+
+
+class HistoryRestoreWorker(QThread):
+    """Worker to restore a soft-deleted history session in background."""
+
+    success = Signal(str)  # history_id
+    error = Signal(str, str)  # history_id, error_message
+
+    def __init__(self, engine: Engine, history_id: str, parent: Optional[Any] = None):
+        super().__init__(parent)
+        self.engine = engine
+        self.history_id = history_id
+
+    def run(self) -> None:
+        try:
+            ok = restore_history_session(self.engine, self.history_id)
+            if ok:
+                self.success.emit(self.history_id)
+            else:
+                self.error.emit(self.history_id, f"Session {self.history_id} could not be restored.")
+        except Exception as e:
+            self.error.emit(self.history_id, str(e))
+
 
 

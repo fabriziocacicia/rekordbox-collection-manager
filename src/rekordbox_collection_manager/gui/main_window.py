@@ -536,17 +536,21 @@ class MainWindow(QMainWindow):
         self.play_count_view.set_engine(engine, db_path=path)
         self.replace_file_view.set_engine(engine, db_path=path)
 
+        active_hist = sum(1 for r in history_records if not r.get("is_deleted"))
+        del_hist = sum(1 for r in history_records if r.get("is_deleted"))
+        del_hist_str = f" ({del_hist} deleted)" if del_hist > 0 else ""
+
         self.info_view.set_info({
             "Database File": path,
             "History Table Type": table_format,
-            "History Sessions Loaded": len(history_records),
+            "History Sessions Loaded": f"{active_hist}{del_hist_str}",
             "Total Collection Tracks": total_tracks,
             "Database File Size": f"{os.path.getsize(path) / (1024 * 1024):.2f} MB" if os.path.exists(path) else "N/A",
             "Last Loaded At": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         })
 
         self.status_bar.showMessage(
-            f"Database loaded: {len(history_records)} history sessions, {total_tracks} tracks.",
+            f"Database loaded: {active_hist} history sessions{del_hist_str}, {total_tracks} tracks.",
             5000,
         )
 

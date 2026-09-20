@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
+    QMenu,
     QMessageBox,
     QPushButton,
     QSplitter,
@@ -16,6 +17,7 @@ from PySide6.QtWidgets import (
     QTableWidgetItem,
     QTreeWidget,
     QTreeWidgetItem,
+    QTreeWidgetItemIterator,
     QVBoxLayout,
     QWidget,
 )
@@ -29,12 +31,19 @@ from rekordbox_collection_manager.gui.theme import (
     COLOR_AMBER_BORDER,
     COLOR_BLUE,
     COLOR_GREEN,
+    COLOR_GREEN_BG,
+    COLOR_GREEN_BORDER,
+    COLOR_RED,
+    COLOR_RED_BG,
+    COLOR_RED_BORDER,
     COLOR_TEXT_MUTED,
     COLOR_TEXT_SECONDARY,
 )
 from rekordbox_collection_manager.gui.workers import (
     HistoryBatchSaveWorker,
+    HistoryDeleteWorker,
     HistoryRealignWorker,
+    HistoryRestoreWorker,
 )
 from rekordbox_collection_manager.utils import (
     MONTH_INT_TO_NAME,
@@ -58,11 +67,13 @@ class HistoryView(QWidget):
         self.original_records: List[Dict[str, Any]] = []
         # Key: record id, Value: {'record': dict, 'name': str, 'date': str}
         self.staged_edits: Dict[str, Dict[str, Any]] = {}
-        self.active_folder_filter: Optional[str] = None  # None for All, or 'YYYYMM' or 'YYYY'
+        self.active_folder_filter: Optional[str] = None  # None for All, or 'active_all', 'active_year_...', 'deleted_all', etc.
         self.search_filter_text: str = ""
         self.active_session_ids_in_table: List[str] = []
         self.current_detail_id: Optional[str] = None
         self.db_path: Optional[str] = None
+        self.show_deleted: bool = False
+        self.active_worker: Optional[Any] = None
 
         self._init_ui()
 
@@ -91,6 +102,13 @@ class HistoryView(QWidget):
         self.search_input.setClearButtonEnabled(True)
         self.search_input.textChanged.connect(self._on_search_text_changed)
         top_bar.addWidget(self.search_input, stretch=2)
+
+        self.show_deleted_btn = QPushButton("🗑️ Show Deleted (0)")
+        self.show_deleted_btn.setCheckable(True)
+        self.show_deleted_btn.setChecked(False)
+        self.show_deleted_btn.setToolTip("Toggle display of soft-deleted history sessions and folders")
+        self.show_deleted_btn.toggled.connect(self._on_toggle_show_deleted)
+        top_bar.addWidget(self.show_deleted_btn)
 
         self.realign_btn = QPushButton("⚡ Realign Chronology")
         self.realign_btn.setToolTip("Recalculate Seq order in database (Months 1-12, Days 01-31)")
@@ -152,7 +170,7 @@ class HistoryView(QWidget):
         self.table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeMode.Fixed)
         self.table.setColumnWidth(3, 150)
         self.table.setColumnWidth(4, 180)
-        self.table.setColumnWidth(6, 110)
+        self.table.setColumnWidth(6, 160)
 
         actions_hdr = self.table.horizontalHeaderItem(6)
         if actions_hdr:
@@ -160,6 +178,8 @@ class HistoryView(QWidget):
 
         self.table.cellChanged.connect(self._on_cell_changed)
         self.table.cellDoubleClicked.connect(self._on_cell_double_clicked)
+        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._on_table_context_menu)
         table_layout.addWidget(self.table)
 
         splitter.addWidget(table_container)
@@ -199,6 +219,7 @@ class HistoryView(QWidget):
         self.detail_view.notify_status.connect(self.notify_status.emit)
         self.detail_view.open_history_session_requested.connect(self._open_session_detail)
         self.detail_view.track_detail_requested.connect(self._open_track_detail)
+        self.detail_view.restore_session_requested.connect(self._on_restore_from_detail)
         self.stack.addWidget(self.detail_view)
 
         # ----------------------------------------------------------------------
@@ -234,18 +255,40 @@ class HistoryView(QWidget):
             else:
                 self._on_back_from_detail()
 
+    def _on_toggle_show_deleted(self, checked: bool) -> None:
+        """Handle toggling the Show Deleted button."""
+        self.show_deleted = checked
+        if not checked and self.active_folder_filter and str(self.active_folder_filter).startswith("deleted_"):
+            self.active_folder_filter = "active_all"
+        self._update_folder_tree()
+        self._refresh_table()
+
     def _update_folder_tree(self) -> None:
         """Rebuild Year/Month folder tree from current records."""
         self.folder_tree.clear()
 
-        # Root Item: All Sessions
-        all_item = QTreeWidgetItem(["All Sessions"])
-        all_item.setData(0, Qt.ItemDataRole.UserRole, None)
+        active_records = [r for r in self.original_records if not r.get("is_deleted")]
+        deleted_records = [r for r in self.original_records if r.get("is_deleted")]
+
+        # Update show_deleted button text
+        action_word = "Hide" if self.show_deleted else "Show"
+        self.show_deleted_btn.setText(f"🗑️ {action_word} Deleted ({len(deleted_records)})")
+        if len(deleted_records) == 0:
+            self.show_deleted_btn.setEnabled(False)
+            if self.show_deleted:
+                self.show_deleted = False
+                self.show_deleted_btn.setChecked(False)
+        else:
+            self.show_deleted_btn.setEnabled(True)
+
+        # 1. Root Item: All Sessions
+        all_item = QTreeWidgetItem([f"All Sessions ({len(active_records)})"])
+        all_item.setData(0, Qt.ItemDataRole.UserRole, "active_all")
         self.folder_tree.addTopLevelItem(all_item)
 
-        # Group records by Year and Month
+        # Group active records by Year and Month
         year_months: Dict[str, Dict[str, int]] = {}
-        for r in self.original_records:
+        for r in active_records:
             name = r.get("name") or ""
             date = r.get("date") or ""
             y, m = extract_year_month_from_name_or_date(name, date)
@@ -263,7 +306,7 @@ class HistoryView(QWidget):
         for year in sorted(year_months.keys(), reverse=True):
             year_count = sum(year_months[year].values())
             year_item = QTreeWidgetItem([f"📁 {year} ({year_count})"])
-            year_item.setData(0, Qt.ItemDataRole.UserRole, year)
+            year_item.setData(0, Qt.ItemDataRole.UserRole, f"active_year_{year}")
             self.folder_tree.addTopLevelItem(year_item)
 
             for m_key in sorted(year_months[year].keys(), reverse=True):
@@ -275,12 +318,76 @@ class HistoryView(QWidget):
                 else:
                     label = f"  └ 📄 Uncategorized ({count})"
                 m_item = QTreeWidgetItem([label])
-                m_item.setData(0, Qt.ItemDataRole.UserRole, m_key)
+                m_item.setData(0, Qt.ItemDataRole.UserRole, f"active_month_{m_key}")
                 year_item.addChild(m_item)
 
             year_item.setExpanded(True)
 
-        all_item.setSelected(True)
+        # 2. Section: Deleted Sessions (replicates year & month hierarchy)
+        if self.show_deleted and deleted_records:
+            del_root = QTreeWidgetItem([f"🗑️ Deleted Sessions ({len(deleted_records)})"])
+            del_root.setData(0, Qt.ItemDataRole.UserRole, "deleted_all")
+            del_root.setForeground(0, Qt.GlobalColor.red)
+            font = del_root.font(0)
+            font.setBold(True)
+            del_root.setFont(0, font)
+            self.folder_tree.addTopLevelItem(del_root)
+
+            del_year_months: Dict[str, Dict[str, int]] = {}
+            for r in deleted_records:
+                name = r.get("name") or ""
+                date = r.get("date") or ""
+                y, m = extract_year_month_from_name_or_date(name, date)
+                if y and m:
+                    y_str = str(y)
+                    m_str = f"{y}{m:02d}"
+                    if y_str not in del_year_months:
+                        del_year_months[y_str] = {}
+                    del_year_months[y_str][m_str] = del_year_months[y_str].get(m_str, 0) + 1
+                else:
+                    if "Other" not in del_year_months:
+                        del_year_months["Other"] = {}
+                    del_year_months["Other"]["Other"] = del_year_months["Other"].get("Other", 0) + 1
+
+            for year in sorted(del_year_months.keys(), reverse=True):
+                year_count = sum(del_year_months[year].values())
+                year_item = QTreeWidgetItem([f"📁 {year} ({year_count})"])
+                year_item.setData(0, Qt.ItemDataRole.UserRole, f"deleted_year_{year}")
+                year_item.setForeground(0, Qt.GlobalColor.red)
+                del_root.addChild(year_item)
+
+                for m_key in sorted(del_year_months[year].keys(), reverse=True):
+                    count = del_year_months[year][m_key]
+                    if m_key != "Other" and len(m_key) == 6:
+                        m_num = int(m_key[4:])
+                        m_name = MONTH_INT_TO_NAME.get(m_num, f"Month {m_num}")
+                        label = f"  └ 📅 {m_num:02d} {m_name} ({count})"
+                    else:
+                        label = f"  └ 📄 Uncategorized ({count})"
+                    m_item = QTreeWidgetItem([label])
+                    m_item.setData(0, Qt.ItemDataRole.UserRole, f"deleted_month_{m_key}")
+                    m_item.setForeground(0, Qt.GlobalColor.red)
+                    year_item.addChild(m_item)
+
+                year_item.setExpanded(True)
+
+            del_root.setExpanded(True)
+
+        # Highlight current selected filter or default to all_item
+        selected_found = False
+        if self.active_folder_filter:
+            iterator = QTreeWidgetItemIterator(self.folder_tree)
+            while iterator.value():
+                item = iterator.value()
+                if item.data(0, Qt.ItemDataRole.UserRole) == self.active_folder_filter:
+                    item.setSelected(True)
+                    selected_found = True
+                    break
+                iterator += 1
+
+        if not selected_found:
+            all_item.setSelected(True)
+            self.active_folder_filter = "active_all"
 
     def _on_folder_item_clicked(self, item: QTreeWidgetItem, column: int) -> None:
         """Filter table when folder tree item is clicked."""
@@ -298,8 +405,21 @@ class HistoryView(QWidget):
         self.table.setRowCount(0)
         self.active_session_ids_in_table.clear()
 
+        filter_key = self.active_folder_filter or "active_all"
+        is_viewing_deleted = str(filter_key).startswith("deleted_")
+
         for r in self.original_records:
             rec_id = r["id"]
+            is_deleted = bool(r.get("is_deleted", False))
+
+            # 1. Active vs Deleted partition filter
+            if is_viewing_deleted:
+                if not is_deleted:
+                    continue
+            else:
+                if is_deleted:
+                    continue
+
             orig_name = r.get("name") or ""
             orig_date = r.get("date") or ""
 
@@ -311,18 +431,31 @@ class HistoryView(QWidget):
             orig_base, orig_loc, orig_art = parse_history_name(orig_name)
             cur_base, cur_loc, cur_art = parse_history_name(cur_name)
 
-            # 1. Folder Tree Filter
+            # 2. Specific Folder Filter (Year / Month)
             y, m = extract_year_month_from_name_or_date(cur_name, cur_date)
-            folder_key = f"{y}{m:02d}" if (y and m) else "Other"
-            year_key = str(y) if y else "Other"
+            folder_m_key = f"{y}{m:02d}" if (y and m) else "Other"
+            folder_y_key = str(y) if y else "Other"
 
-            if self.active_folder_filter:
-                if len(self.active_folder_filter) == 4 and self.active_folder_filter != year_key:
-                    continue
-                elif len(self.active_folder_filter) == 6 and self.active_folder_filter != folder_key:
-                    continue
+            if is_viewing_deleted:
+                if filter_key.startswith("deleted_year_"):
+                    target_year = filter_key.replace("deleted_year_", "")
+                    if folder_y_key != target_year:
+                        continue
+                elif filter_key.startswith("deleted_month_"):
+                    target_month = filter_key.replace("deleted_month_", "")
+                    if folder_m_key != target_month:
+                        continue
+            else:
+                if filter_key.startswith("active_year_"):
+                    target_year = filter_key.replace("active_year_", "")
+                    if folder_y_key != target_year:
+                        continue
+                elif filter_key.startswith("active_month_"):
+                    target_month = filter_key.replace("active_month_", "")
+                    if folder_m_key != target_month:
+                        continue
 
-            # 2. Text Search Filter
+            # 3. Text Search Filter
             if self.search_filter_text:
                 q = self.search_filter_text
                 if (
@@ -341,7 +474,10 @@ class HistoryView(QWidget):
 
             # Col 0: Status badge
             status_item = QTableWidgetItem()
-            if is_staged:
+            if is_deleted:
+                status_item.setText("🗑️ Deleted")
+                status_item.setForeground(Qt.GlobalColor.red)
+            elif is_staged:
                 status_item.setText("● Staged")
                 status_item.setForeground(Qt.GlobalColor.yellow)
             else:
@@ -350,45 +486,66 @@ class HistoryView(QWidget):
             status_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
             self.table.setItem(row_idx, 0, status_item)
 
-            # Col 1: Date (Editable)
+            # Cells are editable ONLY if active
+            cell_flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+            if not is_deleted:
+                cell_flags |= Qt.ItemFlag.ItemIsEditable
+
+            text_color = Qt.GlobalColor.gray if is_deleted else Qt.GlobalColor.white
+
+            # Col 1: Date
             date_item = QTableWidgetItem(cur_date)
             date_item.setData(Qt.ItemDataRole.UserRole, rec_id)
+            date_item.setFlags(cell_flags)
             if is_staged and cur_date != orig_date:
                 date_item.setForeground(Qt.GlobalColor.yellow)
+            else:
+                date_item.setForeground(text_color)
             self.table.setItem(row_idx, 1, date_item)
 
-            # Col 2: Session Name (Editable)
+            # Col 2: Session Name
             name_item = QTableWidgetItem(cur_base)
             name_item.setData(Qt.ItemDataRole.UserRole, rec_id)
+            name_item.setFlags(cell_flags)
             if is_staged and cur_base != orig_base:
                 name_item.setForeground(Qt.GlobalColor.yellow)
+            else:
+                name_item.setForeground(text_color)
             self.table.setItem(row_idx, 2, name_item)
 
-            # Col 3: Location (Editable)
+            # Col 3: Location
             loc_item = QTableWidgetItem(cur_loc)
             loc_item.setData(Qt.ItemDataRole.UserRole, rec_id)
+            loc_item.setFlags(cell_flags)
             if is_staged and cur_loc != orig_loc:
                 loc_item.setForeground(Qt.GlobalColor.yellow)
+            else:
+                loc_item.setForeground(text_color)
             self.table.setItem(row_idx, 3, loc_item)
 
-            # Col 4: Played With (Editable)
+            # Col 4: Played With
             art_item = QTableWidgetItem(cur_art)
             art_item.setData(Qt.ItemDataRole.UserRole, rec_id)
+            art_item.setFlags(cell_flags)
             if is_staged and cur_art != orig_art:
                 art_item.setForeground(Qt.GlobalColor.yellow)
+            else:
+                art_item.setForeground(text_color)
             self.table.setItem(row_idx, 4, art_item)
 
             # Col 5: Original Created At
             orig_created = orig_date or "(None)"
             created_item = QTableWidgetItem(orig_created)
             created_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+            created_item.setForeground(text_color)
             self.table.setItem(row_idx, 5, created_item)
 
-            # Col 6: Actions (View Details)
+            # Col 6: Actions
             action_widget = QWidget()
             action_widget.setStyleSheet("background: transparent;")
             action_layout = QHBoxLayout(action_widget)
-            action_layout.setContentsMargins(0, 0, 0, 0)
+            action_layout.setContentsMargins(2, 2, 2, 2)
+            action_layout.setSpacing(4)
             action_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
             detail_btn = QPushButton("🔍 Details")
@@ -397,6 +554,51 @@ class HistoryView(QWidget):
             detail_btn.setToolTip("View session details and full tracklist")
             detail_btn.clicked.connect(lambda _, rid=rec_id: self._open_session_detail(rid))
             action_layout.addWidget(detail_btn)
+
+            if is_deleted:
+                restore_btn = QPushButton("♻️")
+                restore_btn.setObjectName("restoreActionBtn")
+                restore_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                restore_btn.setToolTip("Restore session back to active collection")
+                restore_btn.setStyleSheet(f"""
+                    QPushButton#restoreActionBtn {{
+                        background: {COLOR_GREEN_BG};
+                        color: {COLOR_GREEN};
+                        border: 1px solid {COLOR_GREEN_BORDER};
+                        border-radius: 4px;
+                        padding: 2px 6px;
+                        font-size: 11px;
+                        font-weight: 600;
+                    }}
+                    QPushButton#restoreActionBtn:hover {{
+                        background: {COLOR_GREEN};
+                        color: #ffffff;
+                    }}
+                """)
+                restore_btn.clicked.connect(lambda _, rid=rec_id, sn=cur_name: self._confirm_and_restore_session(rid, sn))
+                action_layout.addWidget(restore_btn)
+            else:
+                del_btn = QPushButton("🗑️")
+                del_btn.setObjectName("deleteActionBtn")
+                del_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                del_btn.setToolTip("Soft-delete session from Rekordbox")
+                del_btn.setStyleSheet(f"""
+                    QPushButton#deleteActionBtn {{
+                        background: {COLOR_RED_BG};
+                        color: {COLOR_RED};
+                        border: 1px solid {COLOR_RED_BORDER};
+                        border-radius: 4px;
+                        padding: 2px 6px;
+                        font-size: 11px;
+                        font-weight: 600;
+                    }}
+                    QPushButton#deleteActionBtn:hover {{
+                        background: {COLOR_RED};
+                        color: #ffffff;
+                    }}
+                """)
+                del_btn.clicked.connect(lambda _, rid=rec_id, sn=cur_name: self._confirm_and_delete_session(rid, sn))
+                action_layout.addWidget(del_btn)
 
             self.table.setCellWidget(row_idx, 6, action_widget)
 
@@ -700,8 +902,143 @@ class HistoryView(QWidget):
         QMessageBox.critical(self, "Save Failed", f"Database error while saving changes:\n{err_msg}")
 
     def _update_status_bar(self) -> None:
-        total = len(self.original_records)
+        active_count = sum(1 for r in self.original_records if not r.get("is_deleted"))
+        del_count = sum(1 for r in self.original_records if r.get("is_deleted"))
         staged = len(self.staged_edits)
-        self.status_label.setText(f"Sessions: {total} total  •  Staged changes: {staged}")
+        del_info = f" ({del_count} deleted)" if del_count > 0 else ""
+        self.status_label.setText(f"Sessions: {active_count} active{del_info}  •  Staged changes: {staged}")
         self.save_btn.setEnabled(staged > 0)
         self.discard_btn.setEnabled(staged > 0)
+
+    def _on_table_context_menu(self, pos) -> None:
+        """Handle right-click context menu on history session row."""
+        item = self.table.itemAt(pos)
+        if not item:
+            return
+        row = item.row()
+        rec_id = None
+        for c in (1, 2, 3, 4):
+            cand = self.table.item(row, c)
+            if cand and cand.data(Qt.ItemDataRole.UserRole):
+                rec_id = cand.data(Qt.ItemDataRole.UserRole)
+                break
+        if not rec_id:
+            return
+
+        record = next((r for r in self.original_records if str(r["id"]) == str(rec_id)), None)
+        if not record:
+            return
+
+        is_deleted = record.get("is_deleted", False)
+        session_name = record.get("name") or f"Session {rec_id}"
+
+        menu = QMenu(self)
+        detail_action = menu.addAction("🔍 View Details")
+        menu.addSeparator()
+
+        if is_deleted:
+            action_item = menu.addAction("♻️ Restore Session")
+        else:
+            action_item = menu.addAction("🗑️ Delete Session")
+
+        selected = menu.exec(self.table.viewport().mapToGlobal(pos))
+        if selected == detail_action:
+            self._open_session_detail(rec_id)
+        elif selected == action_item:
+            if is_deleted:
+                self._confirm_and_restore_session(rec_id, session_name)
+            else:
+                self._confirm_and_delete_session(rec_id, session_name)
+
+    def _confirm_and_delete_session(self, rec_id: str, session_name: str) -> None:
+        """Confirm and execute soft-delete of a history session."""
+        if not self.engine:
+            return
+
+        if is_rekordbox_running():
+            QMessageBox.warning(
+                self,
+                "Rekordbox is Running",
+                "⚠️ Please close Rekordbox (Cmd + Q) before deleting history sessions.",
+            )
+            return
+
+        res = QMessageBox.question(
+            self,
+            "Delete History Session",
+            f"Are you sure you want to delete '{session_name}'?\n\n"
+            "This will safely soft-delete the session and its tracks from Rekordbox.\n"
+            "You can restore it at any time from Deleted Sessions.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if res != QMessageBox.StandardButton.Yes:
+            return
+
+        self.notify_status.emit(f"Deleting session '{session_name}'...")
+        worker = HistoryDeleteWorker(self.engine, rec_id, parent=self)
+        worker.success.connect(self._on_delete_success)
+        worker.error.connect(self._on_action_error)
+        self.active_worker = worker
+        worker.start()
+
+    def _confirm_and_restore_session(self, rec_id: str, session_name: str) -> None:
+        """Confirm and execute restoration of a soft-deleted history session."""
+        if not self.engine:
+            return
+
+        if is_rekordbox_running():
+            QMessageBox.warning(
+                self,
+                "Rekordbox is Running",
+                "⚠️ Please close Rekordbox (Cmd + Q) before restoring history sessions.",
+            )
+            return
+
+        res = QMessageBox.question(
+            self,
+            "Restore History Session",
+            f"Are you sure you want to restore '{session_name}'?\n\n"
+            "This will reactivate the session and all its tracks back into your active Rekordbox collection.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if res != QMessageBox.StandardButton.Yes:
+            return
+
+        self.notify_status.emit(f"Restoring session '{session_name}'...")
+        worker = HistoryRestoreWorker(self.engine, rec_id, parent=self)
+        worker.success.connect(self._on_restore_success)
+        worker.error.connect(self._on_action_error)
+        self.active_worker = worker
+        worker.start()
+
+    def _on_restore_from_detail(self, history_id: str) -> None:
+        """Handle restore triggered from HistoryDetailView."""
+        record = next((r for r in self.original_records if str(r["id"]) == str(history_id)), None)
+        name = record.get("name", f"Session {history_id}") if record else f"Session {history_id}"
+        self._confirm_and_restore_session(history_id, name)
+
+    def _on_delete_success(self, history_id: str) -> None:
+        self.notify_status.emit(f"🗑️ Session {history_id} soft-deleted.")
+        rec = next((r for r in self.original_records if str(r["id"]) == str(history_id)), None)
+        if rec:
+            rec["is_deleted"] = True
+        self.staged_edits.pop(history_id, None)
+        self._update_folder_tree()
+        self._refresh_table()
+        self.request_reload.emit()
+
+    def _on_restore_success(self, history_id: str) -> None:
+        self.notify_status.emit(f"✅ Session {history_id} restored.")
+        rec = next((r for r in self.original_records if str(r["id"]) == str(history_id)), None)
+        if rec:
+            rec["is_deleted"] = False
+        self._update_folder_tree()
+        self._refresh_table()
+        if self.current_detail_id == history_id:
+            self._open_session_detail(history_id)
+        self.request_reload.emit()
+
+    def _on_action_error(self, history_id: str, err_msg: str) -> None:
+        self.notify_status.emit(f"❌ Error for session {history_id}: {err_msg}")
+        QMessageBox.critical(self, "Operation Failed", f"Database error:\n{err_msg}")
+

@@ -230,8 +230,13 @@ def ensure_djmd_history_folders(
             {k: year_data[k] for k in insert_cols},
         )
     elif "rb_local_deleted" in cols:
+        set_parts = ["rb_local_deleted = 0"]
+        if "rb_data_status" in cols:
+            set_parts.append("rb_data_status = 0")
+        if "updated_at" in cols:
+            set_parts.append(f"updated_at = '{now_utc}'")
         conn.execute(
-            text("UPDATE djmdHistory SET rb_local_deleted = 0 WHERE ID = :id AND rb_local_deleted != 0"),
+            text(f"UPDATE djmdHistory SET {', '.join(set_parts)} WHERE ID = :id AND rb_local_deleted != 0"),
             {"id": year_id},
         )
 
@@ -264,62 +269,314 @@ def ensure_djmd_history_folders(
             {k: month_data[k] for k in insert_cols},
         )
     elif "rb_local_deleted" in cols:
+        set_parts = ["rb_local_deleted = 0"]
+        if "rb_data_status" in cols:
+            set_parts.append("rb_data_status = 0")
+        if "updated_at" in cols:
+            set_parts.append(f"updated_at = '{now_utc}'")
         conn.execute(
-            text("UPDATE djmdHistory SET rb_local_deleted = 0 WHERE ID = :id AND rb_local_deleted != 0"),
+            text(f"UPDATE djmdHistory SET {', '.join(set_parts)} WHERE ID = :id AND rb_local_deleted != 0"),
             {"id": month_id},
         )
 
     return month_id
 
 
-def fetch_history_records(engine: Engine, table_format: str) -> List[Dict[str, Any]]:
-    """Fetch history items from either djmdHistory or history table."""
+def fetch_history_records(
+    engine: Engine, table_format: str, include_deleted: bool = False
+) -> List[Dict[str, Any]]:
+    """Fetch history items from either djmdHistory or history table.
+
+    If include_deleted is False (default), only active items are returned.
+    If include_deleted is True, both active and soft-deleted items are returned,
+    each tagged with 'is_deleted': bool.
+    """
     records = []
     with engine.connect() as conn:
         if table_format == "djmdHistory":
             cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(djmdHistory);").fetchall()}
             has_parent = "ParentID" in cols
-            select_parent = ", ParentID" if has_parent else ""
-            del_filter = "AND (rb_local_deleted = 0 OR rb_local_deleted IS NULL)" if "rb_local_deleted" in cols else ""
+            has_del = "rb_local_deleted" in cols
+            del_filter = (
+                "AND (rb_local_deleted = 0 OR rb_local_deleted IS NULL)"
+                if (has_del and not include_deleted)
+                else ""
+            )
             query = f"""
-                SELECT ID, Name, DateCreated, Attribute{select_parent}
+                SELECT ID, Name, DateCreated, Attribute,
+                       {("ParentID" if has_parent else "NULL")} AS ParentID,
+                       {("COALESCE(rb_local_deleted, 0)" if has_del else "0")} AS is_deleted
                 FROM djmdHistory 
                 WHERE (Attribute = 0 OR Attribute IS NULL) {del_filter}
                 ORDER BY rowid DESC;
             """
-            rows = conn.exec_driver_sql(query).fetchall()
+            rows = conn.execute(text(query)).mappings().fetchall()
             for r in rows:
                 records.append({
-                    "id": str(r[0]),
-                    "name": r[1] or "(Untitled)",
-                    "date": r[2] or "",
-                    "parent_id": str(r[4]) if has_parent and len(r) > 4 and r[4] is not None else None,
+                    "id": str(r["ID"]),
+                    "name": r["Name"] or "(Untitled)",
+                    "date": r["DateCreated"] or "",
+                    "parent_id": str(r["ParentID"]) if r.get("ParentID") is not None else None,
                     "table": "djmdHistory",
+                    "is_deleted": bool(r["is_deleted"]),
                 })
         elif table_format == "history":
             cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(history);").fetchall()}
-            del_filter = "AND (rb_local_deleted = 0 OR rb_local_deleted IS NULL)" if "rb_local_deleted" in cols else ""
+            has_del = "rb_local_deleted" in cols
+            del_filter = (
+                "AND (rb_local_deleted = 0 OR rb_local_deleted IS NULL)"
+                if (has_del and not include_deleted)
+                else ""
+            )
             query = f"""
-                SELECT history_id, name, attribute 
+                SELECT history_id, name, attribute,
+                       {("COALESCE(rb_local_deleted, 0)" if has_del else "0")} AS is_deleted
                 FROM history 
                 WHERE (attribute = 0 OR attribute IS NULL) {del_filter}
                 ORDER BY history_id DESC;
             """
-            rows = conn.exec_driver_sql(query).fetchall()
+            rows = conn.execute(text(query)).mappings().fetchall()
             for r in rows:
                 records.append({
-                    "id": str(r[0]),
-                    "name": r[1] or "(Untitled)",
+                    "id": str(r["history_id"]),
+                    "name": r["name"] or "(Untitled)",
                     "date": "",
                     "parent_id": None,
                     "table": "history",
+                    "is_deleted": bool(r["is_deleted"]),
                 })
     return records
 
 
+def soft_delete_history_session(engine: Engine, history_id: str) -> bool:
+    """Soft-delete a Rekordbox history session without data loss.
+
+    Sets rb_local_deleted = 1 and rb_data_status = 2 on djmdHistory and all
+    associated djmdSongHistory entries. If the parent Month folder (and Year folder)
+    has no remaining active sessions, marks them as deleted as well, matching
+    Rekordbox's native cleanup behavior.
+    """
+    now_utc = get_rekordbox_timestamp()
+    with engine.begin() as conn:
+        tables_res = conn.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table';").fetchall()
+        existing_tables = {r[0] for r in tables_res}
+
+        if "djmdHistory" in existing_tables:
+            cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(djmdHistory);").fetchall()}
+            if "rb_local_deleted" not in cols:
+                return False
+
+            row = conn.execute(
+                text("SELECT ID, ParentID FROM djmdHistory WHERE ID = :hid;"),
+                {"hid": history_id},
+            ).mappings().fetchone()
+            if not row:
+                return False
+
+            parent_id = row.get("ParentID")
+
+            # 1. Soft delete the session row in djmdHistory
+            set_parts = ["rb_local_deleted = 1"]
+            if "rb_data_status" in cols:
+                set_parts.append("rb_data_status = 2")
+            if "updated_at" in cols:
+                set_parts.append("updated_at = :now")
+
+            conn.execute(
+                text(f"UPDATE djmdHistory SET {', '.join(set_parts)} WHERE ID = :hid;"),
+                {"hid": history_id, "now": now_utc},
+            )
+
+            # 2. Soft delete associated tracks in djmdSongHistory
+            if "djmdSongHistory" in existing_tables:
+                sh_cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(djmdSongHistory);").fetchall()}
+                if "rb_local_deleted" in sh_cols:
+                    sh_set = ["rb_local_deleted = 1"]
+                    if "rb_data_status" in sh_cols:
+                        sh_set.append("rb_data_status = 2")
+                    if "updated_at" in sh_cols:
+                        sh_set.append("updated_at = :now")
+                    conn.execute(
+                        text(f"UPDATE djmdSongHistory SET {', '.join(sh_set)} WHERE HistoryID = :hid;"),
+                        {"hid": history_id, "now": now_utc},
+                    )
+
+            # 3. Check if parent Month folder is now empty of active sessions
+            if parent_id and str(parent_id).lower() != "root":
+                active_in_month = conn.execute(
+                    text("""
+                        SELECT count(*) FROM djmdHistory
+                        WHERE ParentID = :parent_id
+                          AND (Attribute = 0 OR Attribute IS NULL)
+                          AND (rb_local_deleted = 0 OR rb_local_deleted IS NULL);
+                    """),
+                    {"parent_id": parent_id},
+                ).scalar()
+
+                if active_in_month == 0:
+                    month_row = conn.execute(
+                        text("SELECT ParentID FROM djmdHistory WHERE ID = :mid;"),
+                        {"mid": parent_id},
+                    ).mappings().fetchone()
+                    year_id = month_row.get("ParentID") if month_row else None
+
+                    conn.execute(
+                        text(f"UPDATE djmdHistory SET {', '.join(set_parts)} WHERE ID = :mid;"),
+                        {"mid": parent_id, "now": now_utc},
+                    )
+
+                    # Check if Year folder is now empty of active Month folders
+                    if year_id and str(year_id).lower() != "root":
+                        active_in_year = conn.execute(
+                            text("""
+                                SELECT count(*) FROM djmdHistory
+                                WHERE ParentID = :year_id
+                                  AND Attribute = 1
+                                  AND (rb_local_deleted = 0 OR rb_local_deleted IS NULL);
+                            """),
+                            {"year_id": year_id},
+                        ).scalar()
+
+                        if active_in_year == 0:
+                            conn.execute(
+                                text(f"UPDATE djmdHistory SET {', '.join(set_parts)} WHERE ID = :yid;"),
+                                {"yid": year_id, "now": now_utc},
+                            )
+
+            return True
+
+        elif "history" in existing_tables:
+            cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(history);").fetchall()}
+            if "rb_local_deleted" in cols:
+                conn.execute(
+                    text("UPDATE history SET rb_local_deleted = 1 WHERE history_id = :hid;"),
+                    {"hid": history_id},
+                )
+            if "songHistory" in existing_tables:
+                sh_cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(songHistory);").fetchall()}
+                if "rb_local_deleted" in sh_cols:
+                    conn.execute(
+                        text("UPDATE songHistory SET rb_local_deleted = 1 WHERE history_id = :hid;"),
+                        {"hid": history_id},
+                    )
+            return True
+
+    return False
+
+
+def restore_history_session(engine: Engine, history_id: str) -> bool:
+    """Restore a previously soft-deleted Rekordbox history session and its tracks.
+
+    Reactivates djmdHistory and djmdSongHistory records (rb_local_deleted = 0, rb_data_status = 0),
+    ensures the Month and Year folders are present and reactivated, and realigns the
+    chronological sequence indices in the database.
+    """
+    now_utc = get_rekordbox_timestamp()
+    restored = False
+
+    with engine.begin() as conn:
+        tables_res = conn.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table';").fetchall()
+        existing_tables = {r[0] for r in tables_res}
+
+        if "djmdHistory" in existing_tables:
+            cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(djmdHistory);").fetchall()}
+            if "rb_local_deleted" not in cols:
+                return False
+
+            row = conn.execute(
+                text("SELECT ID, Name, DateCreated, ParentID FROM djmdHistory WHERE ID = :hid;"),
+                {"hid": history_id},
+            ).mappings().fetchone()
+            if not row:
+                return False
+
+            name = row.get("Name") or ""
+            date_val = row.get("DateCreated") or ""
+            existing_parent = row.get("ParentID")
+
+            # 1. Restore the session row in djmdHistory
+            set_parts = ["rb_local_deleted = 0"]
+            if "rb_data_status" in cols:
+                set_parts.append("rb_data_status = 0")
+            if "updated_at" in cols:
+                set_parts.append("updated_at = :now")
+
+            # 2. Ensure Year and Month folders exist and are active
+            y, m = extract_year_month_from_name_or_date(name, date_val)
+            if y and m:
+                date_str = date_val or f"{y:04d}-{m:02d}-01"
+                target_month_id = ensure_djmd_history_folders(conn, y, m, date_str, cols)
+                if "ParentID" in cols:
+                    set_parts.append("ParentID = :month_id")
+                params: Dict[str, Any] = {"hid": history_id, "now": now_utc, "month_id": target_month_id}
+            else:
+                params = {"hid": history_id, "now": now_utc}
+                if existing_parent:
+                    reactivate_parts = ["rb_local_deleted = 0"]
+                    if "rb_data_status" in cols:
+                        reactivate_parts.append("rb_data_status = 0")
+                    if "updated_at" in cols:
+                        reactivate_parts.append("updated_at = :now")
+                    conn.execute(
+                        text(f"UPDATE djmdHistory SET {', '.join(reactivate_parts)} WHERE ID = :pid;"),
+                        {"pid": existing_parent, "now": now_utc},
+                    )
+
+            conn.execute(
+                text(f"UPDATE djmdHistory SET {', '.join(set_parts)} WHERE ID = :hid;"),
+                params,
+            )
+
+            # 3. Restore associated tracks in djmdSongHistory
+            if "djmdSongHistory" in existing_tables:
+                sh_cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(djmdSongHistory);").fetchall()}
+                if "rb_local_deleted" in sh_cols:
+                    sh_set = ["rb_local_deleted = 0"]
+                    if "rb_data_status" in sh_cols:
+                        sh_set.append("rb_data_status = 0")
+                    if "updated_at" in sh_cols:
+                        sh_set.append("updated_at = :now")
+                    conn.execute(
+                        text(f"UPDATE djmdSongHistory SET {', '.join(sh_set)} WHERE HistoryID = :hid;"),
+                        {"hid": history_id, "now": now_utc},
+                    )
+
+            restored = True
+
+        elif "history" in existing_tables:
+            cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(history);").fetchall()}
+            if "rb_local_deleted" in cols:
+                conn.execute(
+                    text("UPDATE history SET rb_local_deleted = 0 WHERE history_id = :hid;"),
+                    {"hid": history_id},
+                )
+            if "songHistory" in existing_tables:
+                sh_cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(songHistory);").fetchall()}
+                if "rb_local_deleted" in sh_cols:
+                    conn.execute(
+                        text("UPDATE songHistory SET rb_local_deleted = 0 WHERE history_id = :hid;"),
+                        {"hid": history_id},
+                    )
+            restored = True
+
+    if restored:
+        try:
+            realign_history_order(engine)
+        except Exception:
+            pass
+
+    return restored
+
+
 def fetch_session_tracks(engine: Engine, history_id: str) -> Dict[str, Any]:
     """Fetch session metadata, track list, and aggregate statistics for a history session."""
-    session_info: Dict[str, Any] = {"id": history_id, "name": "", "date": "", "parent_id": None}
+    session_info: Dict[str, Any] = {
+        "id": history_id,
+        "name": "",
+        "date": "",
+        "parent_id": None,
+        "is_deleted": False,
+    }
     tracks: List[Dict[str, Any]] = []
 
     with engine.connect() as conn:
@@ -327,35 +584,51 @@ def fetch_session_tracks(engine: Engine, history_id: str) -> Dict[str, Any]:
         existing_tables = {r[0] for r in tables_res}
 
         # 1. Fetch Session Info
+        is_session_deleted = False
         if "djmdHistory" in existing_tables:
             cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(djmdHistory);").fetchall()}
             has_parent = "ParentID" in cols
+            has_del = "rb_local_deleted" in cols
             select_parent = ", ParentID" if has_parent else ""
+            select_del = ", rb_local_deleted" if has_del else ""
             h_row = conn.execute(
-                text(f"SELECT ID, Name, DateCreated{select_parent} FROM djmdHistory WHERE ID = :hid;"),
+                text(f"SELECT ID, Name, DateCreated{select_parent}{select_del} FROM djmdHistory WHERE ID = :hid;"),
                 {"hid": history_id},
-            ).fetchone()
+            ).mappings().fetchone()
             if h_row:
-                session_info["id"] = str(h_row[0])
-                session_info["name"] = h_row[1] or "(Untitled)"
-                session_info["date"] = h_row[2] or ""
-                if has_parent and len(h_row) > 3:
-                    session_info["parent_id"] = str(h_row[3]) if h_row[3] is not None else None
+                session_info["id"] = str(h_row["ID"])
+                session_info["name"] = h_row["Name"] or "(Untitled)"
+                session_info["date"] = h_row["DateCreated"] or ""
+                if has_parent and h_row.get("ParentID") is not None:
+                    session_info["parent_id"] = str(h_row["ParentID"])
+                if has_del and h_row.get("rb_local_deleted") == 1:
+                    is_session_deleted = True
+                session_info["is_deleted"] = is_session_deleted
         elif "history" in existing_tables:
+            h_cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(history);").fetchall()}
+            has_del = "rb_local_deleted" in h_cols
+            select_del = ", rb_local_deleted" if has_del else ""
             h_row = conn.execute(
-                text("SELECT history_id, name FROM history WHERE history_id = :hid;"),
+                text(f"SELECT history_id, name{select_del} FROM history WHERE history_id = :hid;"),
                 {"hid": history_id},
-            ).fetchone()
+            ).mappings().fetchone()
             if h_row:
-                session_info["id"] = str(h_row[0])
-                session_info["name"] = h_row[1] or "(Untitled)"
+                session_info["id"] = str(h_row["history_id"])
+                session_info["name"] = h_row["name"] or "(Untitled)"
+                if has_del and h_row.get("rb_local_deleted") == 1:
+                    is_session_deleted = True
+                session_info["is_deleted"] = is_session_deleted
 
         # 2. Fetch Tracks
         if "djmdSongHistory" in existing_tables and "djmdContent" in existing_tables:
             sh_cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(djmdSongHistory);").fetchall()}
             c_cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(djmdContent);").fetchall()}
 
-            sh_del = "AND (sh.rb_local_deleted = 0 OR sh.rb_local_deleted IS NULL)" if "rb_local_deleted" in sh_cols else ""
+            # If the session itself is deleted, do not filter out soft-deleted songs
+            if is_session_deleted:
+                sh_del = ""
+            else:
+                sh_del = "AND (sh.rb_local_deleted = 0 OR sh.rb_local_deleted IS NULL)" if "rb_local_deleted" in sh_cols else ""
             c_del = "AND (c.rb_local_deleted = 0 OR c.rb_local_deleted IS NULL)" if "rb_local_deleted" in c_cols else ""
 
             # Check optional join tables

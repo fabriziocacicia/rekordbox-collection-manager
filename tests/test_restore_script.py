@@ -17,6 +17,7 @@ class TestRestoreScript(unittest.TestCase):
     def run_script(self, args=None, stdin_input=None, custom_env=None):
         cmd = [str(self.script_path)] + (args or [])
         env = os.environ.copy()
+        env["SKIP_PROCESS_CHECK"] = "1"
         if custom_env:
             env.update(custom_env)
 
