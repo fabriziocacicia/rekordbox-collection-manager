@@ -70,7 +70,7 @@ while [ $# -gt 0 ]; do
 done
 
 # 2. Controllo processi attivi (Rekordbox e Rekordbox Collection Manager)
-if pgrep -il "rekordbox" > /dev/null 2>&1; then
+if [ "${SKIP_PROCESS_CHECK:-0}" != "1" ] && pgrep -il "rekordbox" > /dev/null 2>&1; then
     ACTIVE_PROCS=$(pgrep -il "rekordbox" | awk -v pid="$$" '$1 != pid {print $0}')
     if [ -n "${ACTIVE_PROCS}" ]; then
         echo "⚠️  Rekordbox o Rekordbox Collection Manager è ancora in esecuzione!"
