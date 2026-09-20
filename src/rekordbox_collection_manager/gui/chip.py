@@ -54,13 +54,25 @@ CHIP_SCHEMES: Dict[str, Dict[str, QColor]] = {
 class ChipDeleteButton(QPushButton):
     """Anti-aliased vector delete button for removable badge chips."""
 
-    def __init__(self, parent: Optional[QWidget] = None):
+    def __init__(
+        self,
+        border_color: Optional[QColor] = None,
+        text_color: Optional[QColor] = None,
+        parent: Optional[QWidget] = None,
+    ):
         super().__init__(parent)
         self.setObjectName("chipDeleteBtn")
         self.setFixedSize(14, 14)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setToolTip("Remove")
+        self.border_color = border_color or QColor(255, 255, 255, 100)
+        self.text_color = text_color or QColor("#ffffff")
         self._hovered = False
+
+    def set_colors(self, border_color: QColor, text_color: QColor) -> None:
+        self.border_color = border_color
+        self.text_color = text_color
+        self.update()
 
     def enterEvent(self, event: Any) -> None:
         try:
@@ -88,10 +100,10 @@ class ChipDeleteButton(QPushButton):
             p.drawEllipse(rect)
             pen = QPen(QColor("#ffffff"), 1.5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
         else:
-            p.setBrush(QColor(255, 255, 255, 28))
-            p.setPen(Qt.PenStyle.NoPen)
-            p.drawEllipse(rect)
-            pen = QPen(QColor("#99f6e4"), 1.3, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
+            p.setBrush(QColor(22, 24, 32, 235))
+            p.setPen(QPen(self.border_color, 1.0))
+            p.drawEllipse(rect.adjusted(0.5, 0.5, -0.5, -0.5))
+            pen = QPen(self.text_color, 1.3, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
         p.setPen(pen)
         pad = 4.0
         p.drawLine(pad, pad, 14.0 - pad, 14.0 - pad)
@@ -102,8 +114,8 @@ class ChipDeleteButton(QPushButton):
 class BadgeChip(QFrame):
     """Universal anti-aliased badge chip for displaying tags, metadata, and playlists.
 
-    Features vector-drawn rounded borders (eliminating macOS QSS rasterization corner notches),
-    isolated typography with no stylesheet inheritance leaks, and optional vector removal button.
+    Features vector-drawn rounded borders, completely balanced text padding (no blank space),
+    and an elegant top-right corner removal badge on hover.
     """
 
     delete_requested = Signal(str)
@@ -122,11 +134,15 @@ class BadgeChip(QFrame):
         self.scheme = CHIP_SCHEMES.get(scheme, CHIP_SCHEMES["teal"])
         self.removable = removable
         self._hovered = False
-        self.setFixedHeight(24)
+
+        self.headroom_top = 5 if removable else 0
+        self.headroom_right = 5 if removable else 0
+        self.pill_h = 24
+        self.setFixedHeight(self.pill_h + self.headroom_top)
 
         layout = QHBoxLayout(self)
-        right_margin = 24 if removable else 9
-        layout.setContentsMargins(9, 0, right_margin, 0)
+        # Symmetrical 10px horizontal padding inside pill (no right-side blank space)
+        layout.setContentsMargins(10, self.headroom_top, 10 + self.headroom_right, 0)
         layout.setSpacing(0)
 
         self.label = QLabel(text)
@@ -137,7 +153,11 @@ class BadgeChip(QFrame):
         layout.addWidget(self.label)
 
         if self.removable:
-            self.x_btn = ChipDeleteButton(self)
+            self.x_btn = ChipDeleteButton(
+                border_color=self.scheme["border"],
+                text_color=self.scheme["text"],
+                parent=self,
+            )
             self.x_btn.setToolTip(f"Remove '{text}'")
             self.x_btn.setVisible(False)
             self.x_btn.clicked.connect(lambda: self.delete_requested.emit(self.text))
@@ -163,13 +183,17 @@ class BadgeChip(QFrame):
             f"color: {self.scheme['text'].name()}; font-size: 11px; font-weight: 500; "
             "background: transparent; border: none;"
         )
+        if self.removable and hasattr(self, "x_btn"):
+            self.x_btn.set_colors(self.scheme["border"], self.scheme["text"])
         self.update()
 
     def _position_x_btn(self) -> None:
         if self.removable and hasattr(self, "x_btn"):
+            pill_right = self.width() - self.headroom_right - 1.0
+            pill_top = self.headroom_top + 0.5
             btn_w = self.x_btn.width()
             btn_h = self.x_btn.height()
-            self.x_btn.move(self.width() - btn_w - 5, (self.height() - btn_h) // 2)
+            self.x_btn.move(int(pill_right - btn_w / 2), int(pill_top - btn_h / 2 + 1))
 
     def resizeEvent(self, event: Any) -> None:
         super().resizeEvent(event)
@@ -199,7 +223,12 @@ class BadgeChip(QFrame):
     def paintEvent(self, event: Any) -> None:
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        rect = QRectF(0.5, 0.5, self.width() - 1.0, self.height() - 1.0)
+        pill_rect = QRectF(
+            0.5,
+            self.headroom_top + 0.5,
+            self.width() - self.headroom_right - 1.0,
+            self.pill_h - 1.0,
+        )
         radius = 5.0
         if self._hovered:
             p.setBrush(self.scheme["bg_hover"])
@@ -207,7 +236,7 @@ class BadgeChip(QFrame):
         else:
             p.setBrush(self.scheme["bg"])
             p.setPen(QPen(self.scheme["border"], 1.0))
-        p.drawRoundedRect(rect, radius, radius)
+        p.drawRoundedRect(pill_rect, radius, radius)
         p.end()
 
 

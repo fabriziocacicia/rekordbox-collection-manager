@@ -474,7 +474,7 @@ class PlaylistChipsContainer(EditableChipsContainer):
 
     @playlists.setter
     def playlists(self, val: List[str]) -> None:
-        self.items = val
+        self.set_items(val)
 
     @property
     def all_available_playlists(self) -> List[str]:
@@ -521,7 +521,7 @@ class TagChipsContainer(EditableChipsContainer):
 
     @tags.setter
     def tags(self, val: List[str]) -> None:
-        self.items = val
+        self.set_items(val)
 
     @property
     def all_available_tags(self) -> List[str]:
