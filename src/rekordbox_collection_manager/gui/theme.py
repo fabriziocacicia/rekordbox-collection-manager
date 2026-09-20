@@ -368,6 +368,37 @@ QHeaderView::section {{
     text-transform: uppercase;
 }}
 
+QHeaderView::section:hover {{
+    background-color: {COLOR_BG_HOVER};
+    color: {COLOR_TEXT_PRIMARY};
+}}
+
+/* Context Menus */
+QMenu {{
+    background-color: {COLOR_BG_CARD};
+    color: {COLOR_TEXT_PRIMARY};
+    border: 1px solid {COLOR_BORDER_LIGHT};
+    border-radius: 6px;
+    padding: 4px;
+}}
+
+QMenu::item {{
+    padding: 6px 20px 6px 12px;
+    border-radius: 4px;
+    font-size: 12px;
+}}
+
+QMenu::item:selected {{
+    background-color: {COLOR_BLUE};
+    color: #ffffff;
+}}
+
+QMenu::separator {{
+    height: 1px;
+    background-color: {COLOR_BORDER};
+    margin: 4px 6px;
+}}
+
 /* Scrollbars */
 QScrollBar:vertical {{
     background: {COLOR_BG_DARK};

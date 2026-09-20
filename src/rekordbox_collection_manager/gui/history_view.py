@@ -2,7 +2,8 @@
 
 import re
 from typing import Any, Dict, List, Optional
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QPoint, Qt, Signal
+from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
@@ -161,6 +162,11 @@ class HistoryView(QWidget):
         ])
         self.table.setAlternatingRowColors(True)
         self.table.verticalHeader().setDefaultSectionSize(42)
+        self.table.verticalHeader().setToolTip("Click to open session options")
+        self.table.verticalHeader().setCursor(Qt.CursorShape.PointingHandCursor)
+        self.table.verticalHeader().sectionClicked.connect(self._on_row_header_clicked)
+        self.table.verticalHeader().setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.table.verticalHeader().customContextMenuRequested.connect(self._on_row_header_context_menu)
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
@@ -484,6 +490,7 @@ class HistoryView(QWidget):
                 status_item.setText("Clean")
                 status_item.setForeground(Qt.GlobalColor.gray)
             status_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+            status_item.setData(Qt.ItemDataRole.UserRole, rec_id)
             self.table.setItem(row_idx, 0, status_item)
 
             # Cells are editable ONLY if active
@@ -885,14 +892,48 @@ class HistoryView(QWidget):
         self.save_btn.setEnabled(staged > 0)
         self.discard_btn.setEnabled(staged > 0)
 
-    def _on_table_context_menu(self, pos) -> None:
+    def _on_table_context_menu(self, pos: QPoint) -> None:
         """Handle right-click context menu on history session row."""
         item = self.table.itemAt(pos)
         if not item:
             return
         row = item.row()
+        self.table.selectRow(row)
+        self._show_session_context_menu(row, self.table.viewport().mapToGlobal(pos))
+
+    def _on_row_header_clicked(self, logical_index: int) -> None:
+        """Handle left-click on row number header to show session actions menu."""
+        if logical_index < 0 or logical_index >= self.table.rowCount():
+            return
+        self.table.selectRow(logical_index)
+        cursor_pos = QCursor.pos()
+        v_header = self.table.verticalHeader()
+        header_rect = v_header.rect()
+        local_cursor = v_header.mapFromGlobal(cursor_pos)
+        if header_rect.contains(local_cursor):
+            menu_pos = cursor_pos
+        else:
+            x = v_header.width()
+            y = v_header.sectionViewportPosition(logical_index)
+            menu_pos = v_header.viewport().mapToGlobal(QPoint(x, y))
+        self._show_session_context_menu(logical_index, menu_pos)
+
+    def _on_row_header_context_menu(self, pos: QPoint) -> None:
+        """Handle right-click context menu on row number header."""
+        v_header = self.table.verticalHeader()
+        row = v_header.logicalIndexAt(pos)
+        if row >= 0:
+            self.table.selectRow(row)
+            global_pos = v_header.mapToGlobal(pos)
+            self._show_session_context_menu(row, global_pos)
+
+    def _show_session_context_menu(self, row: int, global_pos: QPoint) -> None:
+        """Show session actions menu (Delete, Restore, Details) for a given row."""
+        if row < 0 or row >= self.table.rowCount():
+            return
+
         rec_id = None
-        for c in (1, 2, 3, 4):
+        for c in range(self.table.columnCount()):
             cand = self.table.item(row, c)
             if cand and cand.data(Qt.ItemDataRole.UserRole):
                 rec_id = cand.data(Qt.ItemDataRole.UserRole)
@@ -916,7 +957,7 @@ class HistoryView(QWidget):
         else:
             action_item = menu.addAction("🗑️ Delete Session")
 
-        selected = menu.exec(self.table.viewport().mapToGlobal(pos))
+        selected = menu.exec(global_pos)
         if selected == detail_action:
             self._open_session_detail(rec_id)
         elif selected == action_item:

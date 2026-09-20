@@ -389,6 +389,22 @@ class TestHistoryViewDeletedUI(unittest.TestCase):
         self.assertEqual(restore_btn.minimumHeight(), 24)
         self.assertEqual(detail_btn.maximumHeight(), restore_btn.maximumHeight())
 
+    def test_row_header_click_opens_menu(self):
+        from unittest.mock import patch
+        from PySide6.QtCore import QPoint
+
+        with patch.object(self.view, "_show_session_context_menu") as mock_show:
+            self.view._on_row_header_clicked(0)
+            mock_show.assert_called_once()
+            args, _ = mock_show.call_args
+            self.assertEqual(args[0], 0)
+            self.assertIn(0, [i.row() for i in self.view.table.selectedIndexes()])
+
+        with patch.object(self.view, "_show_session_context_menu") as mock_show:
+            self.view._on_row_header_context_menu(QPoint(10, 10))
+            mock_show.assert_called_once()
+            args, _ = mock_show.call_args
+            self.assertEqual(args[0], 0)
 
 
 if __name__ == "__main__":
