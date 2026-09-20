@@ -360,6 +360,36 @@ class TestHistoryViewDeletedUI(unittest.TestCase):
         self.assertTrue(detail.deleted_badge.isHidden())
         self.assertTrue(detail.restore_btn.isHidden())
 
+    def test_action_buttons_equal_height(self):
+        from PySide6.QtWidgets import QPushButton
+        action_widget = self.view.table.cellWidget(0, 6)
+        detail_btn = action_widget.findChild(QPushButton, "detailActionBtn")
+        del_btn = action_widget.findChild(QPushButton, "deleteActionBtn")
+        self.assertIsNotNone(detail_btn)
+        self.assertIsNotNone(del_btn)
+        self.assertEqual(detail_btn.maximumHeight(), 24)
+        self.assertEqual(detail_btn.minimumHeight(), 24)
+        self.assertEqual(del_btn.maximumHeight(), 24)
+        self.assertEqual(del_btn.minimumHeight(), 24)
+        self.assertEqual(detail_btn.maximumHeight(), del_btn.maximumHeight())
+
+        # Switch to deleted
+        self.view.show_deleted_btn.setChecked(True)
+        del_item = None
+        for i in range(self.view.folder_tree.topLevelItemCount()):
+            it = self.view.folder_tree.topLevelItem(i)
+            if "Deleted Sessions" in it.text(0):
+                del_item = it
+                break
+        self.view._on_folder_item_clicked(del_item, 0)
+        action_widget_del = self.view.table.cellWidget(0, 6)
+        restore_btn = action_widget_del.findChild(QPushButton, "restoreActionBtn")
+        self.assertIsNotNone(restore_btn)
+        self.assertEqual(restore_btn.maximumHeight(), 24)
+        self.assertEqual(restore_btn.minimumHeight(), 24)
+        self.assertEqual(detail_btn.maximumHeight(), restore_btn.maximumHeight())
+
+
 
 if __name__ == "__main__":
     unittest.main()

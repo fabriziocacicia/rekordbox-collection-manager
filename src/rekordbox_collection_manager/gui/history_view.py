@@ -544,12 +544,13 @@ class HistoryView(QWidget):
             action_widget = QWidget()
             action_widget.setStyleSheet("background: transparent;")
             action_layout = QHBoxLayout(action_widget)
-            action_layout.setContentsMargins(2, 2, 2, 2)
-            action_layout.setSpacing(4)
+            action_layout.setContentsMargins(4, 2, 4, 2)
+            action_layout.setSpacing(6)
             action_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
             detail_btn = QPushButton("🔍 Details")
             detail_btn.setObjectName("detailActionBtn")
+            detail_btn.setFixedHeight(24)
             detail_btn.setCursor(Qt.CursorShape.PointingHandCursor)
             detail_btn.setToolTip("View session details and full tracklist")
             detail_btn.clicked.connect(lambda _, rid=rec_id: self._open_session_detail(rid))
@@ -558,45 +559,19 @@ class HistoryView(QWidget):
             if is_deleted:
                 restore_btn = QPushButton("♻️")
                 restore_btn.setObjectName("restoreActionBtn")
+                restore_btn.setFixedHeight(24)
+                restore_btn.setFixedWidth(28)
                 restore_btn.setCursor(Qt.CursorShape.PointingHandCursor)
                 restore_btn.setToolTip("Restore session back to active collection")
-                restore_btn.setStyleSheet(f"""
-                    QPushButton#restoreActionBtn {{
-                        background: {COLOR_GREEN_BG};
-                        color: {COLOR_GREEN};
-                        border: 1px solid {COLOR_GREEN_BORDER};
-                        border-radius: 4px;
-                        padding: 2px 6px;
-                        font-size: 11px;
-                        font-weight: 600;
-                    }}
-                    QPushButton#restoreActionBtn:hover {{
-                        background: {COLOR_GREEN};
-                        color: #ffffff;
-                    }}
-                """)
                 restore_btn.clicked.connect(lambda _, rid=rec_id, sn=cur_name: self._confirm_and_restore_session(rid, sn))
                 action_layout.addWidget(restore_btn)
             else:
                 del_btn = QPushButton("🗑️")
                 del_btn.setObjectName("deleteActionBtn")
+                del_btn.setFixedHeight(24)
+                del_btn.setFixedWidth(28)
                 del_btn.setCursor(Qt.CursorShape.PointingHandCursor)
                 del_btn.setToolTip("Soft-delete session from Rekordbox")
-                del_btn.setStyleSheet(f"""
-                    QPushButton#deleteActionBtn {{
-                        background: {COLOR_RED_BG};
-                        color: {COLOR_RED};
-                        border: 1px solid {COLOR_RED_BORDER};
-                        border-radius: 4px;
-                        padding: 2px 6px;
-                        font-size: 11px;
-                        font-weight: 600;
-                    }}
-                    QPushButton#deleteActionBtn:hover {{
-                        background: {COLOR_RED};
-                        color: #ffffff;
-                    }}
-                """)
                 del_btn.clicked.connect(lambda _, rid=rec_id, sn=cur_name: self._confirm_and_delete_session(rid, sn))
                 action_layout.addWidget(del_btn)
 

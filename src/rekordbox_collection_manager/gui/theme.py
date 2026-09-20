@@ -231,11 +231,11 @@ QPushButton#detailActionBtn {{
     color: {COLOR_TEXT_PRIMARY};
     border: 1px solid {COLOR_BORDER_LIGHT};
     border-radius: 5px;
-    padding: 1px 10px;
+    padding: 0px 8px;
     font-size: 11px;
     font-weight: 600;
-    min-height: 20px;
-    max-height: 20px;
+    min-height: 22px;
+    max-height: 22px;
 }}
 
 QPushButton#detailActionBtn:hover {{
@@ -248,6 +248,48 @@ QPushButton#detailActionBtn:pressed {{
     background-color: {COLOR_BLUE_PRESSED};
     color: #ffffff;
     border-color: {COLOR_BLUE_PRESSED};
+}}
+
+/* History Session Delete Action Button */
+QPushButton#deleteActionBtn {{
+    background-color: {COLOR_RED_BG};
+    color: {COLOR_RED};
+    border: 1px solid {COLOR_RED_BORDER};
+    border-radius: 5px;
+    padding: 0px 4px;
+    font-size: 11px;
+    font-weight: 600;
+    min-height: 22px;
+    max-height: 22px;
+    min-width: 28px;
+    max-width: 28px;
+}}
+
+QPushButton#deleteActionBtn:hover {{
+    background-color: {COLOR_RED};
+    color: #ffffff;
+    border-color: {COLOR_RED};
+}}
+
+/* History Session Restore Action Button */
+QPushButton#restoreActionBtn {{
+    background-color: {COLOR_GREEN_BG};
+    color: {COLOR_GREEN};
+    border: 1px solid {COLOR_GREEN_BORDER};
+    border-radius: 5px;
+    padding: 0px 4px;
+    font-size: 11px;
+    font-weight: 600;
+    min-height: 22px;
+    max-height: 22px;
+    min-width: 28px;
+    max-width: 28px;
+}}
+
+QPushButton#restoreActionBtn:hover {{
+    background-color: {COLOR_GREEN};
+    color: #ffffff;
+    border-color: {COLOR_GREEN};
 }}
 
 /* Header Refresh / Status Check Button */
