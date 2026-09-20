@@ -216,3 +216,11 @@ class PlaylistChip(BadgeChip):
 
     def __init__(self, name: str, parent: Optional[QWidget] = None):
         super().__init__(text=name, scheme="teal", removable=True, parent=parent)
+
+
+class TagChip(BadgeChip):
+    """Specialized removable badge chip for My Tags (purple color scheme)."""
+
+    def __init__(self, name: str, parent: Optional[QWidget] = None):
+        super().__init__(text=name, scheme="purple", removable=True, parent=parent)
+

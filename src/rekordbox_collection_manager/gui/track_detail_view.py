@@ -45,10 +45,13 @@ from sqlalchemy.engine import Engine
 
 from rekordbox_collection_manager.edit_play_count import (
     add_track_to_playlist,
+    add_track_to_tag,
     fetch_all_playlists,
+    fetch_all_tags,
     remove_track_from_playlist,
+    remove_track_from_tag,
 )
-from rekordbox_collection_manager.gui.chip import BadgeChip, PlaylistChip
+from rekordbox_collection_manager.gui.chip import BadgeChip, PlaylistChip, TagChip
 from rekordbox_collection_manager.gui.theme import (
     COLOR_AMBER,
     COLOR_AMBER_BG,
@@ -192,7 +195,7 @@ class FlowLayout(QLayout):
         return y + line_height - rect.y() + m.bottom()
 
 
-class PlaylistSearchLineEdit(QLineEdit):
+class ChipSearchLineEdit(QLineEdit):
     """Line edit that notifies parent when Escape is pressed or focus is lost."""
 
     escape_pressed = Signal()
@@ -220,28 +223,42 @@ class PlaylistSearchLineEdit(QLineEdit):
         self.escape_pressed.emit()
 
 
-class PlaylistChipsContainer(QWidget):
-    """Editable playlist chips container with autocompletable dropdown and inline search."""
+# Backward-compatible alias
+PlaylistSearchLineEdit = ChipSearchLineEdit
 
-    playlist_added = Signal(str)
-    playlist_removed = Signal(str)
+
+class EditableChipsContainer(QWidget):
+    """Generic editable chips container with autocompletable dropdown and inline search."""
+
+    item_added = Signal(str)
+    item_removed = Signal(str)
     editing_state_changed = Signal(bool)
 
-    def __init__(self, parent: Optional[QWidget] = None):
+    def __init__(
+        self,
+        scheme: str = "teal",
+        chip_class: type = PlaylistChip,
+        placeholder: str = "Search to add...",
+        empty_text: str = "None assigned (click here to add)",
+        object_name: str = "editableChipsContainer",
+        parent: Optional[QWidget] = None,
+    ):
         super().__init__(parent)
-        self.setObjectName("playlistChipsContainer")
+        self.scheme = scheme
+        self.chip_class = chip_class
+        self.setObjectName(object_name)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setMinimumHeight(28)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
 
         self.flow_layout = FlowLayout(self, margin=0, spacing=6)
 
-        self.playlists: List[str] = []
-        self.all_available_playlists: List[str] = []
-        self.chips: List[PlaylistChip] = []
+        self.items: List[str] = []
+        self.all_available_items: List[str] = []
+        self.chips: List[BadgeChip] = []
 
         # Empty state prompt
-        self.empty_label = QLabel("Not in any playlist (click here to add)")
+        self.empty_label = QLabel(empty_text)
         self.empty_label.setStyleSheet(
             f"color: {COLOR_TEXT_MUTED}; font-size: 11px; font-style: italic; background: transparent;"
         )
@@ -249,8 +266,8 @@ class PlaylistChipsContainer(QWidget):
         self.flow_layout.addWidget(self.empty_label)
 
         # Inline search input
-        self.input_edit = PlaylistSearchLineEdit(self)
-        self.input_edit.setPlaceholderText("Search playlist to add...")
+        self.input_edit = ChipSearchLineEdit(self)
+        self.input_edit.setPlaceholderText(placeholder)
         self.input_edit.setFixedHeight(24)
         self.input_edit.setMinimumWidth(180)
         self.input_edit.setMaximumWidth(260)
@@ -301,47 +318,41 @@ class PlaylistChipsContainer(QWidget):
                 f"  color: #38bdf8; "
                 f"}}"
             )
-        self.completer.activated.connect(self._on_playlist_chosen)
+        self.completer.activated.connect(self._on_item_chosen)
         self.input_edit.setCompleter(self.completer)
 
         # input_edit is appended after chips
         self.flow_layout.addWidget(self.input_edit)
 
-    def set_available_playlists(self, playlists: List[str]) -> None:
-        self.all_available_playlists = list(playlists)
+    def set_available_items(self, items: List[str]) -> None:
+        self.all_available_items = list(items)
 
-    def set_playlists(self, playlists: List[str]) -> None:
-        self.playlists = list(playlists)
-        # Clear existing chips
+    def set_items(self, items: List[str]) -> None:
+        self.items = list(items)
         for chip in list(self.chips):
             self.flow_layout.removeWidget(chip)
             chip.deleteLater()
         self.chips.clear()
 
-        # Temporarily remove input_edit so chips come first
         self.flow_layout.removeWidget(self.input_edit)
 
-        # Re-add chips
-        for name in self.playlists:
-            chip = PlaylistChip(name, self)
+        for name in self.items:
+            chip = self.chip_class(name, self)
             chip.delete_requested.connect(self._on_chip_delete)
             self.chips.append(chip)
             self.flow_layout.addWidget(chip)
 
-        # Re-add input_edit at the very end
         self.flow_layout.addWidget(self.input_edit)
-
         self._refresh_visibility()
         self.updateGeometry()
         self.flow_layout.activate()
 
-    def get_playlists(self) -> List[str]:
-        return list(self.playlists)
+    def get_items(self) -> List[str]:
+        return list(self.items)
 
     def _refresh_visibility(self) -> None:
         has_chips = len(self.chips) > 0
         is_editing = not self.input_edit.isHidden()
-
         if is_editing:
             self.empty_label.setVisible(False)
         else:
@@ -362,8 +373,8 @@ class PlaylistChipsContainer(QWidget):
             self.input_edit.setFocus()
             return
 
-        assigned_lower = {p.lower() for p in self.playlists}
-        candidates = [p for p in self.all_available_playlists if p.lower() not in assigned_lower]
+        assigned_lower = {p.lower() for p in self.items}
+        candidates = [p for p in self.all_available_items if p.lower() not in assigned_lower]
         self.completer_model.setStringList(candidates)
 
         self.empty_label.setVisible(False)
@@ -392,7 +403,7 @@ class PlaylistChipsContainer(QWidget):
             return
 
         matched = None
-        for p in self.all_available_playlists:
+        for p in self.all_available_items:
             if p.lower() == text.lower():
                 matched = p
                 break
@@ -400,21 +411,20 @@ class PlaylistChipsContainer(QWidget):
             matched = self.completer.currentCompletion()
 
         if matched:
-            self._on_playlist_chosen(matched)
+            self._on_item_chosen(matched)
         else:
             self.hide_add_input()
 
-    def _on_playlist_chosen(self, name: str) -> None:
+    def _on_item_chosen(self, name: str) -> None:
         self.hide_add_input()
-        if name in self.playlists:
+        if name in self.items:
             return
 
-        self.playlists.append(name)
-        chip = PlaylistChip(name, self)
+        self.items.append(name)
+        chip = self.chip_class(name, self)
         chip.delete_requested.connect(self._on_chip_delete)
         self.chips.append(chip)
 
-        # Reorder so chip is before input_edit
         self.flow_layout.removeWidget(self.input_edit)
         self.flow_layout.addWidget(chip)
         self.flow_layout.addWidget(self.input_edit)
@@ -422,11 +432,11 @@ class PlaylistChipsContainer(QWidget):
         self._refresh_visibility()
         self.updateGeometry()
         self.flow_layout.activate()
-        self.playlist_added.emit(name)
+        self.item_added.emit(name)
 
     def _on_chip_delete(self, name: str) -> None:
-        if name in self.playlists:
-            self.playlists.remove(name)
+        if name in self.items:
+            self.items.remove(name)
         for chip in list(self.chips):
             if chip.name == name:
                 self.chips.remove(chip)
@@ -437,7 +447,102 @@ class PlaylistChipsContainer(QWidget):
         self._refresh_visibility()
         self.updateGeometry()
         self.flow_layout.activate()
-        self.playlist_removed.emit(name)
+        self.item_removed.emit(name)
+
+
+class PlaylistChipsContainer(EditableChipsContainer):
+    """Editable playlist chips container with autocompletable dropdown and inline search."""
+
+    playlist_added = Signal(str)
+    playlist_removed = Signal(str)
+
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(
+            scheme="teal",
+            chip_class=PlaylistChip,
+            placeholder="Search playlist to add...",
+            empty_text="Not in any playlist (click here to add)",
+            object_name="playlistChipsContainer",
+            parent=parent,
+        )
+        self.item_added.connect(self.playlist_added.emit)
+        self.item_removed.connect(self.playlist_removed.emit)
+
+    @property
+    def playlists(self) -> List[str]:
+        return self.items
+
+    @playlists.setter
+    def playlists(self, val: List[str]) -> None:
+        self.items = val
+
+    @property
+    def all_available_playlists(self) -> List[str]:
+        return self.all_available_items
+
+    @all_available_playlists.setter
+    def all_available_playlists(self, val: List[str]) -> None:
+        self.all_available_items = val
+
+    def set_available_playlists(self, playlists: List[str]) -> None:
+        self.set_available_items(playlists)
+
+    def set_playlists(self, playlists: List[str]) -> None:
+        self.set_items(playlists)
+
+    def get_playlists(self) -> List[str]:
+        return self.get_items()
+
+    def _on_playlist_chosen(self, name: str) -> None:
+        self._on_item_chosen(name)
+
+
+class TagChipsContainer(EditableChipsContainer):
+    """Editable My Tags chips container with autocompletable dropdown and inline search."""
+
+    tag_added = Signal(str)
+    tag_removed = Signal(str)
+
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(
+            scheme="purple",
+            chip_class=TagChip,
+            placeholder="Search tag to add...",
+            empty_text="No tags assigned (click here to add)",
+            object_name="tagChipsContainer",
+            parent=parent,
+        )
+        self.item_added.connect(self.tag_added.emit)
+        self.item_removed.connect(self.tag_removed.emit)
+
+    @property
+    def tags(self) -> List[str]:
+        return self.items
+
+    @tags.setter
+    def tags(self, val: List[str]) -> None:
+        self.items = val
+
+    @property
+    def all_available_tags(self) -> List[str]:
+        return self.all_available_items
+
+    @all_available_tags.setter
+    def all_available_tags(self, val: List[str]) -> None:
+        self.all_available_items = val
+
+    def set_available_tags(self, tags: List[str]) -> None:
+        self.set_available_items(tags)
+
+    def set_tags(self, tags: List[str]) -> None:
+        self.set_items(tags)
+
+    def get_tags(self) -> List[str]:
+        return self.get_items()
+
+    def _on_tag_chosen(self, name: str) -> None:
+        self._on_item_chosen(name)
+
 
 
 class TrackDetailView(QWidget):
@@ -471,9 +576,14 @@ class TrackDetailView(QWidget):
         self.current_playlists: List[str] = []
         self.cached_all_playlists: List[str] = []
 
+        self.original_tags: List[str] = []
+        self.current_tags: List[str] = []
+        self.cached_all_tags: List[str] = []
+
         self._init_ui(back_button_text)
         if self.engine and self.track:
             self._load_available_playlists()
+            self._load_available_tags()
             self._populate_track_data(self.track)
             self._load_full_details_async()
 
@@ -670,11 +780,9 @@ class TrackDetailView(QWidget):
         tags_header_layout.addStretch(1)
         cat_layout.addLayout(tags_header_layout)
 
-        self.tags_container = QWidget()
-        self.tags_layout = QHBoxLayout(self.tags_container)
-        self.tags_layout.setContentsMargins(0, 0, 0, 0)
-        self.tags_layout.setSpacing(6)
-        self.tags_layout.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        self.tags_container = TagChipsContainer(parent=self)
+        self.tags_container.tag_added.connect(self._on_tag_added_or_removed)
+        self.tags_container.tag_removed.connect(self._on_tag_added_or_removed)
         cat_layout.addWidget(self.tags_container)
 
         # Playlists Row
@@ -885,13 +993,13 @@ class TrackDetailView(QWidget):
 
         self.discard_btn = QPushButton("Discard Changes")
         self.discard_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.discard_btn.clicked.connect(self._on_discard_playlist_changes)
+        self.discard_btn.clicked.connect(self._on_discard_changes)
         bottom_layout.addWidget(self.discard_btn)
 
         self.save_btn = QPushButton("💾 Save Changes")
         self.save_btn.setObjectName("primaryButton")
         self.save_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.save_btn.clicked.connect(self._on_save_playlist_changes)
+        self.save_btn.clicked.connect(self._on_save_changes)
         bottom_layout.addWidget(self.save_btn)
 
         self.bottom_bar.setVisible(False)
@@ -915,6 +1023,7 @@ class TrackDetailView(QWidget):
         self.current_index = current_index
         self.set_back_button_text(back_button_text)
         self._load_available_playlists()
+        self._load_available_tags()
         self._populate_track_data(self.track)
         self._load_full_details_async()
 
@@ -1011,13 +1120,9 @@ class TrackDetailView(QWidget):
         self.date_added_kpi_val.setText(date_added if date_added else "—")
 
         # Tags
-        tags = t.get("tags") or []
-        self._populate_chips(
-            self.tags_layout,
-            tags,
-            scheme="purple",
-            empty_text="No tags assigned",
-        )
+        self.original_tags = list(t.get("tags") or [])
+        self.current_tags = list(self.original_tags)
+        self.tags_container.set_tags(self.current_tags)
 
         # Playlists
         self.original_playlists = list(t.get("playlists") or [])
@@ -1265,7 +1370,16 @@ class TrackDetailView(QWidget):
                 self.original_playlists = list(db_playlists)
                 self.current_playlists = list(self.original_playlists)
                 self.playlists_container.set_playlists(self.current_playlists)
-                self._update_staged_changes_ui()
+
+        # Update tags if not currently modified in staged edits
+        if set(self.current_tags) == set(self.original_tags):
+            db_tags = full_details.get("tags")
+            if db_tags is not None:
+                self.original_tags = list(db_tags)
+                self.current_tags = list(self.original_tags)
+                self.tags_container.set_tags(self.current_tags)
+
+        self._update_staged_changes_ui()
 
     def _on_details_error(self, err_msg: str) -> None:
         self.status_message.emit(f"Error loading track details: {err_msg}")
@@ -1402,37 +1516,74 @@ class TrackDetailView(QWidget):
         except Exception:
             pass
 
+    def _load_available_tags(self) -> None:
+        """Fetch all user My Tags to feed autocomplete dropdown."""
+        if not self.engine:
+            return
+        try:
+            tags = fetch_all_tags(self.engine)
+            names = [t["name"] for t in tags if t.get("name")]
+            self.cached_all_tags = names
+            self.tags_container.set_available_tags(names)
+        except Exception:
+            pass
+
     def _on_playlist_added_or_removed(self, name: str) -> None:
         """Update staged playlists state when a chip is added or deleted."""
         self.current_playlists = self.playlists_container.get_playlists()
         self._update_staged_changes_ui()
 
+    def _on_tag_added_or_removed(self, name: str) -> None:
+        """Update staged tags state when a chip is added or deleted."""
+        self.current_tags = self.tags_container.get_tags()
+        self._update_staged_changes_ui()
+
     def _update_staged_changes_ui(self) -> None:
         """Refresh the bottom bar visibility and message according to staged edits."""
-        staged = set(self.current_playlists) != set(self.original_playlists)
+        pl_staged = set(self.current_playlists) != set(self.original_playlists)
+        tag_staged = set(self.current_tags) != set(self.original_tags)
+        staged = pl_staged or tag_staged
         self.bottom_bar.setVisible(staged)
         if staged:
-            added = set(self.current_playlists) - set(self.original_playlists)
-            removed = set(self.original_playlists) - set(self.current_playlists)
-            parts = []
-            if added:
-                parts.append(f"+{len(added)} added")
-            if removed:
-                parts.append(f"-{len(removed)} removed")
-            summary = ", ".join(parts)
+            sections = []
+            if pl_staged:
+                added = set(self.current_playlists) - set(self.original_playlists)
+                removed = set(self.original_playlists) - set(self.current_playlists)
+                parts = []
+                if added:
+                    parts.append(f"+{len(added)} added")
+                if removed:
+                    parts.append(f"-{len(removed)} removed")
+                sections.append(f"Playlists: {', '.join(parts)}")
+            if tag_staged:
+                added = set(self.current_tags) - set(self.original_tags)
+                removed = set(self.original_tags) - set(self.current_tags)
+                parts = []
+                if added:
+                    parts.append(f"+{len(added)} added")
+                if removed:
+                    parts.append(f"-{len(removed)} removed")
+                sections.append(f"Tags: {', '.join(parts)}")
+            summary = "; ".join(sections)
             self.staged_status_label.setText(
-                f"⚠️ Unsaved playlist modifications ({summary}) — click Save Changes to commit."
+                f"⚠️ Unsaved modifications ({summary}) — click Save Changes to commit."
             )
 
-    def _on_discard_playlist_changes(self) -> None:
-        """Discard staged playlist modifications and revert chips to original state."""
+    def _on_discard_changes(self) -> None:
+        """Discard staged playlist and tag modifications and revert chips to original state."""
         self.current_playlists = list(self.original_playlists)
         self.playlists_container.set_playlists(self.current_playlists)
+        self.current_tags = list(self.original_tags)
+        self.tags_container.set_tags(self.current_tags)
         self._update_staged_changes_ui()
-        self.status_message.emit("Playlist changes discarded.")
+        self.status_message.emit("Modifications discarded.")
 
-    def _on_save_playlist_changes(self) -> None:
-        """Save staged playlist changes to the Rekordbox database."""
+    def _on_discard_playlist_changes(self) -> None:
+        """Backward-compatible alias for discarding changes."""
+        self._on_discard_changes()
+
+    def _on_save_changes(self) -> None:
+        """Save staged playlist and tag changes to the Rekordbox database."""
         if is_rekordbox_running():
             QMessageBox.warning(
                 self,
@@ -1445,47 +1596,69 @@ class TrackDetailView(QWidget):
         if not content_id or not self.engine:
             return
 
-        added = set(self.current_playlists) - set(self.original_playlists)
-        removed = set(self.original_playlists) - set(self.current_playlists)
+        added_pl = set(self.current_playlists) - set(self.original_playlists)
+        removed_pl = set(self.original_playlists) - set(self.current_playlists)
+        added_tags = set(self.current_tags) - set(self.original_tags)
+        removed_tags = set(self.original_tags) - set(self.current_tags)
+
         try:
-            for name in added:
+            for name in added_pl:
                 add_track_to_playlist(self.engine, str(content_id), name)
-            for name in removed:
+            for name in removed_pl:
                 remove_track_from_playlist(self.engine, str(content_id), name)
+            for name in added_tags:
+                add_track_to_tag(self.engine, str(content_id), name)
+            for name in removed_tags:
+                remove_track_from_tag(self.engine, str(content_id), name)
         except Exception as e:
             QMessageBox.critical(
-                self, "Save Failed", f"Database error while saving playlist changes:\n{e}"
+                self, "Save Failed", f"Database error while saving modifications:\n{e}"
             )
             return
 
         self.original_playlists = list(self.current_playlists)
         self.track["playlists"] = list(self.current_playlists)
+
+        self.original_tags = list(self.current_tags)
+        self.track["tags"] = list(self.current_tags)
+
         if self.tracks_list and 0 <= self.current_index < len(self.tracks_list):
             self.tracks_list[self.current_index]["playlists"] = list(self.current_playlists)
+            self.tracks_list[self.current_index]["tags"] = list(self.current_tags)
 
         self._update_staged_changes_ui()
         self.track_changed.emit(self.current_index, self.track)
-        self.status_message.emit("✅ Playlist changes saved successfully.")
+        self.status_message.emit("✅ Modifications saved successfully.")
+
+    def _on_save_playlist_changes(self) -> None:
+        """Backward-compatible alias for saving changes."""
+        self._on_save_changes()
 
     def _confirm_unsaved_changes(self) -> bool:
-        """Prompt user if there are unsaved playlist changes before navigating away.
+        """Prompt user if there are unsaved playlist or tag changes before navigating away.
 
         Returns True if safe to navigate, False if action was cancelled.
         """
-        if set(self.current_playlists) != set(self.original_playlists):
+        pl_dirty = set(self.current_playlists) != set(self.original_playlists)
+        tag_dirty = set(self.current_tags) != set(self.original_tags)
+        if pl_dirty or tag_dirty:
             reply = QMessageBox.question(
                 self,
-                "Unsaved Playlist Changes",
-                "You have unsaved playlist modifications. Do you want to save them before leaving?",
+                "Unsaved Modifications",
+                "You have unsaved playlist or tag modifications. Do you want to save them before leaving?",
                 QMessageBox.StandardButton.Save
                 | QMessageBox.StandardButton.Discard
                 | QMessageBox.StandardButton.Cancel,
             )
             if reply == QMessageBox.StandardButton.Save:
-                self._on_save_playlist_changes()
-                return set(self.current_playlists) == set(self.original_playlists)
+                self._on_save_changes()
+                saved = (
+                    set(self.current_playlists) == set(self.original_playlists)
+                    and set(self.current_tags) == set(self.original_tags)
+                )
+                return saved
             elif reply == QMessageBox.StandardButton.Discard:
-                self._on_discard_playlist_changes()
+                self._on_discard_changes()
                 return True
             else:
                 return False
@@ -1580,6 +1753,11 @@ class TrackDetailView(QWidget):
         if hasattr(self, "playlists_container") and self.playlists_container.is_input_active():
             if event.key() == Qt.Key.Key_Escape:
                 self.playlists_container.hide_add_input()
+                event.accept()
+                return
+        if hasattr(self, "tags_container") and self.tags_container.is_input_active():
+            if event.key() == Qt.Key.Key_Escape:
+                self.tags_container.hide_add_input()
                 event.accept()
                 return
         if event.key() == Qt.Key.Key_Escape:

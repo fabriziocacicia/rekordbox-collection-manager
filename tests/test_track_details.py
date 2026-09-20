@@ -14,9 +14,12 @@ from sqlalchemy import create_engine
 
 from rekordbox_collection_manager.edit_play_count import (
     add_track_to_playlist,
+    add_track_to_tag,
     fetch_all_playlists,
+    fetch_all_tags,
     fetch_track_full_details,
     remove_track_from_playlist,
+    remove_track_from_tag,
     search_tracks,
 )
 from rekordbox_collection_manager.gui.history_view import HistoryView
@@ -29,6 +32,8 @@ from rekordbox_collection_manager.gui.track_detail_dialog import (
 from rekordbox_collection_manager.gui.track_detail_view import (
     PlaylistChip,
     PlaylistChipsContainer,
+    TagChip,
+    TagChipsContainer,
     TrackDetailView,
 )
 from rekordbox_collection_manager.gui.tracks_view import TracksView
@@ -162,6 +167,41 @@ class TestTrackDetailsBackend(unittest.TestCase):
                     ('sp_1', 'pl_1', '101', 1, 0),
                     ('sp_2', 'pl_2', '101', 2, 0);
             """)
+            conn.exec_driver_sql("""
+                CREATE TABLE djmdMyTag (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    Name VARCHAR(255),
+                    Attribute INTEGER DEFAULT 0,
+                    ParentID VARCHAR(255),
+                    rb_local_deleted INTEGER DEFAULT 0
+                );
+            """)
+            conn.exec_driver_sql("""
+                CREATE TABLE djmdSongMyTag (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    MyTagID VARCHAR(255),
+                    ContentID VARCHAR(255),
+                    TrackNo INTEGER,
+                    created_at VARCHAR(255),
+                    updated_at VARCHAR(255),
+                    rb_local_deleted INTEGER DEFAULT 0
+                );
+            """)
+            conn.exec_driver_sql("""
+                INSERT INTO djmdMyTag (ID, Name, Attribute, ParentID, rb_local_deleted)
+                VALUES 
+                    ('tag_1', 'Acid House', 0, '1', 0),
+                    ('tag_2', 'Deep House', 0, '1', 0),
+                    ('tag_3', 'Techno', 0, '1', 0),
+                    ('tag_folder', 'Category Folder', 1, 'root', 0),
+                    ('tag_del', 'Deleted Tag', 0, '1', 1);
+            """)
+            conn.exec_driver_sql("""
+                INSERT INTO djmdSongMyTag (ID, MyTagID, ContentID, rb_local_deleted)
+                VALUES 
+                    ('smt_1', 'tag_1', '101', 0),
+                    ('smt_2', 'tag_2', '101', 0);
+            """)
 
     def test_fetch_all_playlists(self):
         """Verify fetch_all_playlists retrieves active standard playlists sorted by name."""
@@ -202,6 +242,47 @@ class TestTrackDetailsBackend(unittest.TestCase):
         with self.engine.connect() as conn:
             is_active = conn.exec_driver_sql(
                 "SELECT rb_local_deleted FROM djmdSongPlaylist WHERE PlaylistID = 'pl_3' AND ContentID = '101';"
+            ).scalar()
+            self.assertEqual(is_active, 0)
+
+    def test_fetch_all_tags(self):
+        """Verify fetch_all_tags retrieves active standard My Tags sorted by name."""
+        tags = fetch_all_tags(self.engine)
+        names = [t["name"] for t in tags]
+        self.assertEqual(names, ["Acid House", "Deep House", "Techno"])
+        self.assertNotIn("Category Folder", names)
+        self.assertNotIn("Deleted Tag", names)
+
+    def test_add_track_to_tag_new_and_reactivate(self):
+        """Verify adding track to My Tag creates row or reactivates soft-deleted row."""
+        # Add to Techno
+        added = add_track_to_tag(self.engine, "101", "Techno")
+        self.assertTrue(added)
+
+        with self.engine.connect() as conn:
+            row = conn.exec_driver_sql(
+                "SELECT rb_local_deleted FROM djmdSongMyTag WHERE MyTagID = 'tag_3' AND ContentID = '101';"
+            ).fetchone()
+            self.assertIsNotNone(row)
+            self.assertEqual(row[0], 0)
+
+        # Soft delete it
+        removed = remove_track_from_tag(self.engine, "101", "Techno")
+        self.assertTrue(removed)
+
+        with self.engine.connect() as conn:
+            is_del = conn.exec_driver_sql(
+                "SELECT rb_local_deleted FROM djmdSongMyTag WHERE MyTagID = 'tag_3' AND ContentID = '101';"
+            ).scalar()
+            self.assertEqual(is_del, 1)
+
+        # Re-add it (reactivation)
+        readded = add_track_to_tag(self.engine, "101", "Techno")
+        self.assertTrue(readded)
+
+        with self.engine.connect() as conn:
+            is_active = conn.exec_driver_sql(
+                "SELECT rb_local_deleted FROM djmdSongMyTag WHERE MyTagID = 'tag_3' AND ContentID = '101';"
             ).scalar()
             self.assertEqual(is_active, 0)
 
@@ -650,12 +731,43 @@ class TestPlaylistChipsUI(unittest.TestCase):
                 INSERT INTO djmdSongPlaylist (ID, PlaylistID, ContentID, TrackNo) VALUES ('sp_1', 'pl_1', '10', 1);
             """)
 
+            conn.exec_driver_sql("""
+                CREATE TABLE djmdMyTag (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    Name VARCHAR(255),
+                    Attribute INTEGER DEFAULT 0,
+                    ParentID VARCHAR(255),
+                    rb_local_deleted INTEGER DEFAULT 0
+                );
+            """)
+            conn.exec_driver_sql("""
+                CREATE TABLE djmdSongMyTag (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    MyTagID VARCHAR(255),
+                    ContentID VARCHAR(255),
+                    TrackNo INTEGER,
+                    created_at VARCHAR(255),
+                    updated_at VARCHAR(255),
+                    rb_local_deleted INTEGER DEFAULT 0
+                );
+            """)
+            conn.exec_driver_sql("""
+                INSERT INTO djmdMyTag (ID, Name, Attribute) VALUES 
+                    ('tag_1', 'Melodic', 0),
+                    ('tag_2', 'Peak Time', 0),
+                    ('tag_3', 'Vocal', 0);
+            """)
+            conn.exec_driver_sql("""
+                INSERT INTO djmdSongMyTag (ID, MyTagID, ContentID) VALUES ('smt_1', 'tag_1', '10');
+            """)
+
         self.track_data = {
             "id": "10",
             "content_id": "10",
             "title": "Sunset Track",
             "artist": "DJ Test",
             "playlists": ["Afro House"],
+            "tags": ["Melodic"],
         }
 
     def test_playlist_chip_hover_and_delete(self):
@@ -798,6 +910,136 @@ class TestPlaylistChipsUI(unittest.TestCase):
         # Second Escape: should trigger back navigation
         view.keyPressEvent(esc_event)
         self.assertEqual(len(back_called), 1)
+
+    def test_tag_chip_hover_and_delete(self):
+        """Verify '✕' button becomes visible on TagChip hover and emits delete_requested on click."""
+        chip = TagChip("Melodic")
+        chip.show()
+        self.assertFalse(chip.x_btn.isVisible(), "'✕' should be hidden by default")
+
+        # Simulate mouse enter
+        enter_ev = QEvent(QEvent.Type.Enter)
+        chip.enterEvent(enter_ev)
+        self.assertTrue(chip.x_btn.isVisible(), "'✕' should be visible on hover")
+
+        # Click '✕'
+        deleted = []
+        chip.delete_requested.connect(lambda name: deleted.append(name))
+        chip.x_btn.click()
+        self.assertEqual(deleted, ["Melodic"])
+
+    def test_tag_container_empty_space_click_opens_autocomplete(self):
+        """Verify clicking empty space opens input field and autocompleter in TagChipsContainer."""
+        container = TagChipsContainer()
+        container.resize(600, 100)
+        container.show()
+        container.set_available_tags(["Melodic", "Peak Time", "Vocal"])
+        container.set_tags(["Melodic"])
+
+        self.assertFalse(container.input_edit.isVisible())
+        self.assertEqual(len(container.chips), 1)
+
+        # Trigger show_add_input
+        container.show_add_input()
+        QApplication.processEvents()
+        self.assertTrue(container.input_edit.isVisible())
+        self.assertTrue(container.is_input_active())
+
+        # Check candidates (should exclude already assigned 'Melodic')
+        candidates = container.completer_model.stringList()
+        self.assertIn("Peak Time", candidates)
+        self.assertIn("Vocal", candidates)
+        self.assertNotIn("Melodic", candidates)
+
+        # Press Escape to hide
+        container.hide_add_input()
+        self.assertFalse(container.input_edit.isVisible())
+
+    def test_tag_container_select_autocomplete_attaches_chip(self):
+        """Verify selecting a tag from autocomplete attaches new TagChip and emits signal."""
+        container = TagChipsContainer()
+        container.resize(600, 100)
+        container.show()
+        container.set_available_tags(["Melodic", "Peak Time", "Vocal"])
+        container.set_tags(["Melodic"])
+
+        added = []
+        container.tag_added.connect(lambda name: added.append(name))
+
+        # Select 'Peak Time'
+        container._on_tag_chosen("Peak Time")
+        QApplication.processEvents()
+        self.assertEqual(added, ["Peak Time"])
+        self.assertEqual(container.get_tags(), ["Melodic", "Peak Time"])
+        self.assertEqual(len(container.chips), 2)
+        self.assertEqual(container.chips[1].name, "Peak Time")
+
+    def test_save_discard_combined_playlists_and_tags(self):
+        """Verify bottom bar tracks both playlists and tags and saves to database."""
+        view = TrackDetailView(
+            engine=self.engine,
+            track_data=self.track_data,
+            tracks_list=[self.track_data],
+            current_index=0,
+        )
+        view.show()
+        self.assertFalse(view.bottom_bar.isVisible(), "Bottom bar should be hidden initially")
+
+        # Stage a tag addition
+        view.tags_container._on_tag_chosen("Peak Time")
+        self.assertTrue(view.bottom_bar.isVisible(), "Bottom bar should appear when tag is added")
+        self.assertIn("Peak Time", view.current_tags)
+        self.assertIn("Tags:", view.staged_status_label.text())
+
+        # Stage a playlist addition
+        view.playlists_container._on_playlist_chosen("Deep House")
+        self.assertIn("Playlists:", view.staged_status_label.text())
+        self.assertIn("Tags:", view.staged_status_label.text())
+
+        # Discard changes
+        view.discard_btn.click()
+        self.assertFalse(view.bottom_bar.isVisible(), "Bottom bar should hide after discarding")
+        self.assertEqual(view.current_playlists, ["Afro House"])
+        self.assertEqual(view.current_tags, ["Melodic"])
+
+        # Stage a tag deletion
+        view.tags_container._on_chip_delete("Melodic")
+        self.assertTrue(view.bottom_bar.isVisible())
+        self.assertEqual(view.current_tags, [])
+
+        # Save changes
+        with patch("rekordbox_collection_manager.gui.track_detail_view.is_rekordbox_running", return_value=False):
+            view.save_btn.click()
+
+        self.assertFalse(view.bottom_bar.isVisible(), "Bottom bar should hide after saving")
+        self.assertEqual(view.original_tags, [])
+
+        # Verify in SQLite DB (djmdSongMyTag soft-deleted)
+        with self.engine.connect() as conn:
+            is_del = conn.exec_driver_sql(
+                "SELECT rb_local_deleted FROM djmdSongMyTag WHERE MyTagID = 'tag_1' AND ContentID = '10';"
+            ).scalar()
+            self.assertEqual(is_del, 1, "Tag association should be marked soft-deleted in database")
+
+    def test_tag_escape_key_handling(self):
+        """Verify Escape dismisses tag search input first when active."""
+        view = TrackDetailView(
+            engine=self.engine,
+            track_data=self.track_data,
+            tracks_list=[self.track_data],
+            current_index=0,
+        )
+        view.show()
+        view.tags_container.show_add_input()
+        self.assertTrue(view.tags_container.is_input_active())
+
+        back_called = []
+        view.back_clicked.connect(lambda: back_called.append(True))
+
+        esc_event = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Escape, Qt.KeyboardModifier.NoModifier)
+        view.keyPressEvent(esc_event)
+        self.assertFalse(view.tags_container.is_input_active())
+        self.assertEqual(len(back_called), 0)
 
 
 if __name__ == "__main__":

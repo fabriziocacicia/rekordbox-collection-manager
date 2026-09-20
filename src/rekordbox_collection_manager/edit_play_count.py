@@ -725,6 +725,209 @@ def remove_track_from_playlist(
             return (res.rowcount or 0) > 0
 
 
+def fetch_all_tags(engine: Engine) -> List[Dict[str, Any]]:
+    """Fetch all user My Tags from Rekordbox database.
+
+    Filters for standard selectable tags (Attribute = 0) and non-deleted entries.
+    Returns a list of dicts: [{'id': str, 'name': str, 'parent_id': Optional[str]}],
+    sorted alphabetically by Name.
+    """
+    with engine.connect() as conn:
+        cols = {
+            r[1]
+            for r in conn.exec_driver_sql("PRAGMA table_info(djmdMyTag);").fetchall()
+        }
+        if not cols:
+            return []
+
+        attr_clause = "AND Attribute = 0" if "Attribute" in cols else ""
+        del_clause = (
+            "AND (rb_local_deleted = 0 OR rb_local_deleted IS NULL)"
+            if "rb_local_deleted" in cols
+            else ""
+        )
+        parent_col = "ParentID" if "ParentID" in cols else "NULL AS ParentID"
+
+        sql = f"""
+            SELECT ID, Name, {parent_col}
+            FROM djmdMyTag
+            WHERE 1=1 {attr_clause} {del_clause}
+              AND Name IS NOT NULL AND TRIM(Name) != ''
+            ORDER BY lower(Name) ASC;
+        """
+        rows = conn.execute(text(sql)).fetchall()
+        return [
+            {
+                "id": str(r[0]),
+                "name": str(r[1]).strip(),
+                "parent_id": str(r[2]) if r[2] else None,
+            }
+            for r in rows
+            if r[1] and str(r[1]).strip()
+        ]
+
+
+def add_track_to_tag(
+    engine: Engine,
+    content_id: str,
+    tag_name_or_id: str,
+) -> bool:
+    """Add a track to a My Tag in Rekordbox database.
+
+    If association was previously soft-deleted, reactivates it (rb_local_deleted = 0).
+    Otherwise creates a new djmdSongMyTag record.
+    Returns True if successfully added or already present.
+    """
+    now_utc = get_rekordbox_timestamp()
+
+    with engine.begin() as conn:
+        tag_cols = {
+            r[1]
+            for r in conn.exec_driver_sql("PRAGMA table_info(djmdMyTag);").fetchall()
+        }
+        smt_cols = {
+            r[1]
+            for r in conn.exec_driver_sql("PRAGMA table_info(djmdSongMyTag);").fetchall()
+        }
+
+        if not tag_cols or not smt_cols:
+            raise ValueError("Required My Tag tables (djmdMyTag, djmdSongMyTag) not found.")
+
+        # Find tag by ID or Name
+        tag_del = "AND (rb_local_deleted = 0 OR rb_local_deleted IS NULL)" if "rb_local_deleted" in tag_cols else ""
+        tag_attr = "AND Attribute = 0" if "Attribute" in tag_cols else ""
+
+        # Try ID match first
+        find_sql = f"SELECT ID, Name FROM djmdMyTag WHERE ID = :query {tag_del} LIMIT 1;"
+        tag_row = conn.execute(text(find_sql), {"query": tag_name_or_id}).fetchone()
+
+        if not tag_row:
+            # Try Name match (case-insensitive)
+            find_sql = f"SELECT ID, Name FROM djmdMyTag WHERE lower(Name) = lower(:query) {tag_attr} {tag_del} LIMIT 1;"
+            tag_row = conn.execute(text(find_sql), {"query": tag_name_or_id.strip()}).fetchone()
+
+        if not tag_row:
+            raise ValueError(f"My Tag '{tag_name_or_id}' not found.")
+
+        tag_id = str(tag_row[0])
+        content_id_str = str(content_id)
+
+        # Check existing association in djmdSongMyTag
+        has_rb_del = "rb_local_deleted" in smt_cols
+        check_sql = (
+            "SELECT ID"
+            + (", rb_local_deleted" if has_rb_del else "")
+            + " FROM djmdSongMyTag WHERE MyTagID = :tag_id AND ContentID = :c_id LIMIT 1;"
+        )
+        existing = conn.execute(text(check_sql), {"tag_id": tag_id, "c_id": content_id_str}).fetchone()
+
+        if existing:
+            entry_id = str(existing[0])
+            if has_rb_del:
+                is_del = existing[1]
+                if is_del == 0 or is_del is None:
+                    # Already active
+                    return True
+                # Reactivate soft-deleted row
+                update_parts = ["rb_local_deleted = 0"]
+                params: Dict[str, Any] = {"id": entry_id}
+                if "updated_at" in smt_cols:
+                    update_parts.append("updated_at = :now")
+                    params["now"] = now_utc
+                if "rb_local_synced" in smt_cols:
+                    update_parts.append("rb_local_synced = 1")
+                update_sql = f"UPDATE djmdSongMyTag SET {', '.join(update_parts)} WHERE ID = :id;"
+                conn.execute(text(update_sql), params)
+                return True
+            else:
+                return True
+
+        # Calculate next TrackNo if column exists
+        track_no = None
+        if "TrackNo" in smt_cols:
+            track_no_sql = "SELECT COALESCE(MAX(TrackNo), 0) + 1 FROM djmdSongMyTag WHERE MyTagID = :tag_id;"
+            track_no = conn.execute(text(track_no_sql), {"tag_id": tag_id}).scalar() or 1
+
+        new_id = str(uuid.uuid4())
+        record_data = {
+            "ID": new_id,
+            "MyTagID": tag_id,
+            "ContentID": content_id_str,
+            "TrackNo": int(track_no) if track_no is not None else None,
+            "UUID": new_id,
+            "rb_data_status": 0,
+            "rb_local_data_status": 0,
+            "rb_local_deleted": 0,
+            "rb_local_synced": 1,
+            "created_at": now_utc,
+            "updated_at": now_utc,
+        }
+        insert_cols = [k for k in record_data if k in smt_cols]
+        col_names = ", ".join(insert_cols)
+        placeholders = ", ".join(f":{k}" for k in insert_cols)
+        insert_sql = f"INSERT INTO djmdSongMyTag ({col_names}) VALUES ({placeholders});"
+        conn.execute(text(insert_sql), {k: record_data[k] for k in insert_cols})
+        return True
+
+
+def remove_track_from_tag(
+    engine: Engine,
+    content_id: str,
+    tag_name_or_id: str,
+) -> bool:
+    """Remove a track from a My Tag in Rekordbox database.
+
+    If rb_local_deleted column exists, performs a soft delete (rb_local_deleted = 1).
+    Otherwise performs a standard DELETE.
+    Returns True if removed.
+    """
+    now_utc = get_rekordbox_timestamp()
+
+    with engine.begin() as conn:
+        tag_cols = {
+            r[1]
+            for r in conn.exec_driver_sql("PRAGMA table_info(djmdMyTag);").fetchall()
+        }
+        smt_cols = {
+            r[1]
+            for r in conn.exec_driver_sql("PRAGMA table_info(djmdSongMyTag);").fetchall()
+        }
+
+        if not tag_cols or not smt_cols:
+            return False
+
+        # Find tag ID
+        find_sql = "SELECT ID FROM djmdMyTag WHERE ID = :query LIMIT 1;"
+        tag_row = conn.execute(text(find_sql), {"query": tag_name_or_id}).fetchone()
+
+        if not tag_row:
+            find_sql = "SELECT ID FROM djmdMyTag WHERE lower(Name) = lower(:query) LIMIT 1;"
+            tag_row = conn.execute(text(find_sql), {"query": tag_name_or_id.strip()}).fetchone()
+
+        if not tag_row:
+            return False
+
+        tag_id = str(tag_row[0])
+        content_id_str = str(content_id)
+
+        if "rb_local_deleted" in smt_cols:
+            update_parts = ["rb_local_deleted = 1"]
+            params: Dict[str, Any] = {"tag_id": tag_id, "c_id": content_id_str}
+            if "updated_at" in smt_cols:
+                update_parts.append("updated_at = :now")
+                params["now"] = now_utc
+            sql = (
+                f"UPDATE djmdSongMyTag SET {', '.join(update_parts)} "
+                "WHERE MyTagID = :tag_id AND ContentID = :c_id AND (rb_local_deleted = 0 OR rb_local_deleted IS NULL);"
+            )
+            res = conn.execute(text(sql), params)
+            return (res.rowcount or 0) > 0
+        else:
+            del_sql = "DELETE FROM djmdSongMyTag WHERE MyTagID = :tag_id AND ContentID = :c_id;"
+            res = conn.execute(text(del_sql), {"tag_id": tag_id, "c_id": content_id_str})
+            return (res.rowcount or 0) > 0
+
+
 def update_track_play_count(
     engine: Engine,
     track_id: str,
