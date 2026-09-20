@@ -352,9 +352,10 @@ def soft_delete_history_session(engine: Engine, history_id: str) -> bool:
     """Soft-delete a Rekordbox history session without data loss.
 
     Sets rb_local_deleted = 1 and rb_data_status = 2 on djmdHistory and all
-    associated djmdSongHistory entries. If the parent Month folder (and Year folder)
-    has no remaining active sessions, marks them as deleted as well, matching
-    Rekordbox's native cleanup behavior.
+    associated djmdSongHistory entries. Decreases the DJ play count of tracks
+    played in this session by the number of times they were played.
+    If the parent Month folder (and Year folder) has no remaining active sessions,
+    marks them as deleted as well, matching Rekordbox's native cleanup behavior.
     """
     now_utc = get_rekordbox_timestamp()
     with engine.begin() as conn:
@@ -367,15 +368,37 @@ def soft_delete_history_session(engine: Engine, history_id: str) -> bool:
                 return False
 
             row = conn.execute(
-                text("SELECT ID, ParentID FROM djmdHistory WHERE ID = :hid;"),
+                text(f"SELECT ID, ParentID{', rb_local_deleted' if 'rb_local_deleted' in cols else ''} FROM djmdHistory WHERE ID = :hid;"),
                 {"hid": history_id},
             ).mappings().fetchone()
             if not row:
                 return False
 
+            # If already deleted, do not re-process (prevents double-decrement)
+            if "rb_local_deleted" in cols and row.get("rb_local_deleted") == 1:
+                return True
+
             parent_id = row.get("ParentID")
 
-            # 1. Soft delete the session row in djmdHistory
+            # 1. Collect active tracks played in this session to decrement their play count
+            played_tracks: List[Tuple[str, int]] = []
+            if "djmdSongHistory" in existing_tables:
+                sh_cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(djmdSongHistory);").fetchall()}
+                sh_filter = "AND (rb_local_deleted = 0 OR rb_local_deleted IS NULL)" if "rb_local_deleted" in sh_cols else ""
+                pt_rows = conn.execute(
+                    text(f"""
+                        SELECT ContentID, COUNT(*) AS play_count
+                        FROM djmdSongHistory
+                        WHERE HistoryID = :hid
+                          {sh_filter}
+                          AND ContentID IS NOT NULL
+                        GROUP BY ContentID;
+                    """),
+                    {"hid": history_id},
+                ).fetchall()
+                played_tracks = [(str(r[0]), int(r[1])) for r in pt_rows if r[0]]
+
+            # 2. Soft delete the session row in djmdHistory
             set_parts = ["rb_local_deleted = 1"]
             if "rb_data_status" in cols:
                 set_parts.append("rb_data_status = 2")
@@ -387,7 +410,7 @@ def soft_delete_history_session(engine: Engine, history_id: str) -> bool:
                 {"hid": history_id, "now": now_utc},
             )
 
-            # 2. Soft delete associated tracks in djmdSongHistory
+            # 3. Soft delete associated tracks in djmdSongHistory
             if "djmdSongHistory" in existing_tables:
                 sh_cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(djmdSongHistory);").fetchall()}
                 if "rb_local_deleted" in sh_cols:
@@ -401,7 +424,23 @@ def soft_delete_history_session(engine: Engine, history_id: str) -> bool:
                         {"hid": history_id, "now": now_utc},
                     )
 
-            # 3. Check if parent Month folder is now empty of active sessions
+            # 4. Decrement play count in djmdContent by the number of times played
+            if "djmdContent" in existing_tables and played_tracks:
+                c_cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(djmdContent);").fetchall()}
+                play_col = "DJPlayCount" if "DJPlayCount" in c_cols else ("PlayCount" if "PlayCount" in c_cols else None)
+                if play_col:
+                    has_c_updated = "updated_at" in c_cols
+                    c_updates = [f"{play_col} = MAX(0, COALESCE({play_col}, 0) - :play_cnt)"]
+                    if has_c_updated:
+                        c_updates.append("updated_at = :now")
+                    update_c_sql = f"UPDATE djmdContent SET {', '.join(c_updates)} WHERE ID = :cid;"
+                    for cid, cnt in played_tracks:
+                        params: Dict[str, Any] = {"play_cnt": cnt, "cid": cid}
+                        if has_c_updated:
+                            params["now"] = now_utc
+                        conn.execute(text(update_c_sql), params)
+
+            # 5. Check if parent Month folder is now empty of active sessions
             if parent_id and str(parent_id).lower() != "root":
                 active_in_month = conn.execute(
                     text("""
@@ -447,6 +486,36 @@ def soft_delete_history_session(engine: Engine, history_id: str) -> bool:
 
         elif "history" in existing_tables:
             cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(history);").fetchall()}
+            if "rb_local_deleted" not in cols:
+                return False
+
+            h_row = conn.execute(
+                text(f"SELECT history_id{', rb_local_deleted' if 'rb_local_deleted' in cols else ''} FROM history WHERE history_id = :hid;"),
+                {"hid": history_id},
+            ).mappings().fetchone()
+            if not h_row:
+                return False
+
+            if "rb_local_deleted" in cols and h_row.get("rb_local_deleted") == 1:
+                return True
+
+            usb_played_tracks: List[Tuple[str, int]] = []
+            if "songHistory" in existing_tables:
+                sh_cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(songHistory);").fetchall()}
+                sh_filter = "AND (rb_local_deleted = 0 OR rb_local_deleted IS NULL)" if "rb_local_deleted" in sh_cols else ""
+                pt_rows = conn.execute(
+                    text(f"""
+                        SELECT content_id, COUNT(*) AS play_count
+                        FROM songHistory
+                        WHERE history_id = :hid
+                          {sh_filter}
+                          AND content_id IS NOT NULL
+                        GROUP BY content_id;
+                    """),
+                    {"hid": history_id},
+                ).fetchall()
+                usb_played_tracks = [(str(r[0]), int(r[1])) for r in pt_rows if r[0]]
+
             if "rb_local_deleted" in cols:
                 conn.execute(
                     text("UPDATE history SET rb_local_deleted = 1 WHERE history_id = :hid;"),
@@ -459,6 +528,23 @@ def soft_delete_history_session(engine: Engine, history_id: str) -> bool:
                         text("UPDATE songHistory SET rb_local_deleted = 1 WHERE history_id = :hid;"),
                         {"hid": history_id},
                     )
+
+            if "content" in existing_tables and usb_played_tracks:
+                c_cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(content);").fetchall()}
+                play_col = "DJPlayCount" if "DJPlayCount" in c_cols else ("PlayCount" if "PlayCount" in c_cols else None)
+                id_col = "ID" if "ID" in c_cols else ("content_id" if "content_id" in c_cols else None)
+                if play_col and id_col:
+                    has_c_updated = "updated_at" in c_cols
+                    c_updates = [f"{play_col} = MAX(0, COALESCE({play_col}, 0) - :play_cnt)"]
+                    if has_c_updated:
+                        c_updates.append("updated_at = :now")
+                    update_c_sql = f"UPDATE content SET {', '.join(c_updates)} WHERE {id_col} = :cid;"
+                    for cid, cnt in usb_played_tracks:
+                        params = {"play_cnt": cnt, "cid": cid}
+                        if has_c_updated:
+                            params["now"] = now_utc
+                        conn.execute(text(update_c_sql), params)
+
             return True
 
     return False
@@ -468,6 +554,7 @@ def restore_history_session(engine: Engine, history_id: str) -> bool:
     """Restore a previously soft-deleted Rekordbox history session and its tracks.
 
     Reactivates djmdHistory and djmdSongHistory records (rb_local_deleted = 0, rb_data_status = 0),
+    re-increments the DJ play count of associated tracks by the number of times they were played,
     ensures the Month and Year folders are present and reactivated, and realigns the
     chronological sequence indices in the database.
     """
@@ -484,24 +571,46 @@ def restore_history_session(engine: Engine, history_id: str) -> bool:
                 return False
 
             row = conn.execute(
-                text("SELECT ID, Name, DateCreated, ParentID FROM djmdHistory WHERE ID = :hid;"),
+                text(f"SELECT ID, Name, DateCreated, ParentID{', rb_local_deleted' if 'rb_local_deleted' in cols else ''} FROM djmdHistory WHERE ID = :hid;"),
                 {"hid": history_id},
             ).mappings().fetchone()
             if not row:
                 return False
 
+            # If already active, do not re-process (prevents double-increment)
+            if "rb_local_deleted" in cols and row.get("rb_local_deleted") == 0:
+                return True
+
             name = row.get("Name") or ""
             date_val = row.get("DateCreated") or ""
             existing_parent = row.get("ParentID")
 
-            # 1. Restore the session row in djmdHistory
+            # 1. Collect soft-deleted tracks in this session to restore their play count
+            tracks_to_restore: List[Tuple[str, int]] = []
+            if "djmdSongHistory" in existing_tables:
+                sh_cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(djmdSongHistory);").fetchall()}
+                sh_filter = "AND rb_local_deleted = 1" if "rb_local_deleted" in sh_cols else ""
+                pt_rows = conn.execute(
+                    text(f"""
+                        SELECT ContentID, COUNT(*) AS play_count
+                        FROM djmdSongHistory
+                        WHERE HistoryID = :hid
+                          {sh_filter}
+                          AND ContentID IS NOT NULL
+                        GROUP BY ContentID;
+                    """),
+                    {"hid": history_id},
+                ).fetchall()
+                tracks_to_restore = [(str(r[0]), int(r[1])) for r in pt_rows if r[0]]
+
+            # 2. Restore the session row in djmdHistory
             set_parts = ["rb_local_deleted = 0"]
             if "rb_data_status" in cols:
                 set_parts.append("rb_data_status = 0")
             if "updated_at" in cols:
                 set_parts.append("updated_at = :now")
 
-            # 2. Ensure Year and Month folders exist and are active
+            # 3. Ensure Year and Month folders exist and are active
             y, m = extract_year_month_from_name_or_date(name, date_val)
             if y and m:
                 date_str = date_val or f"{y:04d}-{m:02d}-01"
@@ -527,7 +636,7 @@ def restore_history_session(engine: Engine, history_id: str) -> bool:
                 params,
             )
 
-            # 3. Restore associated tracks in djmdSongHistory
+            # 4. Restore associated tracks in djmdSongHistory
             if "djmdSongHistory" in existing_tables:
                 sh_cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(djmdSongHistory);").fetchall()}
                 if "rb_local_deleted" in sh_cols:
@@ -541,10 +650,56 @@ def restore_history_session(engine: Engine, history_id: str) -> bool:
                         {"hid": history_id, "now": now_utc},
                     )
 
+            # 5. Re-increment play count in djmdContent by the number of times played
+            if "djmdContent" in existing_tables and tracks_to_restore:
+                c_cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(djmdContent);").fetchall()}
+                play_col = "DJPlayCount" if "DJPlayCount" in c_cols else ("PlayCount" if "PlayCount" in c_cols else None)
+                if play_col:
+                    has_c_updated = "updated_at" in c_cols
+                    c_updates = [f"{play_col} = COALESCE({play_col}, 0) + :play_cnt"]
+                    if has_c_updated:
+                        c_updates.append("updated_at = :now")
+                    update_c_sql = f"UPDATE djmdContent SET {', '.join(c_updates)} WHERE ID = :cid;"
+                    for cid, cnt in tracks_to_restore:
+                        params = {"play_cnt": cnt, "cid": cid}
+                        if has_c_updated:
+                            params["now"] = now_utc
+                        conn.execute(text(update_c_sql), params)
+
             restored = True
 
         elif "history" in existing_tables:
             cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(history);").fetchall()}
+            if "rb_local_deleted" not in cols:
+                return False
+
+            h_row = conn.execute(
+                text(f"SELECT history_id{', rb_local_deleted' if 'rb_local_deleted' in cols else ''} FROM history WHERE history_id = :hid;"),
+                {"hid": history_id},
+            ).mappings().fetchone()
+            if not h_row:
+                return False
+
+            if "rb_local_deleted" in cols and h_row.get("rb_local_deleted") == 0:
+                return True
+
+            usb_tracks_to_restore: List[Tuple[str, int]] = []
+            if "songHistory" in existing_tables:
+                sh_cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(songHistory);").fetchall()}
+                sh_filter = "AND rb_local_deleted = 1" if "rb_local_deleted" in sh_cols else ""
+                pt_rows = conn.execute(
+                    text(f"""
+                        SELECT content_id, COUNT(*) AS play_count
+                        FROM songHistory
+                        WHERE history_id = :hid
+                          {sh_filter}
+                          AND content_id IS NOT NULL
+                        GROUP BY content_id;
+                    """),
+                    {"hid": history_id},
+                ).fetchall()
+                usb_tracks_to_restore = [(str(r[0]), int(r[1])) for r in pt_rows if r[0]]
+
             if "rb_local_deleted" in cols:
                 conn.execute(
                     text("UPDATE history SET rb_local_deleted = 0 WHERE history_id = :hid;"),
@@ -557,6 +712,23 @@ def restore_history_session(engine: Engine, history_id: str) -> bool:
                         text("UPDATE songHistory SET rb_local_deleted = 0 WHERE history_id = :hid;"),
                         {"hid": history_id},
                     )
+
+            if "content" in existing_tables and usb_tracks_to_restore:
+                c_cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(content);").fetchall()}
+                play_col = "DJPlayCount" if "DJPlayCount" in c_cols else ("PlayCount" if "PlayCount" in c_cols else None)
+                id_col = "ID" if "ID" in c_cols else ("content_id" if "content_id" in c_cols else None)
+                if play_col and id_col:
+                    has_c_updated = "updated_at" in c_cols
+                    c_updates = [f"{play_col} = COALESCE({play_col}, 0) + :play_cnt"]
+                    if has_c_updated:
+                        c_updates.append("updated_at = :now")
+                    update_c_sql = f"UPDATE content SET {', '.join(c_updates)} WHERE {id_col} = :cid;"
+                    for cid, cnt in usb_tracks_to_restore:
+                        params = {"play_cnt": cnt, "cid": cid}
+                        if has_c_updated:
+                            params["now"] = now_utc
+                        conn.execute(text(update_c_sql), params)
+
             restored = True
 
     if restored:

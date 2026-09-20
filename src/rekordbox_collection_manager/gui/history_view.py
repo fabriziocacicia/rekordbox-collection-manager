@@ -984,7 +984,7 @@ class HistoryView(QWidget):
             self,
             "Delete History Session",
             f"Are you sure you want to delete '{session_name}'?\n\n"
-            "This will safely soft-delete the session and its tracks from Rekordbox.\n"
+            "This will safely soft-delete the session and its tracks from Rekordbox, and decrease the DJ play count of played tracks accordingly.\n"
             "You can restore it at any time from Deleted Sessions.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
@@ -1015,7 +1015,7 @@ class HistoryView(QWidget):
             self,
             "Restore History Session",
             f"Are you sure you want to restore '{session_name}'?\n\n"
-            "This will reactivate the session and all its tracks back into your active Rekordbox collection.",
+            "This will reactivate the session and all its tracks back into your active Rekordbox collection, and restore their DJ play count accordingly.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if res != QMessageBox.StandardButton.Yes:

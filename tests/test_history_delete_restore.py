@@ -243,6 +243,161 @@ class TestHistoryDeleteRestore(unittest.TestCase):
             row = conn.exec_driver_sql("SELECT rb_local_deleted FROM djmdHistory WHERE ID = 'sess_1';").fetchone()
             self.assertEqual(row[0], 0)
 
+    def test_soft_delete_decreases_play_counts_by_times_played(self):
+        engine = create_engine("sqlite:///:memory:")
+        with engine.begin() as conn:
+            conn.exec_driver_sql("""
+                CREATE TABLE djmdHistory (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    Seq INTEGER,
+                    Name VARCHAR(255),
+                    Attribute INTEGER,
+                    ParentID VARCHAR(255),
+                    DateCreated VARCHAR(255),
+                    rb_data_status INTEGER DEFAULT 0,
+                    rb_local_deleted TINYINT(1) DEFAULT 0
+                );
+            """)
+            conn.exec_driver_sql("""
+                CREATE TABLE djmdSongHistory (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    HistoryID VARCHAR(255),
+                    ContentID VARCHAR(255),
+                    TrackNo INTEGER,
+                    rb_data_status INTEGER DEFAULT 0,
+                    rb_local_deleted TINYINT(1) DEFAULT 0
+                );
+            """)
+            conn.exec_driver_sql("""
+                CREATE TABLE djmdContent (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    Title VARCHAR(255),
+                    DJPlayCount INTEGER DEFAULT 0,
+                    updated_at DATETIME
+                );
+            """)
+            # Track c1 has 5 plays, Track c2 has 3 plays
+            conn.exec_driver_sql("INSERT INTO djmdContent (ID, Title, DJPlayCount) VALUES ('c1', 'Track 1', 5);")
+            conn.exec_driver_sql("INSERT INTO djmdContent (ID, Title, DJPlayCount) VALUES ('c2', 'Track 2', 3);")
+            conn.exec_driver_sql("INSERT INTO djmdHistory (ID, Seq, Name, Attribute, ParentID, rb_local_deleted) VALUES ('sess_1', 1, 'HISTORY 2026-03-15', 0, 'root', 0);")
+
+            # sess_1: c1 was played TWICE (Track 1 and Track 3), c2 was played ONCE (Track 2)
+            conn.exec_driver_sql("INSERT INTO djmdSongHistory (ID, HistoryID, ContentID, TrackNo, rb_local_deleted) VALUES ('sh1', 'sess_1', 'c1', 1, 0);")
+            conn.exec_driver_sql("INSERT INTO djmdSongHistory (ID, HistoryID, ContentID, TrackNo, rb_local_deleted) VALUES ('sh2', 'sess_1', 'c2', 2, 0);")
+            conn.exec_driver_sql("INSERT INTO djmdSongHistory (ID, HistoryID, ContentID, TrackNo, rb_local_deleted) VALUES ('sh3', 'sess_1', 'c1', 3, 0);")
+
+        # Soft delete session
+        ok = soft_delete_history_session(engine, "sess_1")
+        self.assertTrue(ok)
+
+        with engine.connect() as conn:
+            c1_plays = conn.exec_driver_sql("SELECT DJPlayCount FROM djmdContent WHERE ID = 'c1';").scalar()
+            c2_plays = conn.exec_driver_sql("SELECT DJPlayCount FROM djmdContent WHERE ID = 'c2';").scalar()
+            # c1 had 5 plays, played 2x -> 3
+            self.assertEqual(c1_plays, 3)
+            # c2 had 3 plays, played 1x -> 2
+            self.assertEqual(c2_plays, 2)
+
+        # Idempotence: soft-deleting again should not decrease further
+        soft_delete_history_session(engine, "sess_1")
+        with engine.connect() as conn:
+            self.assertEqual(conn.exec_driver_sql("SELECT DJPlayCount FROM djmdContent WHERE ID = 'c1';").scalar(), 3)
+            self.assertEqual(conn.exec_driver_sql("SELECT DJPlayCount FROM djmdContent WHERE ID = 'c2';").scalar(), 2)
+
+        # Restore session: should re-increment symmetrically
+        ok_res = restore_history_session(engine, "sess_1")
+        self.assertTrue(ok_res)
+        with engine.connect() as conn:
+            self.assertEqual(conn.exec_driver_sql("SELECT DJPlayCount FROM djmdContent WHERE ID = 'c1';").scalar(), 5)
+            self.assertEqual(conn.exec_driver_sql("SELECT DJPlayCount FROM djmdContent WHERE ID = 'c2';").scalar(), 3)
+
+        # Idempotence: restoring again should not increase further
+        restore_history_session(engine, "sess_1")
+        with engine.connect() as conn:
+            self.assertEqual(conn.exec_driver_sql("SELECT DJPlayCount FROM djmdContent WHERE ID = 'c1';").scalar(), 5)
+            self.assertEqual(conn.exec_driver_sql("SELECT DJPlayCount FROM djmdContent WHERE ID = 'c2';").scalar(), 3)
+
+    def test_soft_delete_play_count_clamped_at_zero(self):
+        engine = create_engine("sqlite:///:memory:")
+        with engine.begin() as conn:
+            conn.exec_driver_sql("""
+                CREATE TABLE djmdHistory (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    Seq INTEGER,
+                    Name VARCHAR(255),
+                    Attribute INTEGER,
+                    ParentID VARCHAR(255),
+                    DateCreated VARCHAR(255),
+                    rb_data_status INTEGER DEFAULT 0,
+                    rb_local_deleted TINYINT(1) DEFAULT 0
+                );
+            """)
+            conn.exec_driver_sql("""
+                CREATE TABLE djmdSongHistory (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    HistoryID VARCHAR(255),
+                    ContentID VARCHAR(255),
+                    TrackNo INTEGER,
+                    rb_data_status INTEGER DEFAULT 0,
+                    rb_local_deleted TINYINT(1) DEFAULT 0
+                );
+            """)
+            conn.exec_driver_sql("""
+                CREATE TABLE djmdContent (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    Title VARCHAR(255),
+                    DJPlayCount INTEGER DEFAULT 0
+                );
+            """)
+            # Track c1 only has 1 play count recorded, but was played twice in session
+            conn.exec_driver_sql("INSERT INTO djmdContent (ID, Title, DJPlayCount) VALUES ('c1', 'Track 1', 1);")
+            conn.exec_driver_sql("INSERT INTO djmdHistory (ID, Seq, Name, Attribute, ParentID, rb_local_deleted) VALUES ('sess_1', 1, 'HISTORY 2026-03-15', 0, 'root', 0);")
+            conn.exec_driver_sql("INSERT INTO djmdSongHistory (ID, HistoryID, ContentID, TrackNo, rb_local_deleted) VALUES ('sh1', 'sess_1', 'c1', 1, 0);")
+            conn.exec_driver_sql("INSERT INTO djmdSongHistory (ID, HistoryID, ContentID, TrackNo, rb_local_deleted) VALUES ('sh2', 'sess_1', 'c1', 2, 0);")
+
+        soft_delete_history_session(engine, "sess_1")
+        with engine.connect() as conn:
+            c1_plays = conn.exec_driver_sql("SELECT DJPlayCount FROM djmdContent WHERE ID = 'c1';").scalar()
+            # 1 - 2 -> clamped to 0
+            self.assertEqual(c1_plays, 0)
+
+    def test_usb_export_delete_and_restore_play_counts(self):
+        engine = create_engine("sqlite:///:memory:")
+        with engine.begin() as conn:
+            conn.exec_driver_sql("""
+                CREATE TABLE history (
+                    history_id VARCHAR(255) PRIMARY KEY,
+                    name VARCHAR(255),
+                    rb_local_deleted TINYINT(1) DEFAULT 0
+                );
+            """)
+            conn.exec_driver_sql("""
+                CREATE TABLE songHistory (
+                    id VARCHAR(255) PRIMARY KEY,
+                    history_id VARCHAR(255),
+                    content_id VARCHAR(255),
+                    rb_local_deleted TINYINT(1) DEFAULT 0
+                );
+            """)
+            conn.exec_driver_sql("""
+                CREATE TABLE content (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    Title VARCHAR(255),
+                    DJPlayCount INTEGER DEFAULT 4
+                );
+            """)
+            conn.exec_driver_sql("INSERT INTO content (ID, Title, DJPlayCount) VALUES ('u1', 'USB Track 1', 4);")
+            conn.exec_driver_sql("INSERT INTO history (history_id, name, rb_local_deleted) VALUES ('h1', 'USB History', 0);")
+            conn.exec_driver_sql("INSERT INTO songHistory (id, history_id, content_id, rb_local_deleted) VALUES ('sh1', 'h1', 'u1', 0);")
+
+        soft_delete_history_session(engine, "h1")
+        with engine.connect() as conn:
+            self.assertEqual(conn.exec_driver_sql("SELECT DJPlayCount FROM content WHERE ID = 'u1';").scalar(), 3)
+
+        restore_history_session(engine, "h1")
+        with engine.connect() as conn:
+            self.assertEqual(conn.exec_driver_sql("SELECT DJPlayCount FROM content WHERE ID = 'u1';").scalar(), 4)
+
 
 class TestHistoryViewDeletedUI(unittest.TestCase):
     @classmethod
