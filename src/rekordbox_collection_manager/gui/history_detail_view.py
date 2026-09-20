@@ -61,6 +61,7 @@ class HistoryDetailView(QWidget):
     open_history_session_requested = Signal(str)
     track_detail_requested = Signal(dict, int)  # Emits (track_dict, track_index)
     restore_session_requested = Signal(str)  # Emits history_id
+    delete_session_requested = Signal(str)  # Emits history_id
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -95,6 +96,27 @@ class HistoryDetailView(QWidget):
             f"color: {COLOR_TEXT_MUTED}; font-size: 11px; font-weight: 700; letter-spacing: 0.5px;"
         )
         nav_bar.addWidget(self.breadcrumb_label, stretch=1)
+
+        self.delete_btn = QPushButton("🗑️ Delete Session")
+        self.delete_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.delete_btn.setToolTip("Soft-delete this history session from Rekordbox")
+        self.delete_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLOR_RED_BG};
+                color: {COLOR_RED};
+                border: 1px solid {COLOR_RED_BORDER};
+                border-radius: 6px;
+                padding: 4px 10px;
+                font-weight: 600;
+            }}
+            QPushButton:hover {{
+                background-color: {COLOR_RED};
+                color: #ffffff;
+            }}
+        """)
+        self.delete_btn.setVisible(False)
+        self.delete_btn.clicked.connect(self._on_delete_clicked)
+        nav_bar.addWidget(self.delete_btn)
 
         self.restore_btn = QPushButton("♻️ Restore Session")
         self.restore_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -397,6 +419,12 @@ class HistoryDetailView(QWidget):
         self.active_worker.error.connect(self._on_data_error)
         self.active_worker.start()
 
+    def _on_delete_clicked(self) -> None:
+        session = self.session_data.get("session", {})
+        hid = session.get("id") or getattr(self, "history_id", None)
+        if hid:
+            self.delete_session_requested.emit(str(hid))
+
     def _on_restore_clicked(self) -> None:
         session = self.session_data.get("session", {})
         hid = session.get("id") or getattr(self, "history_id", None)
@@ -419,6 +447,7 @@ class HistoryDetailView(QWidget):
         is_del = bool(session.get("is_deleted", False))
         self.deleted_badge.setVisible(is_del)
         self.restore_btn.setVisible(is_del)
+        self.delete_btn.setVisible(not is_del)
 
         if is_del:
             y, m = extract_year_month_from_name_or_date(s_name, s_date)

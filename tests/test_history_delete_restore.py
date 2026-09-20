@@ -349,6 +349,7 @@ class TestHistoryViewDeletedUI(unittest.TestCase):
         })
         self.assertFalse(detail.deleted_badge.isHidden())
         self.assertFalse(detail.restore_btn.isHidden())
+        self.assertTrue(detail.delete_btn.isHidden())
         self.assertIn("DELETED SESSIONS", detail.breadcrumb_label.text())
 
         # Active state
@@ -359,6 +360,13 @@ class TestHistoryViewDeletedUI(unittest.TestCase):
         })
         self.assertTrue(detail.deleted_badge.isHidden())
         self.assertTrue(detail.restore_btn.isHidden())
+        self.assertFalse(detail.delete_btn.isHidden())
+
+        # Clicking delete button emits signal and routes to confirmation
+        from unittest.mock import patch
+        with patch.object(self.view, "_confirm_and_delete_session") as mock_del:
+            detail._on_delete_clicked()
+            mock_del.assert_called_once_with("s_active", "HISTORY 2026-03-10")
 
     def test_action_buttons_equal_height(self):
         from PySide6.QtWidgets import QPushButton

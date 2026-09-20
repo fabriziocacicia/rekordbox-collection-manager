@@ -226,6 +226,7 @@ class HistoryView(QWidget):
         self.detail_view.open_history_session_requested.connect(self._open_session_detail)
         self.detail_view.track_detail_requested.connect(self._open_track_detail)
         self.detail_view.restore_session_requested.connect(self._on_restore_from_detail)
+        self.detail_view.delete_session_requested.connect(self._on_delete_from_detail)
         self.stack.addWidget(self.detail_view)
 
         # ----------------------------------------------------------------------
@@ -1033,6 +1034,12 @@ class HistoryView(QWidget):
         name = record.get("name", f"Session {history_id}") if record else f"Session {history_id}"
         self._confirm_and_restore_session(history_id, name)
 
+    def _on_delete_from_detail(self, history_id: str) -> None:
+        """Handle delete triggered from HistoryDetailView."""
+        record = next((r for r in self.original_records if str(r["id"]) == str(history_id)), None)
+        name = record.get("name", f"Session {history_id}") if record else f"Session {history_id}"
+        self._confirm_and_delete_session(history_id, name)
+
     def _on_delete_success(self, history_id: str) -> None:
         self.notify_status.emit(f"🗑️ Session {history_id} soft-deleted.")
         rec = next((r for r in self.original_records if str(r["id"]) == str(history_id)), None)
@@ -1041,6 +1048,8 @@ class HistoryView(QWidget):
         self.staged_edits.pop(history_id, None)
         self._update_folder_tree()
         self._refresh_table()
+        if self.current_detail_id == history_id:
+            self._open_session_detail(history_id)
         self.request_reload.emit()
 
     def _on_restore_success(self, history_id: str) -> None:
