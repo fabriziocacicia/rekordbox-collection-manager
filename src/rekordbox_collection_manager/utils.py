@@ -13,7 +13,7 @@ import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 
 import questionary
 from pyrekordbox.db6.database import get_rekordbox_pid
@@ -535,10 +535,48 @@ def parse_history_name(name: Optional[str]) -> Tuple[str, str, str]:
     return (base_name, location, artist)
 
 
+def parse_played_with(artist_str: Optional[str]) -> List[str]:
+    """Parse comma-separated DJ / artist names into a clean list of individual DJ names.
+
+    Examples:
+        - "Carl Cox, Marco Carola" -> ["Carl Cox", "Marco Carola"]
+        - "Carl Cox" -> ["Carl Cox"]
+        - "  Carl Cox ,  Richie Hawtin  " -> ["Carl Cox", "Richie Hawtin"]
+        - "" or None -> []
+
+    Returns:
+        List of stripped, non-empty DJ names.
+    """
+    if not artist_str:
+        return []
+    raw = str(artist_str).strip()
+    if not raw:
+        return []
+    parts = [part.strip() for part in raw.split(",")]
+    return [p for p in parts if p]
+
+
+def compose_played_with(djs: Optional[Iterable[str]]) -> str:
+    """Compose an iterable of DJ / artist names into a clean comma-separated string.
+
+    Examples:
+        - ["Carl Cox", "Marco Carola"] -> "Carl Cox, Marco Carola"
+        - ["Carl Cox"] -> "Carl Cox"
+        - [] or None -> ""
+
+    Returns:
+        Clean comma-separated string of DJs.
+    """
+    if not djs:
+        return ""
+    clean = [str(d).strip() for d in djs if str(d).strip()]
+    return ", ".join(clean)
+
+
 def compose_history_name(
     base_name: str,
     location: Optional[str] = None,
-    artist: Optional[str] = None,
+    artist: Union[str, Iterable[str], None] = None,
 ) -> str:
     """Compose full history session name from base name, optional location, and optional artist.
 
@@ -556,6 +594,8 @@ def compose_history_name(
         -> "HISTORY 2026-07-24 @ Fabric"
         compose_history_name("HISTORY 2026-07-24", artist="Carl Cox")
         -> "HISTORY 2026-07-24 w Carl Cox"
+        compose_history_name("HISTORY 2026-07-24", artist=["Carl Cox", "Marco Carola"])
+        -> "HISTORY 2026-07-24 w Carl Cox, Marco Carola"
         compose_history_name("HISTORY 2026-07-24 (1)", location="Fabric", artist="Carl Cox")
         -> "HISTORY 2026-07-24 (1) @ Fabric w Carl Cox"
     """
@@ -565,7 +605,10 @@ def compose_history_name(
     if clean_loc.startswith("@"):
         clean_loc = clean_loc.lstrip("@").strip()
 
-    clean_art = str(artist or "").strip()
+    if isinstance(artist, (list, tuple, set)):
+        clean_art = compose_played_with(artist)
+    else:
+        clean_art = str(artist or "").strip()
     clean_art = re.sub(r"^[wW](?:/|\s+)", "", clean_art).strip()
 
     # If the user included '@' or 'w' inside clean_base, parse it to prevent duplication

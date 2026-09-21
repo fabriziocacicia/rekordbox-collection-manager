@@ -1,10 +1,11 @@
 """History Session Rename & Realign Screen."""
 
 import re
-from typing import Any, Dict, List, Optional
-from PySide6.QtCore import QPoint, Qt, Signal
-from PySide6.QtGui import QCursor
+from typing import Any, Dict, List, Optional, Set
+from PySide6.QtCore import QModelIndex, QPoint, Qt, Signal
+from PySide6.QtGui import QCursor, QPainter
 from PySide6.QtWidgets import (
+    QApplication,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -14,6 +15,9 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSplitter,
     QStackedWidget,
+    QStyle,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
     QTableWidget,
     QTableWidgetItem,
     QTreeWidget,
@@ -24,6 +28,7 @@ from PySide6.QtWidgets import (
 )
 from sqlalchemy.engine import Engine
 
+from rekordbox_collection_manager.gui.chip import DJChipsContainer
 from rekordbox_collection_manager.gui.history_detail_view import HistoryDetailView
 from rekordbox_collection_manager.gui.track_detail_view import TrackDetailView
 from rekordbox_collection_manager.gui.theme import (
@@ -49,10 +54,31 @@ from rekordbox_collection_manager.gui.workers import (
 from rekordbox_collection_manager.utils import (
     MONTH_INT_TO_NAME,
     compose_history_name,
+    compose_played_with,
     extract_year_month_from_name_or_date,
     is_rekordbox_running,
     parse_history_name,
+    parse_played_with,
 )
+
+
+class PlayedWithChipDelegate(QStyledItemDelegate):
+    """Item delegate for Played With column ensuring no underlying item text is rendered behind chips."""
+
+    def paint(
+        self,
+        painter: QPainter,
+        option: QStyleOptionViewItem,
+        index: QModelIndex,
+    ) -> None:
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        opt.text = ""  # Never render text behind chip cell widgets
+        widget = option.widget
+        style = widget.style() if widget else QApplication.style()
+        style.drawPrimitive(
+            QStyle.PrimitiveElement.PE_PanelItemViewItem, opt, painter, widget
+        )
 
 
 class HistoryView(QWidget):
@@ -68,6 +94,7 @@ class HistoryView(QWidget):
         self.original_records: List[Dict[str, Any]] = []
         # Key: record id, Value: {'record': dict, 'name': str, 'date': str}
         self.staged_edits: Dict[str, Dict[str, Any]] = {}
+        self.all_available_djs: Set[str] = set()
         self.active_folder_filter: Optional[str] = None  # None for All, or 'active_all', 'active_year_...', 'deleted_all', etc.
         self.search_filter_text: str = ""
         self.active_session_ids_in_table: List[str] = []
@@ -145,7 +172,7 @@ class HistoryView(QWidget):
         table_layout.setContentsMargins(0, 0, 0, 0)
         table_layout.setSpacing(6)
 
-        table_header = QLabel("HISTORY SESSIONS (Double-click date, name, location or played with to edit • Click Details to view tracks)")
+        table_header = QLabel("HISTORY SESSIONS (Double-click date, name, or location to edit • Manage played with chips • Click Details to view tracks)")
         table_header.setStyleSheet(f"color: {COLOR_TEXT_MUTED}; font-size: 11px; font-weight: 600; padding: 4px;")
         table_layout.addWidget(table_header)
 
@@ -175,8 +202,10 @@ class HistoryView(QWidget):
         self.table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeMode.Fixed)
         self.table.setColumnWidth(3, 150)
-        self.table.setColumnWidth(4, 180)
+        self.table.setColumnWidth(4, 290)
         self.table.setColumnWidth(6, 160)
+        self.table.setItemDelegateForColumn(4, PlayedWithChipDelegate(self.table))
+        self.table.horizontalHeader().sectionResized.connect(self._on_col_section_resized)
 
         actions_hdr = self.table.horizontalHeaderItem(6)
         if actions_hdr:
@@ -251,16 +280,74 @@ class HistoryView(QWidget):
         self.db_path = db_path
         self.original_records = records
         self.staged_edits.clear()
+        self._rebuild_all_available_djs()
         self._update_folder_tree()
         self._refresh_table()
         self._update_status_bar()
 
+    def _rebuild_all_available_djs(self) -> None:
+        """Extract all unique DJ names from original and staged records."""
+        self.all_available_djs.clear()
+        for r in self.original_records:
+            name = r.get("name") or ""
+            _, _, art = parse_history_name(name)
+            if art:
+                for dj in parse_played_with(art):
+                    self.all_available_djs.add(dj)
+        for edit in self.staged_edits.values():
+            name = edit.get("name") or ""
+            _, _, art = parse_history_name(name)
+            if art:
+                for dj in parse_played_with(art):
+                    self.all_available_djs.add(dj)
+
+    def get_all_available_djs(self) -> List[str]:
+        """Return sorted unique list of all known DJ names."""
+        return sorted(list(self.all_available_djs), key=lambda s: s.lower())
+
+    def register_new_dj(self, name: str) -> None:
+        """Register a newly typed DJ name and update available options across table."""
+        clean = name.strip()
+        if clean and clean not in self.all_available_djs:
+            self.all_available_djs.add(clean)
+            cand_list = self.get_all_available_djs()
+            for r_idx in range(self.table.rowCount()):
+                w = self.table.cellWidget(r_idx, 4)
+                if isinstance(w, DJChipsContainer):
+                    w.set_available_djs(cand_list)
+
         if self.current_detail_id:
-            matching = next((r for r in records if r["id"] == self.current_detail_id), None)
+            matching = next((r for r in self.original_records if r["id"] == self.current_detail_id), None)
             if matching:
                 self._open_session_detail(self.current_detail_id)
             else:
                 self._on_back_from_detail()
+
+    def _update_row_height(self, row: int) -> None:
+        """Dynamically adjust row height if DJ chips wrap to multiple lines."""
+        if row < 0 or row >= self.table.rowCount():
+            return
+        widget = self.table.cellWidget(row, 4)
+        if isinstance(widget, DJChipsContainer):
+            col_w = self.table.columnWidth(4)
+            avail_w = max(60, col_w - 16)
+            needed_h = widget.flow_layout.heightForWidth(avail_w)
+            target_h = max(42, needed_h + 8)
+            if self.table.rowHeight(row) != target_h:
+                self.table.setRowHeight(row, target_h)
+
+    def _update_row_height_for_container(self, container: QWidget) -> None:
+        """Find the row containing container and update its height."""
+        for r in range(self.table.rowCount()):
+            if self.table.cellWidget(r, 4) is container:
+                self._update_row_height(r)
+                break
+
+    def _on_col_section_resized(self, logical_index: int, old_size: int, new_size: int) -> None:
+        """Recalculate row heights when Played With column is resized."""
+        if logical_index == 4:
+            for r in range(self.table.rowCount()):
+                self._update_row_height(r)
 
     def _on_toggle_show_deleted(self, checked: bool) -> None:
         """Handle toggling the Show Deleted button."""
@@ -531,15 +618,27 @@ class HistoryView(QWidget):
                 loc_item.setForeground(text_color)
             self.table.setItem(row_idx, 3, loc_item)
 
-            # Col 4: Played With
-            art_item = QTableWidgetItem(cur_art)
+            # Col 4: Played With (Interactive Chips + Underlying Item)
+            art_item = QTableWidgetItem("")
             art_item.setData(Qt.ItemDataRole.UserRole, rec_id)
             art_item.setFlags(cell_flags)
-            if is_staged and cur_art != orig_art:
-                art_item.setForeground(Qt.GlobalColor.yellow)
-            else:
-                art_item.setForeground(text_color)
             self.table.setItem(row_idx, 4, art_item)
+
+            cur_djs = parse_played_with(cur_art)
+            dj_container = DJChipsContainer(parent=self.table, allow_custom=not is_deleted)
+            dj_container.set_available_djs(self.get_all_available_djs())
+            dj_container.set_djs(cur_djs)
+            if is_deleted:
+                dj_container.setEnabled(False)
+            else:
+                dj_container.djs_changed.connect(
+                    lambda djs, r_id=rec_id, r_idx=row_idx: self._on_djs_changed(r_id, r_idx, djs)
+                )
+                dj_container.editing_state_changed.connect(
+                    lambda _, c=dj_container: self._update_row_height_for_container(c)
+                )
+            self.table.setCellWidget(row_idx, 4, dj_container)
+            self._update_row_height(row_idx)
 
             # Col 5: Original Created At
             orig_created = orig_date or "(None)"
@@ -723,6 +822,25 @@ class HistoryView(QWidget):
         new_loc = loc_item.text().strip() if loc_item else ""
         new_art = art_item.text().strip() if art_item else ""
 
+        # If column 4 was changed, synchronize cell widget and read DJ list
+        if column == 4:
+            text_val = art_item.text().strip() if art_item else ""
+            widget = self.table.cellWidget(row, 4)
+            if text_val:
+                new_art = text_val
+                if isinstance(widget, DJChipsContainer):
+                    widget.blockSignals(True)
+                    widget.set_djs(parse_played_with(new_art))
+                    widget.blockSignals(False)
+            elif isinstance(widget, DJChipsContainer):
+                new_art = compose_played_with(widget.get_djs())
+            else:
+                new_art = ""
+        elif column in (1, 2, 3):
+            widget = self.table.cellWidget(row, 4)
+            if isinstance(widget, DJChipsContainer):
+                new_art = compose_played_with(widget.get_djs())
+
         # Compose full name according to schema
         new_name = compose_history_name(new_base, location=new_loc, artist=new_art)
 
@@ -764,6 +882,87 @@ class HistoryView(QWidget):
         self.table.blockSignals(False)
 
         self._update_status_bar()
+
+    def _on_djs_changed(self, rec_id: str, row: int, new_djs: List[str]) -> None:
+        """Handle DJ chips addition or removal in a row."""
+        record = next((r for r in self.original_records if r["id"] == rec_id), None)
+        if not record:
+            return
+
+        new_art = compose_played_with(new_djs)
+
+        # Register any new DJ names in the global available pool
+        for dj in new_djs:
+            if dj not in self.all_available_djs:
+                self.register_new_dj(dj)
+
+        # Robustly locate row index
+        row_idx = row
+        if row_idx >= self.table.rowCount() or (
+            self.table.item(row_idx, 1) and self.table.item(row_idx, 1).data(Qt.ItemDataRole.UserRole) != rec_id
+        ):
+            for i in range(self.table.rowCount()):
+                item = self.table.item(i, 1) or self.table.item(i, 4)
+                if item and item.data(Qt.ItemDataRole.UserRole) == rec_id:
+                    row_idx = i
+                    break
+
+        # Synchronize underlying QTableWidgetItem text (delegate ensures it never renders underneath)
+        art_item = self.table.item(row_idx, 4)
+        if art_item:
+            self.table.blockSignals(True)
+            art_item.setText(new_art)
+            self.table.blockSignals(False)
+
+        date_item = self.table.item(row_idx, 1)
+        name_item = self.table.item(row_idx, 2)
+        loc_item = self.table.item(row_idx, 3)
+
+        new_date = date_item.text().strip() if date_item else ""
+        new_base = name_item.text().strip() if name_item else ""
+        new_loc = loc_item.text().strip() if loc_item else ""
+
+        # Compose full name according to schema
+        new_name = compose_history_name(new_base, location=new_loc, artist=new_art)
+
+        orig_date = record.get("date") or ""
+        orig_name = record.get("name") or ""
+        orig_base, orig_loc, orig_art = parse_history_name(orig_name)
+
+        # Check if modified from original
+        if new_date != orig_date or new_name != orig_name:
+            self.staged_edits[rec_id] = {
+                "record": record,
+                "name": new_name,
+                "date": new_date,
+            }
+        else:
+            self.staged_edits.pop(rec_id, None)
+
+        self.table.blockSignals(True)
+        is_staged = rec_id in self.staged_edits
+        if date_item:
+            date_item.setForeground(Qt.GlobalColor.yellow if (is_staged and new_date != orig_date) else Qt.GlobalColor.white)
+        if name_item:
+            name_item.setForeground(Qt.GlobalColor.yellow if (is_staged and new_base != orig_base) else Qt.GlobalColor.white)
+        if loc_item:
+            loc_item.setForeground(Qt.GlobalColor.yellow if (is_staged and new_loc != orig_loc) else Qt.GlobalColor.white)
+        if art_item:
+            art_item.setForeground(Qt.GlobalColor.yellow if (is_staged and new_art != orig_art) else Qt.GlobalColor.white)
+
+        # Update status cell
+        status_item = self.table.item(row_idx, 0)
+        if status_item:
+            if is_staged:
+                status_item.setText("● Staged")
+                status_item.setForeground(Qt.GlobalColor.yellow)
+            else:
+                status_item.setText("Clean")
+                status_item.setForeground(Qt.GlobalColor.gray)
+        self.table.blockSignals(False)
+
+        self._update_status_bar()
+        self._update_row_height(row_idx)
 
     def _on_discard_changes(self) -> None:
         """Discard all staged edits."""

@@ -17,6 +17,7 @@ from rekordbox_collection_manager.edit_play_count import (
     set_track_play_count,
     update_track_play_count,
 )
+from rekordbox_collection_manager.gui.chip import DJChipsContainer
 from rekordbox_collection_manager.gui.history_detail_view import HistoryDetailView
 from rekordbox_collection_manager.gui.history_view import HistoryView
 from rekordbox_collection_manager.gui.play_count_view import PlayCountView
@@ -596,6 +597,22 @@ class TestHistoryDetailView(unittest.TestCase):
         self.detail_view.back_btn.click()
         self.assertTrue(back_called)
 
+    def test_detail_view_djs_chips_rendering(self):
+        data = dict(self.mock_data)
+        data["session"] = {
+            "id": "sess_102",
+            "name": "HISTORY 2026-08-14 @ Space Terrace w Carl Cox, Marco Carola",
+            "date": "2026-08-14 18:30:00",
+            "parent_id": "202608",
+        }
+        self.detail_view._on_data_loaded(data)
+
+        self.assertFalse(self.detail_view.djs_chip.isHidden())
+        self.assertEqual(len(self.detail_view.djs_chips), 2)
+        chip_names = [c.name for c in self.detail_view.djs_chips]
+        self.assertEqual(chip_names, ["Carl Cox", "Marco Carola"])
+        self.assertEqual(self.detail_view.djs_val_label.text(), "Carl Cox, Marco Carola")
+
 
 class TestHistoryViewDetailIntegration(unittest.TestCase):
     """Tests for HistoryView table actions and detail view integration."""
@@ -672,6 +689,62 @@ class TestHistoryViewDetailIntegration(unittest.TestCase):
         # Prev session
         self.history_view._on_prev_session()
         self.assertEqual(self.history_view.current_detail_id, "h1")
+
+    def test_history_view_chips_displayed_and_staged(self):
+        records = [
+            {
+                "id": "h_test",
+                "name": "HISTORY 2026-08-10 @ Fabric w Carl Cox, Marco Carola",
+                "date": "2026-08-10 12:00:00",
+                "parent_id": "202608",
+                "table": "djmdHistory",
+            },
+        ]
+        self.history_view.set_data(self.engine, records)
+        self.assertEqual(self.history_view.table.rowCount(), 1)
+
+        container = self.history_view.table.cellWidget(0, 4)
+        self.assertIsInstance(container, DJChipsContainer)
+        self.assertEqual(container.get_djs(), ["Carl Cox", "Marco Carola"])
+        self.assertEqual(len(container.chips), 2)
+
+        # Remove "Carl Cox" chip
+        container._on_chip_delete("Carl Cox")
+        self.assertEqual(container.get_djs(), ["Marco Carola"])
+        self.assertIn("h_test", self.history_view.staged_edits)
+        self.assertEqual(
+            self.history_view.staged_edits["h_test"]["name"],
+            "HISTORY 2026-08-10 @ Fabric w Marco Carola",
+        )
+        self.assertTrue(self.history_view.save_btn.isEnabled())
+
+        # Add new custom DJ "Seth Troxler"
+        container.input_edit.setText("Seth Troxler")
+        container._on_input_return_pressed()
+        self.assertEqual(container.get_djs(), ["Marco Carola", "Seth Troxler"])
+        self.assertEqual(
+            self.history_view.staged_edits["h_test"]["name"],
+            "HISTORY 2026-08-10 @ Fabric w Marco Carola, Seth Troxler",
+        )
+        self.assertIn("Seth Troxler", self.history_view.all_available_djs)
+
+    def test_dj_chips_container_custom_and_autocomplete(self):
+        container = DJChipsContainer()
+        container.set_available_djs(["Carl Cox", "Marco Carola"])
+        container.set_djs(["Carl Cox"])
+        self.assertEqual(container.get_djs(), ["Carl Cox"])
+
+        # Autocomplete candidates exclude "Carl Cox"
+        container.show_add_input()
+        candidates = container.completer_model.stringList()
+        self.assertIn("Marco Carola", candidates)
+        self.assertNotIn("Carl Cox", candidates)
+
+        # Type custom DJ
+        container.input_edit.setText("The Martinez Brothers")
+        container._on_input_return_pressed()
+        self.assertEqual(container.get_djs(), ["Carl Cox", "The Martinez Brothers"])
+        self.assertEqual(container.chips[1].scheme_name, "amber")
 
 
 class TestTracksView(unittest.TestCase):

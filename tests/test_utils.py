@@ -12,6 +12,7 @@ from rekordbox_collection_manager.utils import (
     MONTH_NAME_TO_INT,
     clean_session_name,
     compose_history_name,
+    compose_played_with,
     detect_content_table,
     ensure_rekordbox_not_running,
     extract_date_from_name,
@@ -22,6 +23,7 @@ from rekordbox_collection_manager.utils import (
     normalize_date_input,
     parse_history_name,
     parse_month_number,
+    parse_played_with,
     parse_session_paren_number,
     parse_year_month,
     resolve_db_path,
@@ -307,6 +309,28 @@ class TestUtils(unittest.TestCase):
             compose_history_name("HISTORY 2026-07-24 w OldDJ", artist="NewDJ"),
             "HISTORY 2026-07-24 w NewDJ",
         )
+
+        # 6. List/Iterable artist
+        self.assertEqual(
+            compose_history_name("HISTORY 2026-07-24", location="Fabric", artist=["Carl Cox", "Marco Carola"]),
+            "HISTORY 2026-07-24 @ Fabric w Carl Cox, Marco Carola",
+        )
+
+    def test_parse_played_with(self):
+        self.assertEqual(parse_played_with("Carl Cox, Marco Carola"), ["Carl Cox", "Marco Carola"])
+        self.assertEqual(parse_played_with("  Carl Cox  ,  Marco Carola  "), ["Carl Cox", "Marco Carola"])
+        self.assertEqual(parse_played_with("Carl Cox"), ["Carl Cox"])
+        self.assertEqual(parse_played_with(""), [])
+        self.assertEqual(parse_played_with(None), [])
+        self.assertEqual(parse_played_with(" , , "), [])
+        self.assertEqual(parse_played_with("A, B, C, D"), ["A", "B", "C", "D"])
+
+    def test_compose_played_with(self):
+        self.assertEqual(compose_played_with(["Carl Cox", "Marco Carola"]), "Carl Cox, Marco Carola")
+        self.assertEqual(compose_played_with(["Carl Cox"]), "Carl Cox")
+        self.assertEqual(compose_played_with([]), "")
+        self.assertEqual(compose_played_with(None), "")
+        self.assertEqual(compose_played_with(["  Carl Cox  ", ""]), "Carl Cox")
 
 
 if __name__ == "__main__":

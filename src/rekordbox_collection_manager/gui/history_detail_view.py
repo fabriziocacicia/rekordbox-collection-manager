@@ -43,11 +43,13 @@ from rekordbox_collection_manager.gui.track_table import (
     TrackTableConfig,
     TracksTableWidget,
 )
+from rekordbox_collection_manager.gui.chip import BadgeChip
 from rekordbox_collection_manager.gui.workers import HistorySessionDetailWorker
 from rekordbox_collection_manager.utils import (
     MONTH_INT_TO_NAME,
     extract_year_month_from_name_or_date,
     parse_history_name,
+    parse_played_with,
 )
 
 
@@ -58,19 +60,19 @@ class HistoryDetailView(QWidget):
     prev_session_requested = Signal()
     next_session_requested = Signal()
     notify_status = Signal(str)
-    open_history_session_requested = Signal(str)
-    track_detail_requested = Signal(dict, int)  # Emits (track_dict, track_index)
-    restore_session_requested = Signal(str)  # Emits history_id
+    open_history_session_requested = Signal(str)  # Emits history_id
+    track_detail_requested = Signal(int)  # Emits track_id to open detail view
     delete_session_requested = Signal(str)  # Emits history_id
+    restore_session_requested = Signal(str)  # Emits history_id
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.engine: Optional[Engine] = None
-        self.db_path: Optional[str] = None
         self.history_id: Optional[str] = None
         self.session_data: Dict[str, Any] = {}
         self.all_tracks: List[Dict[str, Any]] = []
         self.displayed_tracks: List[Dict[str, Any]] = []
+        self.djs_chips: List[BadgeChip] = []
         self.filter_text: str = ""
         self.active_worker: Optional[HistorySessionDetailWorker] = None
 
@@ -262,10 +264,18 @@ class HistoryDetailView(QWidget):
         )
         djs_layout.addWidget(djs_tag)
 
+        self.djs_chips_container = QWidget()
+        self.djs_chips_container.setStyleSheet("background: transparent; border: none;")
+        self.djs_chips_layout = QHBoxLayout(self.djs_chips_container)
+        self.djs_chips_layout.setContentsMargins(0, 0, 0, 0)
+        self.djs_chips_layout.setSpacing(4)
+        djs_layout.addWidget(self.djs_chips_container)
+
         self.djs_val_label = QLabel("")
         self.djs_val_label.setStyleSheet(
             f"color: {COLOR_TEXT_PRIMARY}; font-size: 12px; font-weight: 600; background: transparent;"
         )
+        self.djs_val_label.setVisible(False)
         djs_layout.addWidget(self.djs_val_label)
         self.djs_chip.setVisible(False)
         title_layout.addWidget(self.djs_chip)
@@ -398,8 +408,11 @@ class HistoryDetailView(QWidget):
 
         if artist:
             self.djs_val_label.setText(artist)
+            self._update_detail_djs(artist)
             self.djs_chip.setVisible(True)
         else:
+            self.djs_val_label.setText("")
+            self._update_detail_djs("")
             self.djs_chip.setVisible(False)
 
         # Breadcrumb
@@ -465,8 +478,11 @@ class HistoryDetailView(QWidget):
 
         if artist:
             self.djs_val_label.setText(artist)
+            self._update_detail_djs(artist)
             self.djs_chip.setVisible(True)
         else:
+            self.djs_val_label.setText("")
+            self._update_detail_djs("")
             self.djs_chip.setVisible(False)
 
         # Update KPI Cards
@@ -571,6 +587,19 @@ class HistoryDetailView(QWidget):
             self.table.selectRow(idx)
             self.table.scrollToItem(self.table.item(idx, 0))
 
+    def _update_detail_djs(self, artist_str: str) -> None:
+        """Update parsed DJ chips in the detail header."""
+        for chip in list(self.djs_chips):
+            self.djs_chips_layout.removeWidget(chip)
+            chip.deleteLater()
+        self.djs_chips.clear()
+
+        djs = parse_played_with(artist_str)
+        for dj in djs:
+            chip = BadgeChip(dj, scheme="amber", removable=False, parent=self.djs_chips_container)
+            self.djs_chips.append(chip)
+            self.djs_chips_layout.addWidget(chip)
+
     def keyPressEvent(self, event: QKeyEvent) -> None:
         """Handle Escape key to go back."""
         if event.key() == Qt.Key.Key_Escape:
@@ -578,4 +607,5 @@ class HistoryDetailView(QWidget):
             event.accept()
             return
         super().keyPressEvent(event)
+
 
