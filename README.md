@@ -183,5 +183,7 @@ Each tool is self-contained in a single file under `src/rekordbox_collection_man
 
 Run the test suite:
 ```bash
+uv run pytest
+# or
 uv run python -m unittest discover tests
 ```

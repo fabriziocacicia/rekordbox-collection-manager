@@ -28,3 +28,8 @@ build-backend = "uv_build"
 [tool.uv.build-backend]
 module-name = "rekordbox_collection_manager"
 module-root = "src"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
