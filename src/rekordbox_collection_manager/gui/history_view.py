@@ -311,6 +311,7 @@ class HistoryView(QWidget):
         self.folder_tree = QTreeWidget()
         self.folder_tree.setHeaderHidden(True)
         self.folder_tree.setIndentation(14)
+        self.folder_tree.currentItemChanged.connect(self._on_folder_current_item_changed)
         self.folder_tree.itemClicked.connect(self._on_folder_item_clicked)
         tree_layout.addWidget(self.folder_tree)
 
@@ -410,6 +411,11 @@ class HistoryView(QWidget):
         self.detail_view.track_detail_requested.connect(self._open_track_detail)
         self.detail_view.restore_session_requested.connect(self._on_restore_from_detail)
         self.detail_view.delete_session_requested.connect(self._on_delete_from_detail)
+        self.detail_view.session_metadata_updated.connect(self._on_detail_metadata_updated)
+        self.detail_view.save_session_requested.connect(self._on_detail_save_session)
+        self.detail_view.discard_session_requested.connect(self._on_detail_discard_session)
+        self.detail_view.location_added.connect(self.register_new_location)
+        self.detail_view.dj_added.connect(self.register_new_dj)
         self.stack.addWidget(self.detail_view)
 
         # ----------------------------------------------------------------------
@@ -470,6 +476,8 @@ class HistoryView(QWidget):
                 w = self.table.cellWidget(r_idx, 4)
                 if isinstance(w, DJChipsContainer):
                     w.set_available_djs(cand_list)
+            if hasattr(self, "detail_view"):
+                self.detail_view.set_available_djs(cand_list)
 
     def _rebuild_all_available_locations(self) -> None:
         """Extract all unique location names from original and staged records."""
@@ -494,13 +502,8 @@ class HistoryView(QWidget):
         clean = name.strip()
         if clean and clean not in self.all_available_locations:
             self.all_available_locations.add(clean)
-
-        if self.current_detail_id:
-            matching = next((r for r in self.original_records if r["id"] == self.current_detail_id), None)
-            if matching:
-                self._open_session_detail(self.current_detail_id)
-            else:
-                self._on_back_from_detail()
+            if hasattr(self, "detail_view"):
+                self.detail_view.set_available_locations(self.get_all_available_locations())
 
     def _update_row_height(self, row: int) -> None:
         """Dynamically adjust row height if DJ chips wrap to multiple lines."""
@@ -538,99 +541,54 @@ class HistoryView(QWidget):
 
     def _update_folder_tree(self) -> None:
         """Rebuild Year/Month folder tree from current records."""
-        self.folder_tree.clear()
+        self.folder_tree.blockSignals(True)
+        try:
+            self.folder_tree.clear()
 
-        active_records = [r for r in self.original_records if not r.get("is_deleted")]
-        deleted_records = [r for r in self.original_records if r.get("is_deleted")]
+            active_records = [r for r in self.original_records if not r.get("is_deleted")]
+            deleted_records = [r for r in self.original_records if r.get("is_deleted")]
 
-        # Update show_deleted button text
-        action_word = "Hide" if self.show_deleted else "Show"
-        self.show_deleted_btn.setText(f"🗑️ {action_word} Deleted ({len(deleted_records)})")
-        if len(deleted_records) == 0:
-            self.show_deleted_btn.setEnabled(False)
-            if self.show_deleted:
-                self.show_deleted = False
-                self.show_deleted_btn.setChecked(False)
-        else:
-            self.show_deleted_btn.setEnabled(True)
-
-        # 1. Root Item: All Sessions
-        all_item = QTreeWidgetItem([f"All Sessions ({len(active_records)})"])
-        all_item.setData(0, Qt.ItemDataRole.UserRole, "active_all")
-        self.folder_tree.addTopLevelItem(all_item)
-
-        # Group active records by Year and Month
-        year_months: Dict[str, Dict[str, int]] = {}
-        for r in active_records:
-            name = r.get("name") or ""
-            date = r.get("date") or ""
-            y, m = extract_year_month_from_name_or_date(name, date)
-            if y and m:
-                y_str = str(y)
-                m_str = f"{y}{m:02d}"
-                if y_str not in year_months:
-                    year_months[y_str] = {}
-                year_months[y_str][m_str] = year_months[y_str].get(m_str, 0) + 1
+            # Update show_deleted button text
+            action_word = "Hide" if self.show_deleted else "Show"
+            self.show_deleted_btn.setText(f"🗑️ {action_word} Deleted ({len(deleted_records)})")
+            if len(deleted_records) == 0:
+                self.show_deleted_btn.setEnabled(False)
+                if self.show_deleted:
+                    self.show_deleted = False
+                    self.show_deleted_btn.setChecked(False)
             else:
-                if "Other" not in year_months:
-                    year_months["Other"] = {}
-                year_months["Other"]["Other"] = year_months["Other"].get("Other", 0) + 1
+                self.show_deleted_btn.setEnabled(True)
 
-        for year in sorted(year_months.keys(), reverse=True):
-            year_count = sum(year_months[year].values())
-            year_item = QTreeWidgetItem([f"📁 {year} ({year_count})"])
-            year_item.setData(0, Qt.ItemDataRole.UserRole, f"active_year_{year}")
-            self.folder_tree.addTopLevelItem(year_item)
+            # 1. Root Item: All Sessions
+            all_item = QTreeWidgetItem([f"All Sessions ({len(active_records)})"])
+            all_item.setData(0, Qt.ItemDataRole.UserRole, "active_all")
+            self.folder_tree.addTopLevelItem(all_item)
 
-            for m_key in sorted(year_months[year].keys(), reverse=True):
-                count = year_months[year][m_key]
-                if m_key != "Other" and len(m_key) == 6:
-                    m_num = int(m_key[4:])
-                    m_name = MONTH_INT_TO_NAME.get(m_num, f"Month {m_num}")
-                    label = f"📅 {m_num:02d} {m_name} ({count})"
-                else:
-                    label = f"📄 Uncategorized ({count})"
-                m_item = QTreeWidgetItem([label])
-                m_item.setData(0, Qt.ItemDataRole.UserRole, f"active_month_{m_key}")
-                year_item.addChild(m_item)
-
-            year_item.setExpanded(True)
-
-        # 2. Section: Deleted Sessions (replicates year & month hierarchy)
-        if self.show_deleted and deleted_records:
-            del_root = QTreeWidgetItem([f"🗑️ Deleted Sessions ({len(deleted_records)})"])
-            del_root.setData(0, Qt.ItemDataRole.UserRole, "deleted_all")
-            del_root.setForeground(0, Qt.GlobalColor.red)
-            font = del_root.font(0)
-            font.setBold(True)
-            del_root.setFont(0, font)
-            self.folder_tree.addTopLevelItem(del_root)
-
-            del_year_months: Dict[str, Dict[str, int]] = {}
-            for r in deleted_records:
+            # Group active records by Year and Month
+            year_months: Dict[str, Dict[str, int]] = {}
+            for r in active_records:
                 name = r.get("name") or ""
                 date = r.get("date") or ""
                 y, m = extract_year_month_from_name_or_date(name, date)
                 if y and m:
                     y_str = str(y)
                     m_str = f"{y}{m:02d}"
-                    if y_str not in del_year_months:
-                        del_year_months[y_str] = {}
-                    del_year_months[y_str][m_str] = del_year_months[y_str].get(m_str, 0) + 1
+                    if y_str not in year_months:
+                        year_months[y_str] = {}
+                    year_months[y_str][m_str] = year_months[y_str].get(m_str, 0) + 1
                 else:
-                    if "Other" not in del_year_months:
-                        del_year_months["Other"] = {}
-                    del_year_months["Other"]["Other"] = del_year_months["Other"].get("Other", 0) + 1
+                    if "Other" not in year_months:
+                        year_months["Other"] = {}
+                    year_months["Other"]["Other"] = year_months["Other"].get("Other", 0) + 1
 
-            for year in sorted(del_year_months.keys(), reverse=True):
-                year_count = sum(del_year_months[year].values())
+            for year in sorted(year_months.keys(), reverse=True):
+                year_count = sum(year_months[year].values())
                 year_item = QTreeWidgetItem([f"📁 {year} ({year_count})"])
-                year_item.setData(0, Qt.ItemDataRole.UserRole, f"deleted_year_{year}")
-                year_item.setForeground(0, Qt.GlobalColor.red)
-                del_root.addChild(year_item)
+                year_item.setData(0, Qt.ItemDataRole.UserRole, f"active_year_{year}")
+                self.folder_tree.addTopLevelItem(year_item)
 
-                for m_key in sorted(del_year_months[year].keys(), reverse=True):
-                    count = del_year_months[year][m_key]
+                for m_key in sorted(year_months[year].keys(), reverse=True):
+                    count = year_months[year][m_key]
                     if m_key != "Other" and len(m_key) == 6:
                         m_num = int(m_key[4:])
                         m_name = MONTH_INT_TO_NAME.get(m_num, f"Month {m_num}")
@@ -638,35 +596,100 @@ class HistoryView(QWidget):
                     else:
                         label = f"📄 Uncategorized ({count})"
                     m_item = QTreeWidgetItem([label])
-                    m_item.setData(0, Qt.ItemDataRole.UserRole, f"deleted_month_{m_key}")
-                    m_item.setForeground(0, Qt.GlobalColor.red)
+                    m_item.setData(0, Qt.ItemDataRole.UserRole, f"active_month_{m_key}")
                     year_item.addChild(m_item)
 
                 year_item.setExpanded(True)
 
-            del_root.setExpanded(True)
+            # 2. Section: Deleted Sessions (replicates year & month hierarchy)
+            if self.show_deleted and deleted_records:
+                del_root = QTreeWidgetItem([f"🗑️ Deleted Sessions ({len(deleted_records)})"])
+                del_root.setData(0, Qt.ItemDataRole.UserRole, "deleted_all")
+                del_root.setForeground(0, Qt.GlobalColor.red)
+                font = del_root.font(0)
+                font.setBold(True)
+                del_root.setFont(0, font)
+                self.folder_tree.addTopLevelItem(del_root)
 
-        # Highlight current selected filter or default to all_item
-        selected_found = False
-        if self.active_folder_filter:
-            iterator = QTreeWidgetItemIterator(self.folder_tree)
-            while iterator.value():
-                item = iterator.value()
-                if item.data(0, Qt.ItemDataRole.UserRole) == self.active_folder_filter:
-                    item.setSelected(True)
-                    selected_found = True
-                    break
-                iterator += 1
+                del_year_months: Dict[str, Dict[str, int]] = {}
+                for r in deleted_records:
+                    name = r.get("name") or ""
+                    date = r.get("date") or ""
+                    y, m = extract_year_month_from_name_or_date(name, date)
+                    if y and m:
+                        y_str = str(y)
+                        m_str = f"{y}{m:02d}"
+                        if y_str not in del_year_months:
+                            del_year_months[y_str] = {}
+                        del_year_months[y_str][m_str] = del_year_months[y_str].get(m_str, 0) + 1
+                    else:
+                        if "Other" not in del_year_months:
+                            del_year_months["Other"] = {}
+                        del_year_months["Other"]["Other"] = del_year_months["Other"].get("Other", 0) + 1
 
-        if not selected_found:
-            all_item.setSelected(True)
-            self.active_folder_filter = "active_all"
+                for year in sorted(del_year_months.keys(), reverse=True):
+                    year_count = sum(del_year_months[year].values())
+                    year_item = QTreeWidgetItem([f"📁 {year} ({year_count})"])
+                    year_item.setData(0, Qt.ItemDataRole.UserRole, f"deleted_year_{year}")
+                    year_item.setForeground(0, Qt.GlobalColor.red)
+                    del_root.addChild(year_item)
+
+                    for m_key in sorted(del_year_months[year].keys(), reverse=True):
+                        count = del_year_months[year][m_key]
+                        if m_key != "Other" and len(m_key) == 6:
+                            m_num = int(m_key[4:])
+                            m_name = MONTH_INT_TO_NAME.get(m_num, f"Month {m_num}")
+                            label = f"📅 {m_num:02d} {m_name} ({count})"
+                        else:
+                            label = f"📄 Uncategorized ({count})"
+                        m_item = QTreeWidgetItem([label])
+                        m_item.setData(0, Qt.ItemDataRole.UserRole, f"deleted_month_{m_key}")
+                        m_item.setForeground(0, Qt.GlobalColor.red)
+                        year_item.addChild(m_item)
+
+                    year_item.setExpanded(True)
+
+                del_root.setExpanded(True)
+
+            # Highlight current selected filter or default to all_item
+            selected_found = False
+            if self.active_folder_filter:
+                iterator = QTreeWidgetItemIterator(self.folder_tree)
+                while iterator.value():
+                    item = iterator.value()
+                    if item.data(0, Qt.ItemDataRole.UserRole) == self.active_folder_filter:
+                        item.setSelected(True)
+                        self.folder_tree.setCurrentItem(item)
+                        self.folder_tree.scrollToItem(item)
+                        selected_found = True
+                        break
+                    iterator += 1
+
+            if not selected_found:
+                all_item.setSelected(True)
+                self.folder_tree.setCurrentItem(all_item)
+                self.folder_tree.scrollToItem(all_item)
+                self.active_folder_filter = "active_all"
+        finally:
+            self.folder_tree.blockSignals(False)
+
+    def _on_folder_current_item_changed(
+        self, current: Optional[QTreeWidgetItem], previous: Optional[QTreeWidgetItem]
+    ) -> None:
+        """Filter table when folder tree current item changes (keyboard or mouse)."""
+        if not current:
+            return
+        folder_key = current.data(0, Qt.ItemDataRole.UserRole)
+        if folder_key and folder_key != self.active_folder_filter:
+            self.active_folder_filter = folder_key
+            self._refresh_table()
 
     def _on_folder_item_clicked(self, item: QTreeWidgetItem, column: int) -> None:
         """Filter table when folder tree item is clicked."""
         folder_key = item.data(0, Qt.ItemDataRole.UserRole)
-        self.active_folder_filter = folder_key
-        self._refresh_table()
+        if folder_key and folder_key != self.active_folder_filter:
+            self.active_folder_filter = folder_key
+            self._refresh_table()
 
     def _on_search_text_changed(self, text: str) -> None:
         self.search_filter_text = text.strip().lower()
@@ -901,6 +924,10 @@ class HistoryView(QWidget):
             has_prev = idx > 0
             has_next = idx < len(self.active_session_ids_in_table) - 1
 
+        orig_name = record.get("name", "") if record else name
+        is_del = bool(record.get("is_deleted", False)) if record else False
+        is_staged = rec_id in self.staged_edits
+
         self.detail_view.load_session(
             self.engine,
             rec_id,
@@ -909,6 +936,11 @@ class HistoryView(QWidget):
             has_prev=has_prev,
             has_next=has_next,
             db_path=getattr(self, "db_path", None),
+            available_locations=self.get_all_available_locations(),
+            available_djs=self.get_all_available_djs(),
+            is_staged=is_staged,
+            original_name=orig_name,
+            is_deleted=is_del,
         )
         self.stack.setCurrentIndex(1)
 
@@ -1449,4 +1481,175 @@ class HistoryView(QWidget):
     def _on_action_error(self, history_id: str, err_msg: str) -> None:
         self.notify_status.emit(f"❌ Error for session {history_id}: {err_msg}")
         QMessageBox.critical(self, "Operation Failed", f"Database error:\n{err_msg}")
+
+    def _on_detail_metadata_updated(self, history_id: str, new_loc: str, new_art: str) -> None:
+        """Handle location and played-with DJ updates originating from HistoryDetailView."""
+        record = next((r for r in self.original_records if str(r["id"]) == str(history_id)), None)
+        if not record:
+            return
+
+        orig_name = record.get("name") or ""
+        orig_date = record.get("date") or ""
+        orig_base, orig_loc, orig_art = parse_history_name(orig_name)
+
+        # Preserve any staged date or base name
+        if history_id in self.staged_edits:
+            cur_date = self.staged_edits[history_id].get("date", orig_date)
+            cur_name = self.staged_edits[history_id].get("name", orig_name)
+            cur_base, _, _ = parse_history_name(cur_name)
+        else:
+            cur_date = orig_date
+            cur_base = orig_base
+
+        new_name = compose_history_name(cur_base, location=new_loc, artist=new_art)
+
+        # Register any new location / DJs
+        if new_loc:
+            self.register_new_location(new_loc)
+        if new_art:
+            for dj in parse_played_with(new_art):
+                self.register_new_dj(dj)
+
+        if new_name != orig_name or cur_date != orig_date:
+            self.staged_edits[history_id] = {
+                "record": record,
+                "name": new_name,
+                "date": cur_date,
+            }
+            is_staged = True
+        else:
+            self.staged_edits.pop(history_id, None)
+            is_staged = False
+
+        # Synchronize table row
+        self._sync_table_row_for_history(history_id, cur_base, new_loc, new_art, cur_date, is_staged)
+        self._update_status_bar()
+
+    def _sync_table_row_for_history(
+        self,
+        history_id: str,
+        base_name: str,
+        location: str,
+        artist: str,
+        date_str: str,
+        is_staged: bool,
+    ) -> None:
+        """Update table cells for a session when modified from detail view."""
+        row_idx = -1
+        for i in range(self.table.rowCount()):
+            cand = self.table.item(i, 1) or self.table.item(i, 4)
+            if cand and str(cand.data(Qt.ItemDataRole.UserRole)) == str(history_id):
+                row_idx = i
+                break
+
+        if row_idx < 0:
+            return
+
+        record = next((r for r in self.original_records if str(r["id"]) == str(history_id)), None)
+        orig_name = record.get("name", "") if record else ""
+        orig_date = record.get("date", "") if record else ""
+        orig_base, orig_loc, orig_art = parse_history_name(orig_name)
+
+        self.table.blockSignals(True)
+        # Location
+        loc_item = self.table.item(row_idx, 3)
+        if loc_item:
+            loc_item.setText(location)
+            loc_item.setForeground(Qt.GlobalColor.yellow if (is_staged and location != orig_loc) else Qt.GlobalColor.white)
+
+        # Played With
+        art_item = self.table.item(row_idx, 4)
+        if art_item:
+            art_item.setText(artist)
+            art_item.setForeground(Qt.GlobalColor.yellow if (is_staged and artist != orig_art) else Qt.GlobalColor.white)
+        w = self.table.cellWidget(row_idx, 4)
+        if isinstance(w, DJChipsContainer):
+            w.blockSignals(True)
+            w.set_djs(parse_played_with(artist))
+            w.blockSignals(False)
+
+        # Status cell
+        status_item = self.table.item(row_idx, 0)
+        if status_item:
+            if is_staged:
+                status_item.setText("● Staged")
+                status_item.setForeground(Qt.GlobalColor.yellow)
+            else:
+                status_item.setText("Clean")
+                status_item.setForeground(Qt.GlobalColor.gray)
+        self.table.blockSignals(False)
+
+    def _on_detail_discard_session(self, history_id: str) -> None:
+        """Handle discard triggered from HistoryDetailView."""
+        record = next((r for r in self.original_records if str(r["id"]) == str(history_id)), None)
+        self.staged_edits.pop(history_id, None)
+        if record:
+            orig_name = record.get("name", "")
+            orig_date = record.get("date", "")
+            orig_base, orig_loc, orig_art = parse_history_name(orig_name)
+            self._sync_table_row_for_history(history_id, orig_base, orig_loc, orig_art, orig_date, False)
+        self._update_status_bar()
+
+    def _on_detail_save_session(self, history_id: str) -> None:
+        """Commit staged updates for a single session directly from HistoryDetailView."""
+        if not self.engine:
+            return
+
+        if is_rekordbox_running():
+            QMessageBox.warning(
+                self,
+                "Rekordbox is Running",
+                "⚠️ Rekordbox is currently running!\n\n"
+                "Saving changes now may cause database locking or corruption.\n"
+                "Please close Rekordbox (Cmd + Q) and try again.",
+                QMessageBox.StandardButton.Cancel,
+            )
+            return
+
+        record = next((r for r in self.original_records if str(r["id"]) == str(history_id)), None)
+        if not record:
+            return
+
+        is_staged = history_id in self.staged_edits
+        new_name = self.staged_edits[history_id]["name"] if is_staged else record.get("name", "")
+        new_date = self.staged_edits[history_id]["date"] if is_staged else record.get("date", "")
+
+        updates = [{
+            "record": record,
+            "new_name": new_name,
+            "new_date": new_date,
+        }]
+
+        self.notify_status.emit(f"Saving changes for session {history_id}...")
+
+        worker = HistoryBatchSaveWorker(self.engine, updates, auto_realign=True, parent=self)
+        def on_success(stats: Dict[str, Any]) -> None:
+            self.staged_edits.pop(history_id, None)
+            record["name"] = new_name
+            record["date"] = new_date
+            b, l, a = parse_history_name(new_name)
+            self._sync_table_row_for_history(history_id, b, l, a, new_date, False)
+            self._update_status_bar()
+            self._update_folder_tree()
+            self.notify_status.emit("✅ Saved session changes successfully.")
+            self.detail_view.original_location = l
+            self.detail_view.original_artist = a
+            self.detail_view.current_location = l
+            self.detail_view.current_artist = a
+            self.detail_view.is_staged = False
+            self.detail_view.bottom_bar.setVisible(False)
+            QMessageBox.information(
+                self,
+                "Changes Saved",
+                f"Session '{b}' updated successfully.",
+            )
+            self.request_reload.emit()
+
+        def on_error(err_msg: str) -> None:
+            self.notify_status.emit(f"❌ Save failed: {err_msg}")
+            QMessageBox.critical(self, "Save Failed", f"Database error while saving changes:\n{err_msg}")
+
+        worker.success.connect(on_success)
+        worker.error.connect(on_error)
+        worker.start()
 

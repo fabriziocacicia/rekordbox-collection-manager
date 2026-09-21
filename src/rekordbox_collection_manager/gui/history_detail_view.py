@@ -7,24 +7,33 @@ tag & playlist chips, Finder link reveals, and context menus.
 """
 
 from typing import Any, Dict, List, Optional
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QEvent, QStringListModel, Qt, Signal
 from PySide6.QtGui import QKeyEvent
 from PySide6.QtWidgets import (
+    QCompleter,
     QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
 from sqlalchemy.engine import Engine
 
 from rekordbox_collection_manager.gui.theme import (
+    COLOR_AMBER,
+    COLOR_AMBER_BG,
+    COLOR_AMBER_BORDER,
     COLOR_BG_CARD,
+    COLOR_BG_HOVER,
+    COLOR_BG_INPUT,
     COLOR_BG_PANEL,
     COLOR_BLUE,
+    COLOR_BLUE_BG,
     COLOR_BORDER,
+    COLOR_BORDER_FOCUS,
     COLOR_BORDER_LIGHT,
     COLOR_GREEN,
     COLOR_GREEN_BG,
@@ -43,14 +52,190 @@ from rekordbox_collection_manager.gui.track_table import (
     TrackTableConfig,
     TracksTableWidget,
 )
-from rekordbox_collection_manager.gui.chip import BadgeChip
+from rekordbox_collection_manager.gui.chip import BadgeChip, DJChipsContainer
 from rekordbox_collection_manager.gui.workers import HistorySessionDetailWorker
 from rekordbox_collection_manager.utils import (
     MONTH_INT_TO_NAME,
+    compose_history_name,
+    compose_played_with,
     extract_year_month_from_name_or_date,
     parse_history_name,
     parse_played_with,
 )
+
+
+class DetailDJChip(QFrame):
+    """Sleek horizontal badge chip for collaborator DJs in HistoryDetailView."""
+
+    delete_requested = Signal(str)
+
+    def __init__(self, name: str, removable: bool = True, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.name = name
+        self.removable = removable
+        self.setFixedHeight(22)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setStyleSheet("""
+            QFrame {
+                background-color: rgba(245, 158, 11, 0.12);
+                border: 1px solid #784e10;
+                border-radius: 5px;
+            }
+            QFrame:hover {
+                background-color: rgba(245, 158, 11, 0.22);
+                border-color: #f59e0b;
+            }
+        """)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(8, 0, 6 if removable else 8, 0)
+        layout.setSpacing(4)
+        layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+
+        self.label = QLabel(name)
+        self.label.setStyleSheet(
+            "color: #fef3c7; font-size: 11px; font-weight: 500; background: transparent; border: none;"
+        )
+        layout.addWidget(self.label)
+
+        if removable:
+            self.x_btn = QPushButton("×")
+            self.x_btn.setFixedSize(14, 14)
+            self.x_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.x_btn.setToolTip(f"Remove {name}")
+            self.x_btn.setStyleSheet("""
+                QPushButton {
+                    color: #d97706;
+                    font-size: 13px;
+                    font-weight: 700;
+                    background: transparent;
+                    border: none;
+                    padding: 0;
+                    margin: 0;
+                }
+                QPushButton:hover {
+                    color: #ef4444;
+                }
+            """)
+            self.x_btn.setVisible(False)
+            self.x_btn.clicked.connect(lambda: self.delete_requested.emit(self.name))
+            layout.addWidget(self.x_btn)
+
+    def enterEvent(self, event: Any) -> None:
+        super().enterEvent(event)
+        if self.removable and hasattr(self, "x_btn"):
+            self.x_btn.setVisible(True)
+
+    def leaveEvent(self, event: Any) -> None:
+        super().leaveEvent(event)
+        if self.removable and hasattr(self, "x_btn"):
+            self.x_btn.setVisible(False)
+
+    @property
+    def text(self) -> str:
+        return self.name
+
+    def setText(self, text: str) -> None:
+        self.name = text
+        self.label.setText(text)
+
+
+class LocationChip(QFrame):
+    """Refined interactive location chip matching Pioneer DJ dark theme."""
+
+    def __init__(self, parent_view: Any):
+        super().__init__()
+        self.parent_view = parent_view
+        self.setObjectName("locChip")
+        self.setFixedHeight(30)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setStyleSheet(f"""
+            QFrame#locChip {{
+                background-color: {COLOR_BG_PANEL};
+                border: 1px solid {COLOR_BORDER};
+                border-radius: 6px;
+            }}
+            QFrame#locChip:hover {{
+                border-color: #38bdf8;
+            }}
+            QFrame#locChip QLabel {{
+                background: transparent;
+            }}
+        """)
+
+    def enterEvent(self, event: Any) -> None:
+        super().enterEvent(event)
+        if (
+            self.parent_view.current_location
+            and not self.parent_view.is_deleted
+            and hasattr(self.parent_view, "location_clear_btn")
+            and hasattr(self.parent_view, "location_edit_widget")
+            and not self.parent_view.location_edit_widget.isVisible()
+        ):
+            self.parent_view.location_clear_btn.setVisible(True)
+
+    def leaveEvent(self, event: Any) -> None:
+        super().leaveEvent(event)
+        if hasattr(self.parent_view, "location_clear_btn"):
+            self.parent_view.location_clear_btn.setVisible(False)
+
+    def mousePressEvent(self, event: Any) -> None:
+        if (
+            not self.parent_view.is_deleted
+            and hasattr(self.parent_view, "location_edit_widget")
+            and not self.parent_view.location_edit_widget.isVisible()
+        ):
+            self.parent_view._start_location_edit()
+        super().mousePressEvent(event)
+
+
+class DJsChip(QFrame):
+    """Refined interactive collaborator DJs chip matching Pioneer DJ dark theme."""
+
+    def __init__(self, parent_view: Any):
+        super().__init__()
+        self.parent_view = parent_view
+        self.setObjectName("djsChip")
+        self.setFixedHeight(30)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setStyleSheet(f"""
+            QFrame#djsChip {{
+                background-color: {COLOR_BG_PANEL};
+                border: 1px solid {COLOR_BORDER};
+                border-radius: 6px;
+            }}
+            QFrame#djsChip:hover {{
+                border-color: #f59e0b;
+            }}
+            QFrame#djsChip QLabel {{
+                background: transparent;
+            }}
+        """)
+
+    def mousePressEvent(self, event: Any) -> None:
+        if (
+            not self.parent_view.is_deleted
+            and hasattr(self.parent_view, "dj_input_widget")
+            and not self.parent_view.dj_input_widget.isVisible()
+            and not parse_played_with(self.parent_view.current_artist)
+        ):
+            self.parent_view._start_dj_add()
+        super().mousePressEvent(event)
+
+
+class DetailDJsWrapper:
+    """Compatibility wrapper exposing get_djs and set_djs for HistoryDetailView."""
+
+    def __init__(self, view: Any):
+        self.view = view
+
+    def get_djs(self) -> List[str]:
+        return parse_played_with(self.view.current_artist)
+
+    def set_djs(self, djs: List[str]) -> None:
+        self.view._set_djs_list(djs)
+
+    def set_available_djs(self, djs: List[str]) -> None:
+        self.view.set_available_djs(djs)
 
 
 class HistoryDetailView(QWidget):
@@ -61,20 +246,38 @@ class HistoryDetailView(QWidget):
     next_session_requested = Signal()
     notify_status = Signal(str)
     open_history_session_requested = Signal(str)  # Emits history_id
-    track_detail_requested = Signal(int)  # Emits track_id to open detail view
+    track_detail_requested = Signal(dict, int)  # Emits (track_dict, track_idx)
     delete_session_requested = Signal(str)  # Emits history_id
     restore_session_requested = Signal(str)  # Emits history_id
+    session_metadata_updated = Signal(str, str, str)  # Emits (history_id, location, artist)
+    save_session_requested = Signal(str)  # Emits history_id
+    discard_session_requested = Signal(str)  # Emits history_id
+    location_added = Signal(str)  # Emits new location name
+    dj_added = Signal(str)  # Emits new DJ name
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.engine: Optional[Engine] = None
+        self.db_path: Optional[str] = None
         self.history_id: Optional[str] = None
         self.session_data: Dict[str, Any] = {}
         self.all_tracks: List[Dict[str, Any]] = []
         self.displayed_tracks: List[Dict[str, Any]] = []
-        self.djs_chips: List[BadgeChip] = []
         self.filter_text: str = ""
         self.active_worker: Optional[HistorySessionDetailWorker] = None
+
+        self.base_name: str = ""
+        self.original_location: str = ""
+        self.current_location: str = ""
+        self.original_artist: str = ""
+        self.current_artist: str = ""
+        self.available_locations: List[str] = []
+        self.available_djs: List[str] = []
+        self.is_deleted: bool = False
+        self.is_staged: bool = False
+
+        self.djs_chips: List[DetailDJChip] = []
+        self.djs_container = DetailDJsWrapper(self)
 
         self._init_ui()
 
@@ -167,6 +370,7 @@ class HistoryDetailView(QWidget):
         # Title Card (Refined container surrounding History Name & metadata chips)
         self.title_frame = QFrame()
         self.title_frame.setObjectName("sessionTitleCard")
+        self.title_frame.setFixedHeight(48)
         self.title_frame.setStyleSheet(
             f"QFrame#sessionTitleCard {{ "
             f"  background-color: {COLOR_BG_CARD}; "
@@ -178,7 +382,7 @@ class HistoryDetailView(QWidget):
             f"}}"
         )
         title_layout = QHBoxLayout(self.title_frame)
-        title_layout.setContentsMargins(12, 8, 12, 8)
+        title_layout.setContentsMargins(12, 6, 12, 6)
         title_layout.setSpacing(10)
         title_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
@@ -204,63 +408,203 @@ class HistoryDetailView(QWidget):
         title_layout.addStretch(1)
 
         # Right: Refined Location & Played With Chips
-        self.location_chip = QFrame()
-        self.location_chip.setObjectName("locChip")
-        self.location_chip.setStyleSheet(
-            f"QFrame#locChip {{ "
-            f"  background-color: {COLOR_BG_PANEL}; "
-            f"  border: 1px solid {COLOR_BORDER}; "
-            f"  border-radius: 6px; "
-            f"}} "
-            f"QFrame#locChip QLabel {{ "
-            f"  background: transparent; "
-            f"}}"
-        )
+        self.location_chip = LocationChip(self)
         loc_layout = QHBoxLayout(self.location_chip)
-        loc_layout.setContentsMargins(8, 4, 10, 4)
+        loc_layout.setContentsMargins(10, 0, 10, 0)
         loc_layout.setSpacing(6)
+        loc_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
         loc_icon = QLabel("📍")
-        loc_icon.setStyleSheet("font-size: 11px; background: transparent;")
+        loc_icon.setStyleSheet("font-size: 11px; background: transparent; border: none;")
         loc_layout.addWidget(loc_icon)
 
         loc_tag = QLabel("LOCATION")
         loc_tag.setStyleSheet(
-            f"color: {COLOR_TEXT_MUTED}; font-size: 9px; font-weight: 700; letter-spacing: 0.5px; background: transparent;"
+            f"color: {COLOR_TEXT_MUTED}; font-size: 9px; font-weight: 700; letter-spacing: 0.8px; background: transparent; border: none;"
         )
         loc_layout.addWidget(loc_tag)
 
+        # Location Display Widget (Value, Clear button, or Add button)
+        self.location_display_widget = QWidget()
+        self.location_display_widget.setStyleSheet("background: transparent; border: none;")
+        loc_disp_layout = QHBoxLayout(self.location_display_widget)
+        loc_disp_layout.setContentsMargins(0, 0, 0, 0)
+        loc_disp_layout.setSpacing(4)
+        loc_disp_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+
         self.location_val_label = QLabel("")
         self.location_val_label.setStyleSheet(
-            f"color: {COLOR_TEXT_PRIMARY}; font-size: 12px; font-weight: 600; background: transparent;"
+            f"color: {COLOR_TEXT_PRIMARY}; font-size: 12px; font-weight: 600; background: transparent; border: none;"
         )
-        loc_layout.addWidget(self.location_val_label)
-        self.location_chip.setVisible(False)
-        title_layout.addWidget(self.location_chip)
+        self.location_val_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.location_val_label.setToolTip("Click to edit location")
+        self.location_val_label.mousePressEvent = lambda event: self._start_location_edit() if not self.is_deleted else None
+        loc_disp_layout.addWidget(self.location_val_label)
 
-        self.djs_chip = QFrame()
-        self.djs_chip.setObjectName("djsChip")
-        self.djs_chip.setStyleSheet(
-            f"QFrame#djsChip {{ "
-            f"  background-color: {COLOR_BG_PANEL}; "
-            f"  border: 1px solid {COLOR_BORDER}; "
-            f"  border-radius: 6px; "
-            f"}} "
-            f"QFrame#djsChip QLabel {{ "
-            f"  background: transparent; "
+        self.location_clear_btn = QPushButton("×")
+        self.location_clear_btn.setFixedSize(14, 14)
+        self.location_clear_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.location_clear_btn.setToolTip("Clear location")
+        self.location_clear_btn.setStyleSheet("""
+            QPushButton {
+                color: #64748b;
+                font-size: 13px;
+                font-weight: 700;
+                background: transparent;
+                border: none;
+                padding: 0;
+                margin: 0;
+            }
+            QPushButton:hover {
+                color: #ef4444;
+            }
+        """)
+        self.location_clear_btn.clicked.connect(self._clear_location)
+        self.location_clear_btn.setVisible(False)
+        loc_disp_layout.addWidget(self.location_clear_btn)
+
+        self.location_add_btn = QPushButton("+ Add Location")
+        self.location_add_btn.setFixedHeight(22)
+        self.location_add_btn.setMinimumWidth(95)
+        self.location_add_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.location_add_btn.setToolTip("Add location to this session")
+        self.location_add_btn.setStyleSheet("""
+            QPushButton {
+                color: #64748b;
+                font-size: 11px;
+                font-weight: 500;
+                background: transparent;
+                border: none;
+                padding: 0px 2px;
+            }
+            QPushButton:hover {
+                color: #38bdf8;
+            }
+        """)
+        self.location_add_btn.clicked.connect(self._start_location_edit)
+        loc_disp_layout.addWidget(self.location_add_btn)
+
+        loc_layout.addWidget(self.location_display_widget)
+
+        # Location Edit Widget (Inline QLineEdit + completer + confirm/cancel)
+        self.location_edit_widget = QWidget()
+        self.location_edit_widget.setStyleSheet("background: transparent; border: none;")
+        loc_edit_layout = QHBoxLayout(self.location_edit_widget)
+        loc_edit_layout.setContentsMargins(0, 0, 0, 0)
+        loc_edit_layout.setSpacing(4)
+        loc_edit_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+
+        self.location_input = QLineEdit()
+        self.location_input.setPlaceholderText("Enter location...")
+        self.location_input.setFixedHeight(22)
+        self.location_input.setMinimumWidth(110)
+        self.location_input.setMaximumWidth(160)
+        self.location_input.setStyleSheet(
+            f"QLineEdit {{ "
+            f"  background-color: {COLOR_BG_INPUT}; "
+            f"  color: {COLOR_TEXT_PRIMARY}; "
+            f"  border: 1px solid #38bdf8; "
+            f"  border-radius: 4px; "
+            f"  padding: 1px 6px; "
+            f"  font-size: 11px; "
+            f"  font-weight: 600; "
             f"}}"
         )
+        self.location_completer_model = QStringListModel(self)
+        self.location_completer = QCompleter(self.location_completer_model, self.location_input)
+        self.location_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self.location_completer.setFilterMode(Qt.MatchFlag.MatchContains)
+        self.location_completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+        popup = self.location_completer.popup()
+        if popup:
+            popup.setStyleSheet(
+                f"QAbstractItemView {{ "
+                f"  background-color: {COLOR_BG_PANEL}; "
+                f"  color: {COLOR_TEXT_PRIMARY}; "
+                f"  border: 1px solid {COLOR_BORDER}; "
+                f"  border-radius: 6px; "
+                f"  padding: 4px; "
+                f"  selection-background-color: {COLOR_BLUE_BG}; "
+                f"  selection-color: {COLOR_BLUE}; "
+                f"  font-size: 11px; "
+                f"  outline: none; "
+                f"}} "
+                f"QAbstractItemView::item {{ "
+                f"  padding: 6px 10px; "
+                f"  border-radius: 4px; "
+                f"}} "
+                f"QAbstractItemView::item:hover {{ "
+                f"  background-color: {COLOR_BG_HOVER}; "
+                f"}} "
+                f"QAbstractItemView::item:selected {{ "
+                f"  background-color: {COLOR_BLUE_BG}; "
+                f"  color: #38bdf8; "
+                f"}}"
+            )
+        self.location_completer.activated.connect(self._on_location_completer_activated)
+        self.location_input.setCompleter(self.location_completer)
+        self.location_input.returnPressed.connect(self._commit_location_edit)
+        self.location_input.installEventFilter(self)
+        loc_edit_layout.addWidget(self.location_input)
+
+        self.location_confirm_btn = QPushButton("✓")
+        self.location_confirm_btn.setFixedSize(16, 16)
+        self.location_confirm_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.location_confirm_btn.setToolTip("Confirm location (Enter)")
+        self.location_confirm_btn.setStyleSheet("""
+            QPushButton {
+                color: #22c55e;
+                font-size: 12px;
+                font-weight: 700;
+                background: transparent;
+                border: none;
+                padding: 0;
+            }
+            QPushButton:hover {
+                color: #4ade80;
+            }
+        """)
+        self.location_confirm_btn.clicked.connect(self._commit_location_edit)
+        loc_edit_layout.addWidget(self.location_confirm_btn)
+
+        self.location_cancel_btn = QPushButton("×")
+        self.location_cancel_btn.setFixedSize(16, 16)
+        self.location_cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.location_cancel_btn.setToolTip("Cancel edit (Esc)")
+        self.location_cancel_btn.setStyleSheet("""
+            QPushButton {
+                color: #64748b;
+                font-size: 14px;
+                font-weight: 700;
+                background: transparent;
+                border: none;
+                padding: 0;
+            }
+            QPushButton:hover {
+                color: #ef4444;
+            }
+        """)
+        self.location_cancel_btn.clicked.connect(self._cancel_location_edit)
+        loc_edit_layout.addWidget(self.location_cancel_btn)
+
+        self.location_edit_widget.setVisible(False)
+        loc_layout.addWidget(self.location_edit_widget)
+
+        title_layout.addWidget(self.location_chip)
+
+        self.djs_chip = DJsChip(self)
         djs_layout = QHBoxLayout(self.djs_chip)
-        djs_layout.setContentsMargins(8, 4, 10, 4)
+        djs_layout.setContentsMargins(10, 0, 10, 0)
         djs_layout.setSpacing(6)
+        djs_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
         djs_icon = QLabel("👥")
-        djs_icon.setStyleSheet("font-size: 11px; background: transparent;")
+        djs_icon.setStyleSheet("font-size: 11px; background: transparent; border: none;")
         djs_layout.addWidget(djs_icon)
 
         djs_tag = QLabel("PLAYED WITH")
         djs_tag.setStyleSheet(
-            f"color: {COLOR_TEXT_MUTED}; font-size: 9px; font-weight: 700; letter-spacing: 0.5px; background: transparent;"
+            f"color: {COLOR_TEXT_MUTED}; font-size: 9px; font-weight: 700; letter-spacing: 0.8px; background: transparent; border: none;"
         )
         djs_layout.addWidget(djs_tag)
 
@@ -269,15 +613,138 @@ class HistoryDetailView(QWidget):
         self.djs_chips_layout = QHBoxLayout(self.djs_chips_container)
         self.djs_chips_layout.setContentsMargins(0, 0, 0, 0)
         self.djs_chips_layout.setSpacing(4)
+        self.djs_chips_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         djs_layout.addWidget(self.djs_chips_container)
 
-        self.djs_val_label = QLabel("")
-        self.djs_val_label.setStyleSheet(
-            f"color: {COLOR_TEXT_PRIMARY}; font-size: 12px; font-weight: 600; background: transparent;"
+        self.dj_add_btn = QPushButton("+ Add DJ")
+        self.dj_add_btn.setFixedHeight(22)
+        self.dj_add_btn.setMinimumWidth(65)
+        self.dj_add_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.dj_add_btn.setToolTip("Add collaborator DJ to this session")
+        self.dj_add_btn.setStyleSheet("""
+            QPushButton {
+                color: #64748b;
+                font-size: 11px;
+                font-weight: 500;
+                background: transparent;
+                border: none;
+                padding: 0px 2px;
+            }
+            QPushButton:hover {
+                color: #f59e0b;
+            }
+        """)
+        self.dj_add_btn.clicked.connect(self._start_dj_add)
+        djs_layout.addWidget(self.dj_add_btn)
+
+        # Inline DJ input editor
+        self.dj_input_widget = QWidget()
+        self.dj_input_widget.setStyleSheet("background: transparent; border: none;")
+        dj_in_layout = QHBoxLayout(self.dj_input_widget)
+        dj_in_layout.setContentsMargins(0, 0, 0, 0)
+        dj_in_layout.setSpacing(4)
+        dj_in_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+
+        self.dj_input = QLineEdit()
+        self.dj_input.setPlaceholderText("Enter DJ name...")
+        self.dj_input.setFixedHeight(22)
+        self.dj_input.setMinimumWidth(90)
+        self.dj_input.setMaximumWidth(150)
+        self.dj_input.setStyleSheet(
+            f"QLineEdit {{ "
+            f"  background-color: {COLOR_BG_INPUT}; "
+            f"  color: {COLOR_TEXT_PRIMARY}; "
+            f"  border: 1px solid #f59e0b; "
+            f"  border-radius: 4px; "
+            f"  padding: 1px 6px; "
+            f"  font-size: 11px; "
+            f"  font-weight: 600; "
+            f"}}"
         )
+        self.dj_completer_model = QStringListModel(self)
+        self.dj_completer = QCompleter(self.dj_completer_model, self.dj_input)
+        self.dj_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self.dj_completer.setFilterMode(Qt.MatchFlag.MatchContains)
+        self.dj_completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+        popup = self.dj_completer.popup()
+        if popup:
+            popup.setStyleSheet(
+                f"QAbstractItemView {{ "
+                f"  background-color: {COLOR_BG_PANEL}; "
+                f"  color: {COLOR_TEXT_PRIMARY}; "
+                f"  border: 1px solid {COLOR_BORDER}; "
+                f"  border-radius: 6px; "
+                f"  padding: 4px; "
+                f"  selection-background-color: {COLOR_BLUE_BG}; "
+                f"  selection-color: {COLOR_BLUE}; "
+                f"  font-size: 11px; "
+                f"  outline: none; "
+                f"}} "
+                f"QAbstractItemView::item {{ "
+                f"  padding: 6px 10px; "
+                f"  border-radius: 4px; "
+                f"}} "
+                f"QAbstractItemView::item:hover {{ "
+                f"  background-color: {COLOR_BG_HOVER}; "
+                f"}} "
+                f"QAbstractItemView::item:selected {{ "
+                f"  background-color: {COLOR_BLUE_BG}; "
+                f"  color: #38bdf8; "
+                f"}}"
+            )
+        self.dj_completer.activated.connect(self._on_dj_completer_activated)
+        self.dj_input.setCompleter(self.dj_completer)
+        self.dj_input.returnPressed.connect(self._commit_dj_add)
+        self.dj_input.installEventFilter(self)
+        dj_in_layout.addWidget(self.dj_input)
+
+        dj_confirm = QPushButton("✓")
+        dj_confirm.setFixedSize(16, 16)
+        dj_confirm.setCursor(Qt.CursorShape.PointingHandCursor)
+        dj_confirm.setToolTip("Add DJ (Enter)")
+        dj_confirm.setStyleSheet("""
+            QPushButton {
+                color: #f59e0b;
+                font-size: 12px;
+                font-weight: 700;
+                background: transparent;
+                border: none;
+                padding: 0;
+            }
+            QPushButton:hover {
+                color: #fbbf24;
+            }
+        """)
+        dj_confirm.clicked.connect(self._commit_dj_add)
+        dj_in_layout.addWidget(dj_confirm)
+
+        dj_cancel = QPushButton("×")
+        dj_cancel.setFixedSize(16, 16)
+        dj_cancel.setCursor(Qt.CursorShape.PointingHandCursor)
+        dj_cancel.setToolTip("Cancel (Esc)")
+        dj_cancel.setStyleSheet("""
+            QPushButton {
+                color: #64748b;
+                font-size: 14px;
+                font-weight: 700;
+                background: transparent;
+                border: none;
+                padding: 0;
+            }
+            QPushButton:hover {
+                color: #ef4444;
+            }
+        """)
+        dj_cancel.clicked.connect(self._cancel_dj_add)
+        dj_in_layout.addWidget(dj_cancel)
+
+        self.dj_input_widget.setVisible(False)
+        djs_layout.addWidget(self.dj_input_widget)
+
+        self.djs_val_label = QLabel("")
         self.djs_val_label.setVisible(False)
         djs_layout.addWidget(self.djs_val_label)
-        self.djs_chip.setVisible(False)
+
         title_layout.addWidget(self.djs_chip)
 
         header_layout.addWidget(self.title_frame)
@@ -338,7 +805,42 @@ class HistoryDetailView(QWidget):
         self.table.track_detail_requested.connect(self._open_track_detail)
         main_layout.addWidget(self.table, stretch=1)
 
-        # 5. Bottom Status Bar
+        # 5. Bottom Action Bar for Unsaved Changes
+        self.bottom_bar = QFrame()
+        self.bottom_bar.setObjectName("bottomActionBar")
+        self.bottom_bar.setStyleSheet(
+            f"QFrame#bottomActionBar {{ "
+            f"  background-color: {COLOR_BG_PANEL}; "
+            f"  border: 1px solid {COLOR_BORDER_FOCUS}; "
+            f"  border-radius: 8px; "
+            f"  padding: 6px 12px; "
+            f"}}"
+        )
+        bottom_layout = QHBoxLayout(self.bottom_bar)
+        bottom_layout.setContentsMargins(10, 6, 10, 6)
+        bottom_layout.setSpacing(12)
+
+        self.staged_status_label = QLabel("⚠️ Unsaved modifications — click Save Changes to commit.")
+        self.staged_status_label.setStyleSheet(
+            f"color: {COLOR_AMBER}; font-weight: 600; font-size: 12px;"
+        )
+        bottom_layout.addWidget(self.staged_status_label, stretch=1)
+
+        self.discard_btn = QPushButton("Discard Changes")
+        self.discard_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.discard_btn.clicked.connect(self._on_discard_clicked)
+        bottom_layout.addWidget(self.discard_btn)
+
+        self.save_btn = QPushButton("💾 Save Changes")
+        self.save_btn.setObjectName("primaryButton")
+        self.save_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.save_btn.clicked.connect(self._on_save_clicked)
+        bottom_layout.addWidget(self.save_btn)
+
+        self.bottom_bar.setVisible(False)
+        main_layout.addWidget(self.bottom_bar)
+
+        # 6. Bottom Status Bar
         self.status_label = QLabel("0 tracks")
         self.status_label.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY}; font-size: 11px;")
         main_layout.addWidget(self.status_label)
@@ -387,33 +889,50 @@ class HistoryDetailView(QWidget):
         has_prev: bool = False,
         has_next: bool = False,
         db_path: Optional[str] = None,
+        available_locations: Optional[List[str]] = None,
+        available_djs: Optional[List[str]] = None,
+        is_staged: bool = False,
+        original_name: Optional[str] = None,
+        is_deleted: bool = False,
     ) -> None:
         """Load session details and tracklist asynchronously."""
         self.engine = engine
         self.db_path = db_path
         self.history_id = str(history_id)
+        self.is_staged = is_staged
+        self.is_deleted = is_deleted
 
-        base_name, location, artist = parse_history_name(session_title)
-        self.session_title_label.setText(base_name or f"History Session {history_id}")
+        if available_locations is not None:
+            self.set_available_locations(available_locations)
+        if available_djs is not None:
+            self.set_available_djs(available_djs)
+
+        orig_str = original_name or session_title
+        orig_base, orig_loc, orig_art = parse_history_name(orig_str)
+        self.original_location = orig_loc
+        self.original_artist = orig_art
+
+        cur_base, cur_loc, cur_art = parse_history_name(session_title)
+        self.base_name = cur_base
+        self.current_location = cur_loc
+        self.current_artist = cur_art
+
+        self.session_title_label.setText(self.base_name or f"History Session {history_id}")
         self.prev_btn.setEnabled(has_prev)
         self.next_btn.setEnabled(has_next)
         self.status_label.setText("Loading tracks from database...")
 
         # Update Location & Played With (DJs) Chips
-        if location:
-            self.location_val_label.setText(location)
-            self.location_chip.setVisible(True)
-        else:
-            self.location_chip.setVisible(False)
+        self._render_location()
+        self._update_detail_djs(self.current_artist)
 
-        if artist:
-            self.djs_val_label.setText(artist)
-            self._update_detail_djs(artist)
-            self.djs_chip.setVisible(True)
-        else:
-            self.djs_val_label.setText("")
-            self._update_detail_djs("")
-            self.djs_chip.setVisible(False)
+        # Update Unsaved Modifications Bottom Bar
+        has_changes = (
+            (self.current_location != self.original_location)
+            or (self.current_artist != self.original_artist)
+            or is_staged
+        )
+        self._update_staged_bottom_bar(has_changes)
 
         # Breadcrumb
         y, m = extract_year_month_from_name_or_date(session_title, session_date)
@@ -455,9 +974,9 @@ class HistoryDetailView(QWidget):
         s_date = session.get("date") or "—"
 
         base_name, location, artist = parse_history_name(s_name)
-        self.session_title_label.setText(base_name or s_name)
 
         is_del = bool(session.get("is_deleted", False))
+        self.is_deleted = is_del
         self.deleted_badge.setVisible(is_del)
         self.restore_btn.setVisible(is_del)
         self.delete_btn.setVisible(not is_del)
@@ -470,20 +989,19 @@ class HistoryDetailView(QWidget):
             else:
                 self.breadcrumb_label.setText("HISTORY  ›  🗑️ DELETED SESSIONS")
 
-        if location:
-            self.location_val_label.setText(location)
-            self.location_chip.setVisible(True)
-        else:
-            self.location_chip.setVisible(False)
-
-        if artist:
-            self.djs_val_label.setText(artist)
+        # Synchronize location and artist from database if not staged
+        if not self.is_staged and not self._has_staged_changes():
+            self.base_name = base_name or s_name
+            self.session_title_label.setText(self.base_name)
+            self.original_location = location
+            self.current_location = location
+            self.original_artist = artist
+            self.current_artist = artist
+            self._render_location()
             self._update_detail_djs(artist)
-            self.djs_chip.setVisible(True)
         else:
-            self.djs_val_label.setText("")
-            self._update_detail_djs("")
-            self.djs_chip.setVisible(False)
+            self._render_location()
+            self._update_detail_djs(self.current_artist)
 
         # Update KPI Cards
         self.kpi_date.val_lbl.setText(s_date[:19] if s_date else "—")  # type: ignore[attr-defined]
@@ -587,18 +1105,265 @@ class HistoryDetailView(QWidget):
             self.table.selectRow(idx)
             self.table.scrollToItem(self.table.item(idx, 0))
 
-    def _update_detail_djs(self, artist_str: str) -> None:
-        """Update parsed DJ chips in the detail header."""
+    def set_available_locations(self, locations: List[str]) -> None:
+        """Update available locations for autocompleter."""
+        self.available_locations = list(locations)
+        self.location_completer_model.setStringList(self.available_locations)
+
+    def set_available_djs(self, djs: List[str]) -> None:
+        """Update available DJs for autocompleter container."""
+        self.available_djs = list(djs)
+        self.djs_container.set_available_djs(self.available_djs)
+
+    def _has_staged_changes(self) -> bool:
+        """Check whether local in-memory modifications differ from original saved database state."""
+        return (
+            (self.current_location != self.original_location)
+            or (self.current_artist != self.original_artist)
+        )
+
+    def _render_location(self) -> None:
+        """Render location display state based on current location value."""
+        self.location_edit_widget.setVisible(False)
+        self.location_display_widget.setVisible(True)
+
+        if self.current_location:
+            self.location_val_label.setText(self.current_location)
+            self.location_val_label.setVisible(True)
+            self.location_clear_btn.setVisible(False)
+            self.location_add_btn.setVisible(False)
+            self.location_val_label.setCursor(
+                Qt.CursorShape.PointingHandCursor if not self.is_deleted else Qt.CursorShape.ArrowCursor
+            )
+            self.location_val_label.setToolTip(
+                "Click to edit location" if not self.is_deleted else ""
+            )
+        else:
+            self.location_val_label.setText("")
+            self.location_val_label.setVisible(False)
+            self.location_clear_btn.setVisible(False)
+            self.location_add_btn.setVisible(not self.is_deleted)
+
+        self.location_chip.setVisible(True)
+
+    def _start_location_edit(self) -> None:
+        """Switch location chip to interactive inline editor mode."""
+        if self.is_deleted:
+            return
+        self.location_display_widget.setVisible(False)
+        self.location_edit_widget.setVisible(True)
+        self.location_input.setText(self.current_location)
+        self.location_input.setFocus()
+        self.location_input.selectAll()
+
+    def _commit_location_edit(self) -> None:
+        """Commit inline edited location string."""
+        val = self.location_input.text().strip()
+        self.location_edit_widget.setVisible(False)
+        self.location_display_widget.setVisible(True)
+
+        if val != self.current_location:
+            self.current_location = val
+            if val:
+                self.location_added.emit(val)
+            self._render_location()
+            self._on_metadata_changed()
+        else:
+            self._render_location()
+
+    def _cancel_location_edit(self) -> None:
+        """Cancel inline location editing and revert input display."""
+        self.location_edit_widget.setVisible(False)
+        self.location_display_widget.setVisible(True)
+        self._render_location()
+
+    def _clear_location(self) -> None:
+        """Clear assigned location."""
+        if self.is_deleted:
+            return
+        if self.current_location:
+            self.current_location = ""
+            self._render_location()
+            self._on_metadata_changed()
+
+    def _on_location_completer_activated(self, text: str) -> None:
+        """Handle selection from location completer popup."""
+        self.location_input.setText(text)
+        self._commit_location_edit()
+
+    def _on_djs_changed(self, djs: List[str]) -> None:
+        """Handle DJ chips addition or removal in the Played With container."""
+        new_art = compose_played_with(djs)
+        if new_art != self.current_artist:
+            self.current_artist = new_art
+            self._on_metadata_changed()
+
+    def _on_metadata_changed(self) -> None:
+        """Emit metadata updates and toggle unsaved modifications bar."""
+        has_changes = self._has_staged_changes()
+        self._update_staged_bottom_bar(has_changes)
+        if self.history_id:
+            self.session_metadata_updated.emit(
+                str(self.history_id),
+                self.current_location,
+                self.current_artist,
+            )
+
+    def _update_staged_bottom_bar(self, has_changes: bool) -> None:
+        """Show or hide bottom action bar based on whether unsaved edits exist."""
+        self.bottom_bar.setVisible(has_changes)
+        if has_changes:
+            parts = []
+            if self.current_location != self.original_location:
+                orig_disp = f"'{self.original_location}'" if self.original_location else "None"
+                curr_disp = f"'{self.current_location}'" if self.current_location else "None"
+                parts.append(f"Location: {orig_disp} → {curr_disp}")
+            if self.current_artist != self.original_artist:
+                orig_disp = f"'{self.original_artist}'" if self.original_artist else "None"
+                curr_disp = f"'{self.current_artist}'" if self.current_artist else "None"
+                parts.append(f"Played with: {orig_disp} → {curr_disp}")
+            summary = "; ".join(parts) if parts else "Session metadata modified"
+            self.staged_status_label.setText(
+                f"⚠️ Unsaved modifications ({summary}) — click Save Changes to commit."
+            )
+
+    def set_available_djs(self, djs: List[str]) -> None:
+        """Update available DJs for autocompleter container."""
+        self.available_djs = list(djs)
+        if hasattr(self, "dj_completer_model"):
+            self.dj_completer_model.setStringList(self.available_djs)
+
+    def _start_dj_add(self) -> None:
+        """Show inline DJ input."""
+        if self.is_deleted:
+            return
+        self.dj_add_btn.setVisible(False)
+        self.dj_input_widget.setVisible(True)
+        self.dj_input.clear()
+        self.dj_input.setFocus()
+
+    def _commit_dj_add(self) -> None:
+        """Commit inline entered DJ name."""
+        name = self.dj_input.text().strip()
+        self.dj_input_widget.setVisible(False)
+        self.dj_add_btn.setVisible(not self.is_deleted)
+        if name:
+            cur_djs = parse_played_with(self.current_artist)
+            if name not in cur_djs:
+                cur_djs.append(name)
+                self.current_artist = compose_played_with(cur_djs)
+                self.dj_added.emit(name)
+                self._render_djs()
+                self._on_metadata_changed()
+
+    def _cancel_dj_add(self) -> None:
+        """Cancel inline DJ input."""
+        self.dj_input_widget.setVisible(False)
+        self.dj_add_btn.setVisible(not self.is_deleted)
+
+    def _on_dj_completer_activated(self, text: str) -> None:
+        """Handle DJ completer selection."""
+        self.dj_input.setText(text)
+        self._commit_dj_add()
+
+    def _remove_dj(self, name: str) -> None:
+        """Remove a DJ from played-with list."""
+        if self.is_deleted:
+            return
+        cur_djs = [d for d in parse_played_with(self.current_artist) if d != name]
+        self.current_artist = compose_played_with(cur_djs)
+        self._render_djs()
+        self._on_metadata_changed()
+
+    def _set_djs_list(self, djs: List[str]) -> None:
+        """Set list of DJs programmatically and render."""
+        self.current_artist = compose_played_with(djs)
+        self._render_djs()
+
+    def _render_djs(self) -> None:
+        """Render horizontal DJ chips and add button."""
         for chip in list(self.djs_chips):
             self.djs_chips_layout.removeWidget(chip)
             chip.deleteLater()
         self.djs_chips.clear()
 
-        djs = parse_played_with(artist_str)
+        djs = parse_played_with(self.current_artist)
         for dj in djs:
-            chip = BadgeChip(dj, scheme="amber", removable=False, parent=self.djs_chips_container)
+            chip = DetailDJChip(dj, removable=not self.is_deleted, parent=self.djs_chips_container)
+            chip.delete_requested.connect(lambda _, name=dj: self._remove_dj(name))
             self.djs_chips.append(chip)
             self.djs_chips_layout.addWidget(chip)
+
+        if djs:
+            self.dj_add_btn.setText("+")
+            self.dj_add_btn.setToolTip("Add collaborator DJ")
+            self.dj_add_btn.setFixedSize(18, 22)
+            self.dj_add_btn.setStyleSheet("""
+                QPushButton {
+                    color: #f59e0b;
+                    font-size: 14px;
+                    font-weight: 700;
+                    background: transparent;
+                    border: none;
+                    padding: 0;
+                }
+                QPushButton:hover {
+                    color: #ffffff;
+                }
+            """)
+        else:
+            self.dj_add_btn.setText("+ Add DJ")
+            self.dj_add_btn.setToolTip("Add collaborator DJ to this session")
+            self.dj_add_btn.setFixedHeight(22)
+            self.dj_add_btn.setMinimumWidth(65)
+            self.dj_add_btn.setStyleSheet("""
+                QPushButton {
+                    color: #64748b;
+                    font-size: 11px;
+                    font-weight: 500;
+                    background: transparent;
+                    border: none;
+                    padding: 0px 2px;
+                }
+                QPushButton:hover {
+                    color: #f59e0b;
+                }
+            """)
+
+        self.dj_add_btn.setVisible(not self.is_deleted and not self.dj_input_widget.isVisible())
+        self.djs_val_label.setText(self.current_artist)
+        self.djs_chip.setVisible(True)
+
+    def _on_discard_clicked(self) -> None:
+        """Revert location and DJs to original saved state."""
+        self.current_location = self.original_location
+        self.current_artist = self.original_artist
+        self._render_location()
+        self._render_djs()
+        self.bottom_bar.setVisible(False)
+        if self.history_id:
+            self.discard_session_requested.emit(str(self.history_id))
+
+    def _on_save_clicked(self) -> None:
+        """Request commit of session modifications to database."""
+        if self.history_id:
+            self.save_session_requested.emit(str(self.history_id))
+
+    def _update_detail_djs(self, artist_str: str) -> None:
+        """Update parsed DJ chips in the detail header."""
+        self.current_artist = artist_str
+        self._render_djs()
+
+    def eventFilter(self, watched: Any, event: Any) -> bool:
+        """Handle Escape key on inline editors."""
+        if watched in (getattr(self, "location_input", None), getattr(self, "dj_input", None)):
+            if event.type() == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Escape:
+                if watched is self.location_input:
+                    self._cancel_location_edit()
+                elif watched is self.dj_input:
+                    self._cancel_dj_add()
+                return True
+        return super().eventFilter(watched, event)
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
         """Handle Escape key to go back."""

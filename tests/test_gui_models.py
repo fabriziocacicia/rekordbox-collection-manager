@@ -197,6 +197,47 @@ class TestHistoryView(unittest.TestCase):
         self.assertIn("Amnesia", self.view.staged_edits[rec_id]["name"])
         self.assertIn("Carl Cox", self.view.staged_edits[rec_id]["name"])
 
+    def test_folder_tree_arrow_key_navigation_updates_table(self):
+        from PySide6.QtCore import QEvent
+        from PySide6.QtGui import QKeyEvent
+
+        records = [
+            {"id": "h1", "name": "HISTORY 2026-08-10", "date": "2026-08-10", "is_deleted": False},
+            {"id": "h2", "name": "HISTORY 2026-09-15 @ Amnesia", "date": "2026-09-15", "is_deleted": False},
+        ]
+        self.view.set_data(self.engine, records)
+
+        # Initially All Sessions is selected and current
+        self.assertEqual(self.view.active_folder_filter, "active_all")
+        self.assertEqual(self.view.table.rowCount(), 2)
+        self.assertIsNotNone(self.view.folder_tree.currentItem())
+        self.assertEqual(self.view.folder_tree.currentItem().data(0, Qt.ItemDataRole.UserRole), "active_all")
+
+        # Press Down arrow to navigate to Year (2026)
+        key_down = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Down, Qt.KeyboardModifier.NoModifier)
+        self.view.folder_tree.keyPressEvent(key_down)
+        self.assertEqual(self.view.active_folder_filter, "active_year_2026")
+        self.assertEqual(self.view.table.rowCount(), 2)
+
+        # Press Down arrow to navigate to September (202609)
+        self.view.folder_tree.keyPressEvent(key_down)
+        self.assertEqual(self.view.active_folder_filter, "active_month_202609")
+        self.assertEqual(self.view.table.rowCount(), 1)
+        self.assertEqual(self.view.table.item(0, 1).text(), "2026-09-15")
+
+        # Press Down arrow to navigate to August (202608)
+        self.view.folder_tree.keyPressEvent(key_down)
+        self.assertEqual(self.view.active_folder_filter, "active_month_202608")
+        self.assertEqual(self.view.table.rowCount(), 1)
+        self.assertEqual(self.view.table.item(0, 1).text(), "2026-08-10")
+
+        # Press Up arrow to navigate back to September (202609)
+        key_up = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Up, Qt.KeyboardModifier.NoModifier)
+        self.view.folder_tree.keyPressEvent(key_up)
+        self.assertEqual(self.view.active_folder_filter, "active_month_202609")
+        self.assertEqual(self.view.table.rowCount(), 1)
+        self.assertEqual(self.view.table.item(0, 1).text(), "2026-09-15")
+
 
 class TestPlayCountView(unittest.TestCase):
     def setUp(self):
@@ -544,7 +585,8 @@ class TestHistoryDetailView(unittest.TestCase):
         self.assertEqual(self.detail_view.session_title_label.text(), "HISTORY 2026-08-14")
         self.assertEqual(self.detail_view.location_val_label.text(), "Space Terrace")
         self.assertFalse(self.detail_view.location_chip.isHidden())
-        self.assertTrue(self.detail_view.djs_chip.isHidden())
+        self.assertFalse(self.detail_view.djs_chip.isHidden())
+        self.assertEqual(self.detail_view.djs_container.get_djs(), [])
         self.assertEqual(self.detail_view.kpi_tracks.val_lbl.text(), "2 tracks")
         self.assertEqual(self.detail_view.kpi_runtime.val_lbl.text(), "12m 43s")
         self.assertIn("127.0", self.detail_view.kpi_bpm.val_lbl.text())
@@ -616,6 +658,66 @@ class TestHistoryDetailView(unittest.TestCase):
         chip_names = [c.name for c in self.detail_view.djs_chips]
         self.assertEqual(chip_names, ["Carl Cox", "Marco Carola"])
         self.assertEqual(self.detail_view.djs_val_label.text(), "Carl Cox, Marco Carola")
+
+    def test_detail_view_inline_location_editing(self):
+        """Test adding, editing, and clearing location in HistoryDetailView."""
+        self.detail_view.history_id = "sess_101"
+        self.detail_view._on_data_loaded(self.mock_data)
+
+        # Initially location is "Space Terrace"
+        self.assertEqual(self.detail_view.current_location, "Space Terrace")
+        self.assertTrue(self.detail_view.bottom_bar.isHidden())
+
+        # Start inline edit
+        self.detail_view._start_location_edit()
+        self.assertFalse(self.detail_view.location_edit_widget.isHidden())
+        self.assertEqual(self.detail_view.location_input.text(), "Space Terrace")
+
+        # Change location to "Amnesia"
+        self.detail_view.location_input.setText("Amnesia")
+        self.detail_view._commit_location_edit()
+
+        self.assertEqual(self.detail_view.current_location, "Amnesia")
+        self.assertEqual(self.detail_view.location_val_label.text(), "Amnesia")
+        self.assertFalse(self.detail_view.bottom_bar.isHidden())
+
+        # Discard changes reverts back to original "Space Terrace"
+        self.detail_view._on_discard_clicked()
+        self.assertEqual(self.detail_view.current_location, "Space Terrace")
+        self.assertEqual(self.detail_view.location_val_label.text(), "Space Terrace")
+        self.assertTrue(self.detail_view.bottom_bar.isHidden())
+
+        # Clear location
+        self.detail_view._clear_location()
+        self.assertEqual(self.detail_view.current_location, "")
+        self.assertFalse(self.detail_view.location_add_btn.isHidden())
+        self.assertFalse(self.detail_view.bottom_bar.isHidden())
+
+    def test_detail_view_djs_addition_and_removal(self):
+        """Test adding and removing DJ chips directly in HistoryDetailView."""
+        self.detail_view.history_id = "sess_101"
+        self.detail_view._on_data_loaded(self.mock_data)
+
+        # Initially no DJs
+        self.assertEqual(self.detail_view.djs_container.get_djs(), [])
+        self.assertTrue(self.detail_view.bottom_bar.isHidden())
+
+        # Add a DJ
+        self.detail_view._on_djs_changed(["Carl Cox"])
+        self.assertEqual(self.detail_view.current_artist, "Carl Cox")
+        self.assertFalse(self.detail_view.bottom_bar.isHidden())
+
+        # Add second DJ
+        self.detail_view.djs_container.set_djs(["Carl Cox", "Solomun"])
+        self.detail_view._on_djs_changed(["Carl Cox", "Solomun"])
+        self.assertEqual(self.detail_view.current_artist, "Carl Cox, Solomun")
+        self.assertEqual(len(self.detail_view.djs_chips), 2)
+
+        # Discard reverts back to empty
+        self.detail_view._on_discard_clicked()
+        self.assertEqual(self.detail_view.current_artist, "")
+        self.assertEqual(self.detail_view.djs_container.get_djs(), [])
+        self.assertTrue(self.detail_view.bottom_bar.isHidden())
 
 
 class TestHistoryViewDetailIntegration(unittest.TestCase):
@@ -852,6 +954,42 @@ class TestHistoryViewDetailIntegration(unittest.TestCase):
         with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes):
             self.history_view._on_discard_changes()
         self.assertNotIn("BrandNewLoc", self.history_view.all_available_locations)
+
+    def test_detail_view_metadata_updates_stage_in_history_view(self):
+        """Test that edits made in HistoryDetailView stage and synchronize with HistoryView."""
+        self.history_view._open_session_detail("h1")
+        self.assertEqual(self.history_view.current_detail_id, "h1")
+        # In this test suite setUp, load_session was mocked with patcher, so set history_id manually
+        self.history_view.detail_view.history_id = "h1"
+        self.history_view.detail_view.original_location = ""
+        self.history_view.detail_view.original_artist = ""
+        self.assertFalse(self.history_view.detail_view.location_chip.isHidden())
+        self.assertFalse(self.history_view.detail_view.djs_chip.isHidden())
+
+        # Initially h1 is not staged
+        self.assertNotIn("h1", self.history_view.staged_edits)
+
+        # In detail view, set location to "DC10" and DJ to "Seth Troxler"
+        self.history_view.detail_view.location_input.setText("DC10")
+        self.history_view.detail_view._commit_location_edit()
+        self.history_view.detail_view._on_djs_changed(["Seth Troxler"])
+
+        # Staged edits should be updated in HistoryView
+        self.assertIn("h1", self.history_view.staged_edits)
+        self.assertEqual(
+            self.history_view.staged_edits["h1"]["name"],
+            "HISTORY 2026-08-10 @ DC10 w Seth Troxler",
+        )
+
+        # Table row for h1 should be updated and marked as Staged
+        self.assertEqual(self.history_view.table.item(0, 3).text(), "DC10")
+        self.assertEqual(self.history_view.table.item(0, 4).text(), "Seth Troxler")
+        self.assertEqual(self.history_view.table.item(0, 0).text(), "● Staged")
+
+        # Discard from detail view
+        self.history_view.detail_view._on_discard_clicked()
+        self.assertNotIn("h1", self.history_view.staged_edits)
+        self.assertEqual(self.history_view.table.item(0, 0).text(), "Clean")
 
 
 class TestTracksView(unittest.TestCase):
