@@ -2,10 +2,19 @@
 
 import re
 from typing import Any, Dict, List, Optional, Set
-from PySide6.QtCore import QModelIndex, QPoint, Qt, Signal
-from PySide6.QtGui import QCursor, QPainter
+from PySide6.QtCore import (
+    QAbstractItemModel,
+    QModelIndex,
+    QPoint,
+    QStringListModel,
+    Qt,
+    QTimer,
+    Signal,
+)
+from PySide6.QtGui import QCursor, QKeyEvent, QPainter
 from PySide6.QtWidgets import (
     QApplication,
+    QCompleter,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -35,7 +44,13 @@ from rekordbox_collection_manager.gui.theme import (
     COLOR_AMBER,
     COLOR_AMBER_BG,
     COLOR_AMBER_BORDER,
+    COLOR_BG_HOVER,
+    COLOR_BG_INPUT,
+    COLOR_BG_PANEL,
     COLOR_BLUE,
+    COLOR_BLUE_BG,
+    COLOR_BORDER,
+    COLOR_BORDER_FOCUS,
     COLOR_GREEN,
     COLOR_GREEN_BG,
     COLOR_GREEN_BORDER,
@@ -43,6 +58,7 @@ from rekordbox_collection_manager.gui.theme import (
     COLOR_RED_BG,
     COLOR_RED_BORDER,
     COLOR_TEXT_MUTED,
+    COLOR_TEXT_PRIMARY,
     COLOR_TEXT_SECONDARY,
 )
 from rekordbox_collection_manager.gui.workers import (
@@ -60,6 +76,137 @@ from rekordbox_collection_manager.utils import (
     parse_history_name,
     parse_played_with,
 )
+
+
+class LocationLineEdit(QLineEdit):
+    """Line edit with completer support for history session locations."""
+
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.setStyleSheet(
+            f"QLineEdit {{ "
+            f"  background-color: {COLOR_BG_INPUT}; "
+            f"  color: {COLOR_TEXT_PRIMARY}; "
+            f"  border: 1px solid {COLOR_BORDER_FOCUS}; "
+            f"  border-radius: 4px; "
+            f"  padding: 2px 6px; "
+            f"  font-size: 12px; "
+            f"}}"
+        )
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        if event.key() == Qt.Key.Key_Down:
+            completer = self.completer()
+            if completer and not completer.popup().isVisible():
+                completer.setCompletionPrefix(self.text())
+                completer.complete()
+                event.accept()
+                return
+        super().keyPressEvent(event)
+
+
+class LocationDelegate(QStyledItemDelegate):
+    """Item delegate for Location column providing autocompletion with existing locations."""
+
+    def __init__(self, history_view: "HistoryView", parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.history_view = history_view
+
+    def createEditor(
+        self,
+        parent: QWidget,
+        option: QStyleOptionViewItem,
+        index: QModelIndex,
+    ) -> QWidget:
+        editor = LocationLineEdit(parent)
+        locs = self.history_view.get_all_available_locations()
+        completer_model = QStringListModel(locs, editor)
+        completer = QCompleter(completer_model, editor)
+        completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        completer.setFilterMode(Qt.MatchFlag.MatchContains)
+        completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+
+        popup = completer.popup()
+        if popup:
+            popup.setStyleSheet(
+                f"QAbstractItemView {{ "
+                f"  background-color: {COLOR_BG_PANEL}; "
+                f"  color: {COLOR_TEXT_PRIMARY}; "
+                f"  border: 1px solid {COLOR_BORDER}; "
+                f"  border-radius: 6px; "
+                f"  padding: 4px; "
+                f"  selection-background-color: {COLOR_BLUE_BG}; "
+                f"  selection-color: {COLOR_BLUE}; "
+                f"  font-size: 11px; "
+                f"  outline: none; "
+                f"}} "
+                f"QAbstractItemView::item {{ "
+                f"  padding: 6px 10px; "
+                f"  border-radius: 4px; "
+                f"}} "
+                f"QAbstractItemView::item:hover {{ "
+                f"  background-color: {COLOR_BG_HOVER}; "
+                f"}} "
+                f"QAbstractItemView::item:selected {{ "
+                f"  background-color: {COLOR_BLUE_BG}; "
+                f"  color: #38bdf8; "
+                f"}}"
+            )
+
+        completer.activated.connect(
+            lambda text: self._on_completer_activated(editor, text)
+        )
+        editor.setCompleter(completer)
+        QTimer.singleShot(0, lambda: self._show_popup_if_needed(editor, completer))
+        return editor
+
+    def _show_popup_if_needed(self, editor: QLineEdit, completer: QCompleter) -> None:
+        if editor and completer:
+            completer.setCompletionPrefix(editor.text())
+            completer.complete()
+
+    def _on_completer_activated(self, editor: QLineEdit, text: str) -> None:
+        editor.setText(text)
+        self.commitData.emit(editor)
+        self.closeEditor.emit(editor, QStyledItemDelegate.EndEditHint.SubmitModelCache)
+
+    def setEditorData(self, editor: QWidget, index: QModelIndex) -> None:
+        if isinstance(editor, QLineEdit):
+            val = index.data(Qt.ItemDataRole.DisplayRole) or ""
+            editor.setText(val)
+            editor.selectAll()
+
+    def setModelData(
+        self,
+        editor: QWidget,
+        model: QAbstractItemModel,
+        index: QModelIndex,
+    ) -> None:
+        if isinstance(editor, QLineEdit):
+            raw_text = editor.text().strip()
+            completer = editor.completer()
+            resolved = raw_text
+            if raw_text:
+                locs = self.history_view.get_all_available_locations()
+                matched = None
+                for loc in locs:
+                    if loc.lower() == raw_text.lower():
+                        matched = loc
+                        break
+                if not matched and completer:
+                    popup = completer.popup()
+                    if popup and popup.isVisible() and popup.currentIndex().isValid():
+                        matched = popup.currentIndex().data()
+                    elif completer.currentCompletion():
+                        cand = completer.currentCompletion()
+                        if cand.lower().startswith(raw_text.lower()):
+                            matched = cand
+                if matched:
+                    resolved = matched
+
+            model.setData(index, resolved, Qt.ItemDataRole.EditRole)
+            if resolved:
+                self.history_view.register_new_location(resolved)
 
 
 class PlayedWithChipDelegate(QStyledItemDelegate):
@@ -95,6 +242,7 @@ class HistoryView(QWidget):
         # Key: record id, Value: {'record': dict, 'name': str, 'date': str}
         self.staged_edits: Dict[str, Dict[str, Any]] = {}
         self.all_available_djs: Set[str] = set()
+        self.all_available_locations: Set[str] = set()
         self.active_folder_filter: Optional[str] = None  # None for All, or 'active_all', 'active_year_...', 'deleted_all', etc.
         self.search_filter_text: str = ""
         self.active_session_ids_in_table: List[str] = []
@@ -206,6 +354,7 @@ class HistoryView(QWidget):
         self.table.setColumnWidth(3, 150)
         self.table.setColumnWidth(4, 290)
         self.table.setColumnWidth(6, 160)
+        self.table.setItemDelegateForColumn(3, LocationDelegate(self, self.table))
         self.table.setItemDelegateForColumn(4, PlayedWithChipDelegate(self.table))
         self.table.horizontalHeader().sectionResized.connect(self._on_col_section_resized)
 
@@ -286,6 +435,7 @@ class HistoryView(QWidget):
         self.original_records = records
         self.staged_edits.clear()
         self._rebuild_all_available_djs()
+        self._rebuild_all_available_locations()
         self._update_folder_tree()
         self._refresh_table()
         self._update_status_bar()
@@ -320,6 +470,30 @@ class HistoryView(QWidget):
                 w = self.table.cellWidget(r_idx, 4)
                 if isinstance(w, DJChipsContainer):
                     w.set_available_djs(cand_list)
+
+    def _rebuild_all_available_locations(self) -> None:
+        """Extract all unique location names from original and staged records."""
+        self.all_available_locations.clear()
+        for r in self.original_records:
+            name = r.get("name") or ""
+            _, loc, _ = parse_history_name(name)
+            if loc and loc.strip():
+                self.all_available_locations.add(loc.strip())
+        for edit in self.staged_edits.values():
+            name = edit.get("name") or ""
+            _, loc, _ = parse_history_name(name)
+            if loc and loc.strip():
+                self.all_available_locations.add(loc.strip())
+
+    def get_all_available_locations(self) -> List[str]:
+        """Return sorted unique list of all known location names."""
+        return sorted(list(self.all_available_locations), key=lambda s: s.lower())
+
+    def register_new_location(self, name: str) -> None:
+        """Register a newly typed location name into the pool of available locations."""
+        clean = name.strip()
+        if clean and clean not in self.all_available_locations:
+            self.all_available_locations.add(clean)
 
         if self.current_detail_id:
             matching = next((r for r in self.original_records if r["id"] == self.current_detail_id), None)
@@ -849,6 +1023,9 @@ class HistoryView(QWidget):
         # Compose full name according to schema
         new_name = compose_history_name(new_base, location=new_loc, artist=new_art)
 
+        if new_loc:
+            self.register_new_location(new_loc)
+
         orig_date = record.get("date") or ""
         orig_name = record.get("name") or ""
         orig_base, orig_loc, orig_art = parse_history_name(orig_name)
@@ -981,6 +1158,8 @@ class HistoryView(QWidget):
         )
         if res == QMessageBox.StandardButton.Yes:
             self.staged_edits.clear()
+            self._rebuild_all_available_djs()
+            self._rebuild_all_available_locations()
             self._refresh_table()
             self.notify_status.emit("Staged changes discarded.")
 

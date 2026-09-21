@@ -19,7 +19,11 @@ from rekordbox_collection_manager.edit_play_count import (
 )
 from rekordbox_collection_manager.gui.chip import DJChipsContainer
 from rekordbox_collection_manager.gui.history_detail_view import HistoryDetailView
-from rekordbox_collection_manager.gui.history_view import HistoryView
+from rekordbox_collection_manager.gui.history_view import (
+    HistoryView,
+    LocationDelegate,
+    LocationLineEdit,
+)
 from rekordbox_collection_manager.gui.play_count_view import PlayCountView
 from rekordbox_collection_manager.gui.tracks_view import TracksView
 from rekordbox_collection_manager.rename_history import (
@@ -745,6 +749,109 @@ class TestHistoryViewDetailIntegration(unittest.TestCase):
         container._on_input_return_pressed()
         self.assertEqual(container.get_djs(), ["Carl Cox", "The Martinez Brothers"])
         self.assertEqual(container.chips[1].scheme_name, "amber")
+
+    def test_location_pool_and_case_normalization(self):
+        records = [
+            {
+                "id": "h_loc1",
+                "name": "HISTORY 2026-08-10 @ Fabric w Carl Cox",
+                "date": "2026-08-10 12:00:00",
+                "parent_id": "202608",
+                "table": "djmdHistory",
+            },
+            {
+                "id": "h_loc2",
+                "name": "HISTORY 2026-08-15 @ Amnesia Ibiza",
+                "date": "2026-08-15 12:00:00",
+                "parent_id": "202608",
+                "table": "djmdHistory",
+            },
+        ]
+        self.history_view.set_data(self.engine, records)
+        self.assertEqual(
+            self.history_view.get_all_available_locations(),
+            ["Amnesia Ibiza", "Fabric"],
+        )
+        self.assertIn("Fabric", self.history_view.all_available_locations)
+        self.assertIn("Amnesia Ibiza", self.history_view.all_available_locations)
+
+        # Delegate is installed on column 3
+        delegate = self.history_view.table.itemDelegateForColumn(3)
+        self.assertIsInstance(delegate, LocationDelegate)
+
+        # Show view and open editor via table.edit
+        self.history_view.show()
+        self.history_view.table.edit(self.history_view.table.model().index(0, 3))
+        app.processEvents()
+
+        editor = next(
+            (c for c in self.history_view.table.findChildren(LocationLineEdit) if c.isVisible()),
+            None,
+        )
+        self.assertIsNotNone(editor)
+        self.assertIsNotNone(editor.completer())
+        candidates = editor.completer().model().stringList()
+        self.assertEqual(candidates, ["Amnesia Ibiza", "Fabric"])
+
+        # Test completer activation on editor commits location
+        editor.completer().activated.emit("Amnesia Ibiza")
+        app.processEvents()
+        self.assertEqual(self.history_view.table.item(0, 3).text(), "Amnesia Ibiza")
+        self.assertIn("h_loc1", self.history_view.staged_edits)
+        self.assertEqual(
+            self.history_view.staged_edits["h_loc1"]["name"],
+            "HISTORY 2026-08-10 @ Amnesia Ibiza w Carl Cox",
+        )
+
+    def test_location_custom_entry_and_registration(self):
+        records = [
+            {
+                "id": "h_loc1",
+                "name": "HISTORY 2026-08-10 @ Fabric",
+                "date": "2026-08-10 12:00:00",
+                "parent_id": "202608",
+                "table": "djmdHistory",
+            },
+        ]
+        self.history_view.set_data(self.engine, records)
+        delegate = self.history_view.table.itemDelegateForColumn(3)
+
+        editor = delegate.createEditor(
+            self.history_view.table,
+            None,
+            self.history_view.table.model().index(0, 3),
+        )
+        # Type custom new location and setModelData
+        editor.setText("Printworks London")
+        delegate.setModelData(
+            editor,
+            self.history_view.table.model(),
+            self.history_view.table.model().index(0, 3),
+        )
+        self.assertEqual(self.history_view.table.item(0, 3).text(), "Printworks London")
+        self.assertIn("Printworks London", self.history_view.all_available_locations)
+        self.assertIn("Printworks London", self.history_view.get_all_available_locations())
+        self.assertEqual(
+            self.history_view.staged_edits["h_loc1"]["name"],
+            "HISTORY 2026-08-10 @ Printworks London",
+        )
+
+        # Test case normalization: typing lowercase "fabric" normalizes to existing "Fabric"
+        editor.setText("fabric")
+        delegate.setModelData(
+            editor,
+            self.history_view.table.model(),
+            self.history_view.table.model().index(0, 3),
+        )
+        self.assertEqual(self.history_view.table.item(0, 3).text(), "Fabric")
+
+        # Discarding changes rebuilds location pool back to original records
+        self.history_view.staged_edits["dummy"] = {"name": "HISTORY @ BrandNewLoc"}
+        self.history_view._rebuild_all_available_locations()
+        self.assertIn("BrandNewLoc", self.history_view.all_available_locations)
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes):
+            self.history_view._on_discard_changes()
+        self.assertNotIn("BrandNewLoc", self.history_view.all_available_locations)
 
 
 class TestTracksView(unittest.TestCase):
