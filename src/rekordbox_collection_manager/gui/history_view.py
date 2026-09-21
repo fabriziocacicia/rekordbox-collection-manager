@@ -151,6 +151,7 @@ class HistoryView(QWidget):
 
         # Left: Folder Tree Widget
         tree_container = QWidget()
+        tree_container.setMinimumWidth(180)
         tree_layout = QVBoxLayout(tree_container)
         tree_layout.setContentsMargins(0, 0, 0, 0)
         tree_layout.setSpacing(6)
@@ -161,6 +162,7 @@ class HistoryView(QWidget):
 
         self.folder_tree = QTreeWidget()
         self.folder_tree.setHeaderHidden(True)
+        self.folder_tree.setIndentation(14)
         self.folder_tree.itemClicked.connect(self._on_folder_item_clicked)
         tree_layout.addWidget(self.folder_tree)
 
@@ -218,7 +220,10 @@ class HistoryView(QWidget):
         table_layout.addWidget(self.table)
 
         splitter.addWidget(table_container)
-        splitter.setSizes([220, 780])
+        splitter.setSizes([210, 790])
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+        splitter.setCollapsible(0, False)
 
         sessions_layout.addWidget(splitter, stretch=1)
 
@@ -408,9 +413,9 @@ class HistoryView(QWidget):
                 if m_key != "Other" and len(m_key) == 6:
                     m_num = int(m_key[4:])
                     m_name = MONTH_INT_TO_NAME.get(m_num, f"Month {m_num}")
-                    label = f"  └ 📅 {m_num:02d} {m_name} ({count})"
+                    label = f"📅 {m_num:02d} {m_name} ({count})"
                 else:
-                    label = f"  └ 📄 Uncategorized ({count})"
+                    label = f"📄 Uncategorized ({count})"
                 m_item = QTreeWidgetItem([label])
                 m_item.setData(0, Qt.ItemDataRole.UserRole, f"active_month_{m_key}")
                 year_item.addChild(m_item)
@@ -455,9 +460,9 @@ class HistoryView(QWidget):
                     if m_key != "Other" and len(m_key) == 6:
                         m_num = int(m_key[4:])
                         m_name = MONTH_INT_TO_NAME.get(m_num, f"Month {m_num}")
-                        label = f"  └ 📅 {m_num:02d} {m_name} ({count})"
+                        label = f"📅 {m_num:02d} {m_name} ({count})"
                     else:
-                        label = f"  └ 📄 Uncategorized ({count})"
+                        label = f"📄 Uncategorized ({count})"
                     m_item = QTreeWidgetItem([label])
                     m_item.setData(0, Qt.ItemDataRole.UserRole, f"deleted_month_{m_key}")
                     m_item.setForeground(0, Qt.GlobalColor.red)
