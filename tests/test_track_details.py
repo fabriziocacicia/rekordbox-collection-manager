@@ -26,6 +26,7 @@ from rekordbox_collection_manager.gui.history_view import HistoryView
 from rekordbox_collection_manager.gui.play_count_view import PlayCountView
 from rekordbox_collection_manager.gui.track_detail_dialog import (
     TrackDetailDialog,
+    format_created_at_tooltip,
     format_file_size,
     format_rating_stars,
 )
@@ -74,6 +75,7 @@ class TestTrackDetailsBackend(unittest.TestCase):
                     ReleaseYear INTEGER,
                     StockDate VARCHAR(255),
                     DateCreated VARCHAR(255),
+                    created_at VARCHAR(255),
                     ImagePath VARCHAR(255),
                     FolderPath VARCHAR(255),
                     FileNameL VARCHAR(255),
@@ -107,10 +109,10 @@ class TestTrackDetailsBackend(unittest.TestCase):
             conn.exec_driver_sql("""
                 INSERT INTO djmdContent (
                     ID, Title, SrcArtistName, BPM, Length, BitRate, BitDepth, SampleRate,
-                    FileSize, FileType, Rating, ReleaseYear, StockDate, FolderPath, FileNameL, DJPlayCount, rb_local_deleted
+                    FileSize, FileType, Rating, ReleaseYear, StockDate, created_at, FolderPath, FileNameL, DJPlayCount, rb_local_deleted
                 ) VALUES 
-                    ('101', 'NRFTW', 'Aaaron', 12200, 352, 320, 16, 44100, 14318435, 1, 204, 2024, '2025-07-25', '/Music/Afro/NRFTW.mp3', 'NRFTW.mp3', 3, 0),
-                    ('102', 'Titanium', 'David Guetta', 12800, 245, 320, 16, 44100, 9876543, 1, 255, 2011, '2024-01-10', '/Music/Dance/Titanium.mp3', 'Titanium.mp3', 0, 0);
+                    ('101', 'NRFTW', 'Aaaron', 12200, 352, 320, 16, 44100, 14318435, 1, 204, 2024, '2025-07-25', '2025-07-25 15:30:00.123 +00:00', '/Music/Afro/NRFTW.mp3', 'NRFTW.mp3', 3, 0),
+                    ('102', 'Titanium', 'David Guetta', 12800, 245, 320, 16, 44100, 9876543, 1, 255, 2011, '2024-01-10', '2024-01-10 10:00:00.000 +00:00', '/Music/Dance/Titanium.mp3', 'Titanium.mp3', 0, 0);
             """)
 
             # Insert sample history sessions
@@ -318,6 +320,7 @@ class TestTrackDetailsBackend(unittest.TestCase):
         self.assertEqual(details["bpm"], 122.0)
         self.assertEqual(details["duration_sec"], 352)
         self.assertEqual(details["date_added"], "2025-07-25")
+        self.assertEqual(details["created_at"], "2025-07-25 15:30:00.123 +00:00")
         self.assertEqual(details["sample_rate"], 44100)
         self.assertEqual(len(details["history_plays"]), 2)
 
@@ -331,6 +334,18 @@ class TestTrackDetailsBackend(unittest.TestCase):
         self.assertEqual(format_rating_stars(255), "★★★★★")
         self.assertEqual(format_rating_stars(204), "★★★★☆")
         self.assertEqual(format_rating_stars(3), "★★★☆☆")
+
+        # Test Date Added tooltip formatter
+        self.assertEqual(
+            format_created_at_tooltip("2025-06-07 19:33:55.844 +00:00"),
+            "2025-06-07 19:33:55",
+        )
+        self.assertEqual(
+            format_created_at_tooltip("2025-06-07T19:33:55Z"),
+            "2025-06-07 19:33:55",
+        )
+        self.assertEqual(format_created_at_tooltip(None, "2025-06-07"), "2025-06-07")
+        self.assertEqual(format_created_at_tooltip("", ""), "")
 
     def test_resolve_artwork_path(self):
         """Verify artwork path resolver returns None when file doesn't exist."""
@@ -403,6 +418,8 @@ class TestTrackDetailDialogUI(unittest.TestCase):
                 "year": 2024,
                 "bitrate": 320,
                 "file_type": "MP3",
+                "date_added": "2025-06-07",
+                "created_at": "2025-06-07 19:33:55.844 +00:00",
                 "tags": ["Peak Time", "Vocal"],
                 "playlists": ["Festival 2026", "Sunset Set"],
                 "file_path": "/Music/track1.mp3",
@@ -457,6 +474,9 @@ class TestTrackDetailDialogUI(unittest.TestCase):
         self.assertEqual(dlg.artist_label.text(), "Artist Alpha")
         self.assertEqual(dlg.bpm_kpi_val.text(), "124.0 BPM")
         self.assertEqual(dlg.duration_kpi_val.text(), "6:00")
+        self.assertEqual(dlg.date_added_kpi_val.text(), "2025-06-07")
+        self.assertEqual(dlg.date_added_kpi_val.toolTip(), "2025-06-07 19:33:55")
+        self.assertEqual(dlg.date_added_kpi_val.parentWidget().toolTip(), "2025-06-07 19:33:55")
         self.assertIn("Key: 8A", dlg.key_badge.text())
         self.assertIn("5 plays", dlg.play_count_badge.text())
         self.assertEqual(dlg.pos_indicator.text(), "Track 1 of 2")

@@ -117,6 +117,16 @@ def format_rating_stars(rating: int) -> str:
     return "★" * stars + "☆" * (5 - stars)
 
 
+def format_created_at_tooltip(created_at: Any, date_added: str = "") -> str:
+    """Format clean timestamp for hover tooltip on Date Added (e.g. '2025-06-07 19:33:55')."""
+    if created_at:
+        s = str(created_at).strip().replace("T", " ")
+        if len(s) >= 19:
+            return s[:19]
+        return s
+    return date_added or ""
+
+
 class TrackDetailView(QWidget):
     """Rich in-place view displaying complete track details and live history sets."""
 
@@ -630,6 +640,15 @@ class TrackDetailView(QWidget):
         parent_layout.addWidget(card, stretch=1)
         return v_lbl
 
+    def _set_date_added_tooltip(self, tip: str) -> None:
+        """Set hover tooltip showing full timestamp on Date Added KPI card and labels."""
+        self.date_added_kpi_val.setToolTip(tip)
+        parent = self.date_added_kpi_val.parentWidget()
+        if parent:
+            parent.setToolTip(tip)
+            for child in parent.findChildren(QLabel):
+                child.setToolTip(tip)
+
     def _populate_track_data(self, t: Dict[str, Any]) -> None:
         """Populate UI widgets with track data."""
         title = t.get("title") or "(Untitled)"
@@ -690,6 +709,8 @@ class TrackDetailView(QWidget):
 
         date_added = t.get("date_added") or ""
         self.date_added_kpi_val.setText(date_added if date_added else "—")
+        created_at = t.get("created_at") or ""
+        self._set_date_added_tooltip(format_created_at_tooltip(created_at, date_added))
 
         # Tags
         self.original_tags = list(t.get("tags") or [])
@@ -928,6 +949,8 @@ class TrackDetailView(QWidget):
         date_added = self.track.get("date_added") or ""
         if date_added:
             self.date_added_kpi_val.setText(date_added)
+        created_at = self.track.get("created_at") or ""
+        self._set_date_added_tooltip(format_created_at_tooltip(created_at, date_added))
 
         # Update History Sets count & Table
         self.history_kpi_val.setText(

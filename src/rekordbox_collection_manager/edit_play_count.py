@@ -179,6 +179,7 @@ def search_tracks(
             filename_expr = "c.FileNameL" if "FileNameL" in cols else "'' AS FileNameL"
             image_path_expr = "c.ImagePath" if "ImagePath" in cols else "NULL AS ImagePath"
             stock_date_expr = "c.StockDate" if "StockDate" in cols else ("c.DateCreated" if "DateCreated" in cols else "NULL AS StockDate")
+            created_at_expr = "c.created_at" if "created_at" in cols else "NULL AS created_at"
             sample_rate_expr = "c.SampleRate" if "SampleRate" in cols else "0 AS SampleRate"
             bit_depth_expr = "c.BitDepth" if "BitDepth" in cols else "0 AS BitDepth"
             file_size_expr = "c.FileSize" if "FileSize" in cols else "0 AS FileSize"
@@ -294,6 +295,7 @@ def search_tracks(
                     {playlist_expr},
                     {image_path_expr},
                     {stock_date_expr},
+                    {created_at_expr},
                     {sample_rate_expr},
                     {bit_depth_expr},
                     {file_size_expr},
@@ -375,6 +377,7 @@ def search_tracks(
                     "filename": raw_fn,
                     "image_path": r.get("ImagePath") or "",
                     "date_added": str(r.get("StockDate") or "")[:10],
+                    "created_at": str(r.get("created_at") or "") if r.get("created_at") is not None else "",
                     "sample_rate": int(r.get("SampleRate") or 0),
                     "bit_depth": int(r.get("BitDepth") or 0),
                     "file_size": int(r.get("FileSize") or 0),
@@ -456,6 +459,7 @@ def search_tracks(
                     "filename": "",
                     "image_path": "",
                     "date_added": "",
+                    "created_at": "",
                     "sample_rate": 0,
                     "bit_depth": 0,
                     "file_size": 0,
@@ -511,6 +515,7 @@ def fetch_track_full_details(
             "filename": "",
             "image_path": "",
             "date_added": "",
+            "created_at": "",
             "sample_rate": 0,
             "bit_depth": 0,
             "file_size": 0,
