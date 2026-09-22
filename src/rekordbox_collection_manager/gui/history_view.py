@@ -128,6 +128,9 @@ class LocationDelegate(QStyledItemDelegate):
 
         popup = completer.popup()
         if popup:
+            fm = popup.fontMetrics()
+            max_w = max((fm.horizontalAdvance(loc) for loc in locs), default=0)
+            popup.setMinimumWidth(max(240, min(max_w + 48, 450)))
             popup.setStyleSheet(
                 f"QAbstractItemView {{ "
                 f"  background-color: {COLOR_BG_PANEL}; "

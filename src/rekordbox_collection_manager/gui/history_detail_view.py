@@ -605,6 +605,7 @@ class HistoryDetailView(QWidget):
         self.location_completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
         popup = self.location_completer.popup()
         if popup:
+            popup.setMinimumWidth(240)
             popup.setStyleSheet(
                 f"QAbstractItemView {{ "
                 f"  background-color: {COLOR_BG_PANEL}; "
@@ -756,6 +757,7 @@ class HistoryDetailView(QWidget):
         self.dj_completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
         popup = self.dj_completer.popup()
         if popup:
+            popup.setMinimumWidth(240)
             popup.setStyleSheet(
                 f"QAbstractItemView {{ "
                 f"  background-color: {COLOR_BG_PANEL}; "
@@ -1201,11 +1203,11 @@ class HistoryDetailView(QWidget):
         """Update available locations for autocompleter."""
         self.available_locations = list(locations)
         self.location_completer_model.setStringList(self.available_locations)
-
-    def set_available_djs(self, djs: List[str]) -> None:
-        """Update available DJs for autocompleter container."""
-        self.available_djs = list(djs)
-        self.djs_container.set_available_djs(self.available_djs)
+        popup = self.location_completer.popup()
+        if popup:
+            fm = popup.fontMetrics()
+            max_w = max((fm.horizontalAdvance(loc) for loc in self.available_locations), default=0)
+            popup.setMinimumWidth(max(240, min(max_w + 48, 450)))
 
     def _has_staged_changes(self) -> bool:
         """Check whether local in-memory modifications differ from original saved database state."""
@@ -1384,6 +1386,11 @@ class HistoryDetailView(QWidget):
         self.available_djs = list(djs)
         if hasattr(self, "dj_completer_model"):
             self.dj_completer_model.setStringList(self.available_djs)
+            popup = self.dj_completer.popup()
+            if popup:
+                fm = popup.fontMetrics()
+                max_w = max((fm.horizontalAdvance(d) for d in self.available_djs), default=0)
+                popup.setMinimumWidth(max(240, min(max_w + 48, 450)))
 
     def _start_dj_add(self) -> None:
         """Show inline DJ input."""

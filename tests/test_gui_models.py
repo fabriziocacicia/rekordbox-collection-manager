@@ -909,6 +909,20 @@ class TestHistoryViewDetailIntegration(unittest.TestCase):
         self.assertEqual(container.get_djs(), ["Carl Cox", "The Martinez Brothers"])
         self.assertEqual(container.chips[1].scheme_name, "amber")
 
+    def test_dj_completer_popup_width(self):
+        container = DJChipsContainer()
+        self.assertGreaterEqual(container.completer.popup().minimumWidth(), 240)
+
+        # When set with a long DJ candidate, popup minimum width expands dynamically
+        long_dj = "Genesis Breyer P-Orridge & The Master Musicians of Jajouka"
+        container.set_available_djs(["Gene", long_dj])
+        container.show_add_input()
+        self.assertGreater(container.completer.popup().minimumWidth(), 240)
+
+        # Typing a short prefix like "gen" does not collapse input sizeHint below placeholder
+        container.input_edit.setText("gen")
+        self.assertGreaterEqual(container.input_edit.sizeHint().width(), 80)
+
     def test_location_pool_and_case_normalization(self):
         records = [
             {

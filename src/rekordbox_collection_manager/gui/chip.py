@@ -414,8 +414,9 @@ class ChipSearchLineEdit(QLineEdit):
     def sizeHint(self) -> QSize:
         base = super().sizeHint()
         fm = self.fontMetrics()
-        txt = self.text() or self.placeholderText() or ""
-        needed_w = fm.horizontalAdvance(txt) + 24
+        text_w = fm.horizontalAdvance(self.text()) if self.text() else 0
+        ph_w = fm.horizontalAdvance(self.placeholderText()) if self.placeholderText() else 0
+        needed_w = max(text_w, ph_w) + 24
         w = max(self.minimumWidth(), min(needed_w, self.maximumWidth()))
         return QSize(w, base.height())
 
@@ -493,8 +494,8 @@ class EditableChipsContainer(QWidget):
         self.input_edit = ChipSearchLineEdit(self)
         self.input_edit.setPlaceholderText(placeholder)
         self.input_edit.setFixedHeight(24)
-        self.input_edit.setMinimumWidth(60)
-        self.input_edit.setMaximumWidth(180)
+        self.input_edit.setMinimumWidth(80)
+        self.input_edit.setMaximumWidth(200)
         self.input_edit.setStyleSheet(
             f"QLineEdit {{ "
             f"  background-color: {COLOR_BG_INPUT}; "
@@ -518,6 +519,7 @@ class EditableChipsContainer(QWidget):
 
         popup = self.completer.popup()
         if popup:
+            popup.setMinimumWidth(240)
             popup.setStyleSheet(
                 f"QAbstractItemView {{ "
                 f"  background-color: {COLOR_BG_PANEL}; "
@@ -548,8 +550,26 @@ class EditableChipsContainer(QWidget):
         # input_edit is appended after chips
         self.flow_layout.addWidget(self.input_edit)
 
+    def _update_popup_width(self, candidates: Optional[List[str]] = None) -> None:
+        """Ensure completer popup is wide enough to display items without clipping."""
+        popup = self.completer.popup()
+        if not popup:
+            return
+        items = candidates if candidates is not None else self.completer_model.stringList()
+        fm = popup.fontMetrics()
+        max_item_w = max((fm.horizontalAdvance(item) for item in items), default=0)
+        needed_w = max_item_w + 48
+        popup.setMinimumWidth(max(240, min(needed_w, 450)))
+
     def set_available_items(self, items: List[str]) -> None:
         self.all_available_items = list(items)
+        if self.is_input_active():
+            assigned_lower = {p.lower() for p in self.items}
+            candidates = [p for p in self.all_available_items if p.lower() not in assigned_lower]
+            self.completer_model.setStringList(candidates)
+            self._update_popup_width(candidates)
+        else:
+            self._update_popup_width(self.all_available_items)
 
     def set_items(self, items: List[str]) -> None:
         self.items = list(items)
@@ -600,6 +620,7 @@ class EditableChipsContainer(QWidget):
         assigned_lower = {p.lower() for p in self.items}
         candidates = [p for p in self.all_available_items if p.lower() not in assigned_lower]
         self.completer_model.setStringList(candidates)
+        self._update_popup_width(candidates)
 
         self.empty_label.setVisible(False)
         self.input_edit.clear()
