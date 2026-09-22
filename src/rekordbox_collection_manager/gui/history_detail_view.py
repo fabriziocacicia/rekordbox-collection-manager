@@ -249,7 +249,7 @@ class HistoryDetailView(QWidget):
     track_detail_requested = Signal(dict, int)  # Emits (track_dict, track_idx)
     delete_session_requested = Signal(str)  # Emits history_id
     restore_session_requested = Signal(str)  # Emits history_id
-    session_metadata_updated = Signal(str, str, str)  # Emits (history_id, location, artist)
+    session_metadata_updated = Signal(str, str, str, str)  # Emits (history_id, base_name, location, artist)
     save_session_requested = Signal(str)  # Emits history_id
     discard_session_requested = Signal(str)  # Emits history_id
     location_added = Signal(str)  # Emits new location name
@@ -266,6 +266,7 @@ class HistoryDetailView(QWidget):
         self.filter_text: str = ""
         self.active_worker: Optional[HistorySessionDetailWorker] = None
 
+        self.original_base_name: str = ""
         self.base_name: str = ""
         self.original_location: str = ""
         self.current_location: str = ""
@@ -392,10 +393,97 @@ class HistoryDetailView(QWidget):
         title_layout.addWidget(session_icon)
 
         self.session_title_label = QLabel("Loading session...")
+        self.session_title_label.setObjectName("sessionTitleLabel")
         self.session_title_label.setStyleSheet(
-            f"color: {COLOR_TEXT_PRIMARY}; font-size: 16px; font-weight: 700; letter-spacing: -0.2px; background: transparent;"
+            f"QLabel#sessionTitleLabel {{ "
+            f"  color: {COLOR_TEXT_PRIMARY}; "
+            f"  font-size: 16px; "
+            f"  font-weight: 700; "
+            f"  letter-spacing: -0.2px; "
+            f"  background: transparent; "
+            f"  padding: 2px 6px; "
+            f"  border-radius: 4px; "
+            f"}} "
+            f"QLabel#sessionTitleLabel:hover {{ "
+            f"  background-color: {COLOR_BG_HOVER}; "
+            f"  color: #f8fafc; "
+            f"}}"
         )
+        self.session_title_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.session_title_label.setToolTip("Double-click to rename session")
+        self.session_title_label.mouseDoubleClickEvent = self._on_title_double_clicked
         title_layout.addWidget(self.session_title_label)
+
+        # Title Edit Widget (Inline QLineEdit + confirm ✓ + cancel ✕)
+        self.title_edit_widget = QWidget()
+        self.title_edit_widget.setStyleSheet("background: transparent; border: none;")
+        title_edit_layout = QHBoxLayout(self.title_edit_widget)
+        title_edit_layout.setContentsMargins(0, 0, 0, 0)
+        title_edit_layout.setSpacing(4)
+        title_edit_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+
+        self.title_input = QLineEdit()
+        self.title_input.setPlaceholderText("Enter session name...")
+        self.title_input.setFixedHeight(24)
+        self.title_input.setMinimumWidth(180)
+        self.title_input.setMaximumWidth(280)
+        self.title_input.setStyleSheet(
+            f"QLineEdit {{ "
+            f"  background-color: {COLOR_BG_INPUT}; "
+            f"  color: {COLOR_TEXT_PRIMARY}; "
+            f"  border: 1px solid #38bdf8; "
+            f"  border-radius: 4px; "
+            f"  padding: 1px 8px; "
+            f"  font-size: 13px; "
+            f"  font-weight: 700; "
+            f"}}"
+        )
+        self.title_input.returnPressed.connect(self._commit_title_edit)
+        self.title_input.installEventFilter(self)
+        title_edit_layout.addWidget(self.title_input)
+
+        self.title_confirm_btn = QPushButton("✓")
+        self.title_confirm_btn.setFixedSize(16, 16)
+        self.title_confirm_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.title_confirm_btn.setToolTip("Confirm rename (Enter)")
+        self.title_confirm_btn.setStyleSheet("""
+            QPushButton {
+                color: #22c55e;
+                font-size: 12px;
+                font-weight: 700;
+                background: transparent;
+                border: none;
+                padding: 0;
+            }
+            QPushButton:hover {
+                color: #4ade80;
+            }
+        """)
+        self.title_confirm_btn.clicked.connect(self._commit_title_edit)
+        title_edit_layout.addWidget(self.title_confirm_btn)
+
+        self.title_cancel_btn = QPushButton("×")
+        self.title_cancel_btn.setFixedSize(16, 16)
+        self.title_cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.title_cancel_btn.setToolTip("Cancel edit (Esc)")
+        self.title_cancel_btn.setStyleSheet("""
+            QPushButton {
+                color: #64748b;
+                font-size: 14px;
+                font-weight: 700;
+                background: transparent;
+                border: none;
+                padding: 0;
+            }
+            QPushButton:hover {
+                color: #ef4444;
+            }
+        """)
+        self.title_cancel_btn.clicked.connect(self._cancel_title_edit)
+        title_edit_layout.addWidget(self.title_cancel_btn)
+
+        self.title_edit_widget.setVisible(False)
+        title_layout.addWidget(self.title_edit_widget)
 
         self.deleted_badge = QLabel("🗑️ DELETED")
         self.deleted_badge.setStyleSheet(
@@ -909,6 +997,7 @@ class HistoryDetailView(QWidget):
 
         orig_str = original_name or session_title
         orig_base, orig_loc, orig_art = parse_history_name(orig_str)
+        self.original_base_name = orig_base
         self.original_location = orig_loc
         self.original_artist = orig_art
 
@@ -917,7 +1006,7 @@ class HistoryDetailView(QWidget):
         self.current_location = cur_loc
         self.current_artist = cur_art
 
-        self.session_title_label.setText(self.base_name or f"History Session {history_id}")
+        self._render_title()
         self.prev_btn.setEnabled(has_prev)
         self.next_btn.setEnabled(has_next)
         self.status_label.setText("Loading tracks from database...")
@@ -928,7 +1017,8 @@ class HistoryDetailView(QWidget):
 
         # Update Unsaved Modifications Bottom Bar
         has_changes = (
-            (self.current_location != self.original_location)
+            (self.base_name != self.original_base_name)
+            or (self.current_location != self.original_location)
             or (self.current_artist != self.original_artist)
             or is_staged
         )
@@ -991,15 +1081,17 @@ class HistoryDetailView(QWidget):
 
         # Synchronize location and artist from database if not staged
         if not self.is_staged and not self._has_staged_changes():
+            self.original_base_name = base_name or s_name
             self.base_name = base_name or s_name
-            self.session_title_label.setText(self.base_name)
             self.original_location = location
             self.current_location = location
             self.original_artist = artist
             self.current_artist = artist
+            self._render_title()
             self._render_location()
             self._update_detail_djs(artist)
         else:
+            self._render_title()
             self._render_location()
             self._update_detail_djs(self.current_artist)
 
@@ -1118,9 +1210,64 @@ class HistoryDetailView(QWidget):
     def _has_staged_changes(self) -> bool:
         """Check whether local in-memory modifications differ from original saved database state."""
         return (
-            (self.current_location != self.original_location)
+            (self.base_name != self.original_base_name)
+            or (self.current_location != self.original_location)
             or (self.current_artist != self.original_artist)
         )
+
+    def _render_title(self) -> None:
+        """Render session title display state and cursor/tooltip based on deleted status."""
+        self.title_edit_widget.setVisible(False)
+        self.session_title_label.setVisible(True)
+        self.session_title_label.setText(self.base_name or f"History Session {self.history_id}")
+        if self.is_deleted:
+            self.session_title_label.setCursor(Qt.CursorShape.ArrowCursor)
+            self.session_title_label.setToolTip("")
+        else:
+            self.session_title_label.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.session_title_label.setToolTip("Double-click to rename session")
+
+    def _on_title_double_clicked(self, event: Any) -> None:
+        """Handle double-click on session title label to initiate inline renaming."""
+        if not self.is_deleted:
+            self._start_title_edit()
+
+    def _start_title_edit(self) -> None:
+        """Switch session title label into inline QLineEdit editor mode."""
+        if self.is_deleted:
+            return
+        self.session_title_label.setVisible(False)
+        self.title_edit_widget.setVisible(True)
+        self.title_input.setText(self.base_name)
+        self.title_input.setFocus()
+        self.title_input.selectAll()
+
+    def _commit_title_edit(self) -> None:
+        """Commit inline edited session base name."""
+        val = self.title_input.text().strip()
+        self.title_edit_widget.setVisible(False)
+        self.session_title_label.setVisible(True)
+
+        if val and val != self.base_name:
+            # If the user pasted a name that has @ or w, parse it gracefully
+            parsed_b, parsed_l, parsed_a = parse_history_name(val)
+            self.base_name = parsed_b or val
+            if parsed_l and not self.current_location:
+                self.current_location = parsed_l
+                self._render_location()
+            if parsed_a and not self.current_artist:
+                self.current_artist = parsed_a
+                self._render_djs()
+            self._render_title()
+            self._on_metadata_changed()
+        else:
+            self._render_title()
+
+    def _cancel_title_edit(self) -> None:
+        """Cancel inline title editing and revert back to label."""
+        self.title_edit_widget.setVisible(False)
+        self.session_title_label.setVisible(True)
+        self._render_title()
 
     def _render_location(self) -> None:
         """Render location display state based on current location value."""
@@ -1205,6 +1352,7 @@ class HistoryDetailView(QWidget):
         if self.history_id:
             self.session_metadata_updated.emit(
                 str(self.history_id),
+                self.base_name,
                 self.current_location,
                 self.current_artist,
             )
@@ -1214,6 +1362,10 @@ class HistoryDetailView(QWidget):
         self.bottom_bar.setVisible(has_changes)
         if has_changes:
             parts = []
+            if self.base_name != self.original_base_name:
+                orig_disp = f"'{self.original_base_name}'" if self.original_base_name else "None"
+                curr_disp = f"'{self.base_name}'" if self.base_name else "None"
+                parts.append(f"Name: {orig_disp} → {curr_disp}")
             if self.current_location != self.original_location:
                 orig_disp = f"'{self.original_location}'" if self.original_location else "None"
                 curr_disp = f"'{self.current_location}'" if self.current_location else "None"
@@ -1335,9 +1487,11 @@ class HistoryDetailView(QWidget):
         self.djs_chip.setVisible(True)
 
     def _on_discard_clicked(self) -> None:
-        """Revert location and DJs to original saved state."""
+        """Revert base name, location and DJs to original saved state."""
+        self.base_name = self.original_base_name
         self.current_location = self.original_location
         self.current_artist = self.original_artist
+        self._render_title()
         self._render_location()
         self._render_djs()
         self.bottom_bar.setVisible(False)
@@ -1356,9 +1510,11 @@ class HistoryDetailView(QWidget):
 
     def eventFilter(self, watched: Any, event: Any) -> bool:
         """Handle Escape key on inline editors."""
-        if watched in (getattr(self, "location_input", None), getattr(self, "dj_input", None)):
+        if watched in (getattr(self, "title_input", None), getattr(self, "location_input", None), getattr(self, "dj_input", None)):
             if event.type() == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Escape:
-                if watched is self.location_input:
+                if watched is getattr(self, "title_input", None):
+                    self._cancel_title_edit()
+                elif watched is self.location_input:
                     self._cancel_location_edit()
                 elif watched is self.dj_input:
                     self._cancel_dj_add()

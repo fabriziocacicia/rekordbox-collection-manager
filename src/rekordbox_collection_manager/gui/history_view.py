@@ -1482,8 +1482,14 @@ class HistoryView(QWidget):
         self.notify_status.emit(f"❌ Error for session {history_id}: {err_msg}")
         QMessageBox.critical(self, "Operation Failed", f"Database error:\n{err_msg}")
 
-    def _on_detail_metadata_updated(self, history_id: str, new_loc: str, new_art: str) -> None:
-        """Handle location and played-with DJ updates originating from HistoryDetailView."""
+    def _on_detail_metadata_updated(
+        self,
+        history_id: str,
+        new_base: str,
+        new_loc: str,
+        new_art: str,
+    ) -> None:
+        """Handle base name, location and played-with DJ updates originating from HistoryDetailView."""
         record = next((r for r in self.original_records if str(r["id"]) == str(history_id)), None)
         if not record:
             return
@@ -1492,15 +1498,13 @@ class HistoryView(QWidget):
         orig_date = record.get("date") or ""
         orig_base, orig_loc, orig_art = parse_history_name(orig_name)
 
-        # Preserve any staged date or base name
+        # Preserve any staged date
         if history_id in self.staged_edits:
             cur_date = self.staged_edits[history_id].get("date", orig_date)
-            cur_name = self.staged_edits[history_id].get("name", orig_name)
-            cur_base, _, _ = parse_history_name(cur_name)
         else:
             cur_date = orig_date
-            cur_base = orig_base
 
+        cur_base = new_base or orig_base
         new_name = compose_history_name(cur_base, location=new_loc, artist=new_art)
 
         # Register any new location / DJs
@@ -1551,6 +1555,12 @@ class HistoryView(QWidget):
         orig_base, orig_loc, orig_art = parse_history_name(orig_name)
 
         self.table.blockSignals(True)
+        # Session Name
+        name_item = self.table.item(row_idx, 2)
+        if name_item:
+            name_item.setText(base_name)
+            name_item.setForeground(Qt.GlobalColor.yellow if (is_staged and base_name != orig_base) else Qt.GlobalColor.white)
+
         # Location
         loc_item = self.table.item(row_idx, 3)
         if loc_item:
@@ -1632,12 +1642,15 @@ class HistoryView(QWidget):
             self._update_status_bar()
             self._update_folder_tree()
             self.notify_status.emit("✅ Saved session changes successfully.")
+            self.detail_view.original_base_name = b
+            self.detail_view.base_name = b
             self.detail_view.original_location = l
             self.detail_view.original_artist = a
             self.detail_view.current_location = l
             self.detail_view.current_artist = a
             self.detail_view.is_staged = False
             self.detail_view.bottom_bar.setVisible(False)
+            self.detail_view._render_title()
             QMessageBox.information(
                 self,
                 "Changes Saved",

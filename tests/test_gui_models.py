@@ -719,6 +719,63 @@ class TestHistoryDetailView(unittest.TestCase):
         self.assertEqual(self.detail_view.djs_container.get_djs(), [])
         self.assertTrue(self.detail_view.bottom_bar.isHidden())
 
+    def test_detail_view_inline_title_editing(self):
+        """Test double-click renaming of session title in HistoryDetailView."""
+        self.detail_view.history_id = "sess_101"
+        self.detail_view._on_data_loaded(self.mock_data)
+
+        # Verify initial display, cursor, and tooltip
+        self.assertEqual(self.detail_view.session_title_label.text(), "HISTORY 2026-08-14")
+        self.assertEqual(self.detail_view.session_title_label.cursor().shape(), Qt.CursorShape.PointingHandCursor)
+        self.assertEqual(self.detail_view.session_title_label.toolTip(), "Double-click to rename session")
+        self.assertTrue(self.detail_view.title_edit_widget.isHidden())
+
+        # Double-click triggers inline editing
+        self.detail_view._on_title_double_clicked(None)
+        self.assertFalse(self.detail_view.title_edit_widget.isHidden())
+        self.assertTrue(self.detail_view.session_title_label.isHidden())
+        self.assertEqual(self.detail_view.title_input.text(), "HISTORY 2026-08-14")
+
+        # Cancel reverts without changing
+        self.detail_view._cancel_title_edit()
+        self.assertTrue(self.detail_view.title_edit_widget.isHidden())
+        self.assertFalse(self.detail_view.session_title_label.isHidden())
+        self.assertEqual(self.detail_view.session_title_label.text(), "HISTORY 2026-08-14")
+        self.assertTrue(self.detail_view.bottom_bar.isHidden())
+
+        # Edit and commit a new name
+        self.detail_view._start_title_edit()
+        self.detail_view.title_input.setText("Summer Closing Party")
+        self.detail_view._commit_title_edit()
+
+        self.assertTrue(self.detail_view.title_edit_widget.isHidden())
+        self.assertFalse(self.detail_view.session_title_label.isHidden())
+        self.assertEqual(self.detail_view.base_name, "Summer Closing Party")
+        self.assertEqual(self.detail_view.session_title_label.text(), "Summer Closing Party")
+        self.assertFalse(self.detail_view.bottom_bar.isHidden())
+        self.assertIn("Summer Closing Party", self.detail_view.staged_status_label.text())
+
+        # Discard changes reverts back to original
+        self.detail_view._on_discard_clicked()
+        self.assertEqual(self.detail_view.base_name, "HISTORY 2026-08-14")
+        self.assertEqual(self.detail_view.session_title_label.text(), "HISTORY 2026-08-14")
+        self.assertTrue(self.detail_view.bottom_bar.isHidden())
+
+        # Empty name submission does not overwrite
+        self.detail_view._start_title_edit()
+        self.detail_view.title_input.setText("   ")
+        self.detail_view._commit_title_edit()
+        self.assertEqual(self.detail_view.base_name, "HISTORY 2026-08-14")
+        self.assertEqual(self.detail_view.session_title_label.text(), "HISTORY 2026-08-14")
+
+        # When session is deleted, double-click does not activate edit mode
+        self.detail_view.is_deleted = True
+        self.detail_view._render_title()
+        self.assertEqual(self.detail_view.session_title_label.cursor().shape(), Qt.CursorShape.ArrowCursor)
+        self.assertEqual(self.detail_view.session_title_label.toolTip(), "")
+        self.detail_view._on_title_double_clicked(None)
+        self.assertTrue(self.detail_view.title_edit_widget.isHidden())
+
 
 class TestHistoryViewDetailIntegration(unittest.TestCase):
     """Tests for HistoryView table actions and detail view integration."""
@@ -986,10 +1043,24 @@ class TestHistoryViewDetailIntegration(unittest.TestCase):
         self.assertEqual(self.history_view.table.item(0, 4).text(), "Seth Troxler")
         self.assertEqual(self.history_view.table.item(0, 0).text(), "● Staged")
 
+        # In detail view, also rename session base name
+        self.history_view.detail_view._start_title_edit()
+        self.history_view.detail_view.title_input.setText("Opening Festival Set")
+        self.history_view.detail_view._commit_title_edit()
+
+        # Staged edits should be updated in HistoryView with new base name
+        self.assertIn("h1", self.history_view.staged_edits)
+        self.assertEqual(
+            self.history_view.staged_edits["h1"]["name"],
+            "Opening Festival Set @ DC10 w Seth Troxler",
+        )
+        self.assertEqual(self.history_view.table.item(0, 2).text(), "Opening Festival Set")
+
         # Discard from detail view
         self.history_view.detail_view._on_discard_clicked()
         self.assertNotIn("h1", self.history_view.staged_edits)
         self.assertEqual(self.history_view.table.item(0, 0).text(), "Clean")
+        self.assertEqual(self.history_view.table.item(0, 2).text(), "HISTORY 2026-08-10")
 
 
 class TestTracksView(unittest.TestCase):
