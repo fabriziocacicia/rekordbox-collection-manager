@@ -226,6 +226,10 @@ class ChipBadgeDelegate(QStyledItemDelegate):
         self.bg_color = bg_color
         self.border_color = border_color
         self.text_color = text_color
+        self.badge_font = QFont()
+        self.badge_font.setPointSize(9)
+        self.badge_font.setWeight(QFont.Weight.DemiBold)
+        self.fm = QFontMetrics(self.badge_font)
 
     def paint(
         self,
@@ -259,11 +263,8 @@ class ChipBadgeDelegate(QStyledItemDelegate):
         x = option.rect.x() + 5
         max_x = option.rect.right() - 5
 
-        font = QFont(painter.font())
-        font.setPointSize(9)
-        font.setWeight(QFont.Weight.DemiBold)
-        painter.setFont(font)
-        fm = QFontMetrics(font)
+        painter.setFont(self.badge_font)
+        fm = self.fm
 
         max_chip_w = 140
 
@@ -310,10 +311,7 @@ class ChipBadgeDelegate(QStyledItemDelegate):
             return QSize(50, 36)
         if isinstance(items, str):
             items = [items]
-        font = QFont(option.font)
-        font.setPointSize(9)
-        font.setWeight(QFont.Weight.DemiBold)
-        fm = QFontMetrics(font)
+        fm = self.fm
         total_w = 10
         for t in items:
             total_w += min(fm.horizontalAdvance(str(t)) + 10, 140) + 4
@@ -322,6 +320,13 @@ class ChipBadgeDelegate(QStyledItemDelegate):
 
 class FileTypeBadgeDelegate(QStyledItemDelegate):
     """Renders audio file types as colored badge pills with lossless distinctions."""
+
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.badge_font = QFont()
+        self.badge_font.setPointSize(9)
+        self.badge_font.setBold(True)
+        self.fm = QFontMetrics(self.badge_font)
 
     def paint(
         self,
@@ -361,11 +366,8 @@ class FileTypeBadgeDelegate(QStyledItemDelegate):
             border_color = QColor(255, 255, 255, 40)
             text_color = QColor(COLOR_TEXT_MUTED)
 
-        font = QFont(painter.font())
-        font.setPointSize(9)
-        font.setBold(True)
-        painter.setFont(font)
-        fm = QFontMetrics(font)
+        painter.setFont(self.badge_font)
+        fm = self.fm
 
         badge_w = fm.horizontalAdvance(text_str) + 14
         badge_h = 20
@@ -385,10 +387,7 @@ class FileTypeBadgeDelegate(QStyledItemDelegate):
         text_str = index.data(Qt.ItemDataRole.DisplayRole) or ""
         if not text_str:
             return QSize(50, 36)
-        font = QFont(option.font)
-        font.setPointSize(10)
-        font.setBold(True)
-        fm = QFontMetrics(font)
+        fm = self.fm
         return QSize(fm.horizontalAdvance(text_str) + 24, 36)
 
 

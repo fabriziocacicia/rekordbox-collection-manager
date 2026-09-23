@@ -1217,6 +1217,7 @@ class HistoryView(QWidget):
         worker = HistoryRealignWorker(self.engine, self)
         worker.success.connect(self._on_realign_success)
         worker.error.connect(self._on_realign_error)
+        self.active_worker = worker
         worker.start()
 
     def _on_realign_success(self, stats: Dict[str, Any]) -> None:
@@ -1281,6 +1282,7 @@ class HistoryView(QWidget):
         worker = HistoryBatchSaveWorker(self.engine, updates, auto_realign=True, parent=self)
         worker.success.connect(self._on_save_success)
         worker.error.connect(self._on_save_error)
+        self.active_worker = worker
         worker.start()
 
     def _on_save_success(self, stats: Dict[str, Any]) -> None:
@@ -1636,6 +1638,7 @@ class HistoryView(QWidget):
         self.notify_status.emit(f"Saving changes for session {history_id}...")
 
         worker = HistoryBatchSaveWorker(self.engine, updates, auto_realign=True, parent=self)
+        self.active_worker = worker
         def on_success(stats: Dict[str, Any]) -> None:
             self.staged_edits.pop(history_id, None)
             record["name"] = new_name

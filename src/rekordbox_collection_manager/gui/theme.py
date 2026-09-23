@@ -5,6 +5,7 @@ a deep dark slate aesthetic with electric blue and amber accents.
 """
 
 import sys
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QFont, QPalette
 from PySide6.QtWidgets import QApplication
 
@@ -503,6 +504,10 @@ def apply_dark_theme(app: QApplication) -> None:
     """Apply modern Pioneer DJ dark palette and stylesheet to the QApplication."""
     app.setStyle("Fusion")
 
+    # Inform the underlying operating system (macOS / Windows / Linux) of Dark Mode
+    if hasattr(app, "styleHints") and hasattr(app.styleHints(), "setColorScheme"):
+        app.styleHints().setColorScheme(Qt.ColorScheme.Dark)
+
     # Set base palette for Qt native elements
     palette = QPalette()
     palette.setColor(QPalette.ColorRole.Window, QColor(COLOR_BG_DARK))
@@ -517,6 +522,10 @@ def apply_dark_theme(app: QApplication) -> None:
     palette.setColor(QPalette.ColorRole.BrightText, QColor("#ffffff"))
     palette.setColor(QPalette.ColorRole.Highlight, QColor(COLOR_BLUE))
     palette.setColor(QPalette.ColorRole.HighlightedText, QColor("#ffffff"))
+    if hasattr(QPalette.ColorRole, "Accent"):
+        palette.setColor(QPalette.ColorRole.Accent, QColor(COLOR_BLUE))
+    if hasattr(QPalette.ColorRole, "PlaceholderText"):
+        palette.setColor(QPalette.ColorRole.PlaceholderText, QColor(COLOR_TEXT_MUTED))
 
     app.setPalette(palette)
     app.setStyleSheet(MODERN_DARK_QSS)

@@ -470,7 +470,7 @@ dev = [
 requires-dist = [
     { name = "mutagen", specifier = ">=1.47.0" },
     { name = "pyrekordbox", specifier = ">=0.4.4" },
-    { name = "pyside6", specifier = ">=6.5.0" },
+    { name = "pyside6", specifier = ">=6.11.2" },
     { name = "questionary", specifier = ">=2.1.1" },
 ]
 

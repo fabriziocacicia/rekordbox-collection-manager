@@ -8,7 +8,7 @@ and interactive hover/removal capabilities.
 from typing import Any, Dict, List, Optional, Tuple
 
 from PySide6.QtCore import QPoint, QRect, QRectF, QSize, QStringListModel, Qt, Signal
-from PySide6.QtGui import QColor, QKeyEvent, QPainter, QPen
+from PySide6.QtGui import QColor, QEnterEvent, QKeyEvent, QPainter, QPen
 from PySide6.QtWidgets import (
     QCompleter,
     QFrame,
@@ -97,7 +97,7 @@ class ChipDeleteButton(QPushButton):
         self.text_color = text_color
         self.update()
 
-    def enterEvent(self, event: Any) -> None:
+    def enterEvent(self, event: QEnterEvent) -> None:
         try:
             super().enterEvent(event)
         except Exception:
@@ -225,7 +225,7 @@ class BadgeChip(QFrame):
         super().resizeEvent(event)
         self._position_x_btn()
 
-    def enterEvent(self, event: Any) -> None:
+    def enterEvent(self, event: QEnterEvent) -> None:
         try:
             super().enterEvent(event)
         except Exception:

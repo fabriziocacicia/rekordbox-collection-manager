@@ -107,6 +107,7 @@ class PlayCountView(QWidget):
         self.records: List[Dict[str, Any]] = []
         self.staged_edits: Dict[str, Dict[str, Any]] = {}
         self.active_search_worker: Optional[TrackSearchWorker] = None
+        self.active_batch_worker: Optional[PlayCountBatchSaveWorker] = None
         self.current_sort_col: Optional[int] = None
         self.current_sort_order: Qt.SortOrder = Qt.SortOrder.AscendingOrder
 
@@ -610,6 +611,7 @@ class PlayCountView(QWidget):
         self.status_label.setText(f"Saving {count} updates to database...")
 
         worker = PlayCountBatchSaveWorker(self.engine, updates, parent=self)
+        self.active_batch_worker = worker
         worker.success.connect(self._on_save_success)
         worker.error.connect(self._on_save_error)
         worker.start()

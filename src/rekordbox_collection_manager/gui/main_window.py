@@ -7,7 +7,7 @@ import sys
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 from PySide6.QtCore import Property, QEasingCurve, QPropertyAnimation, QSize, QTimer, Qt
-from PySide6.QtGui import QAction, QKeySequence, QPixmap, QShortcut
+from PySide6.QtGui import QAction, QCloseEvent, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QButtonGroup,
     QFileDialog,
@@ -123,6 +123,7 @@ class MainWindow(QMainWindow):
         self.history_records: List[Dict[str, Any]] = []
         self.total_tracks: int = 0
         self.is_sidebar_collapsed: bool = False
+        self._db_loader: Optional[DatabaseLoaderWorker] = None
         self._backup_worker: Optional[BackupWorker] = None
 
         self.nav_items = [
@@ -482,10 +483,20 @@ class MainWindow(QMainWindow):
         self.db_badge.setToolTip("Connecting to Rekordbox database...")
         self.db_label.setToolTip("Connecting to Rekordbox database...")
 
+        if self._db_loader and self._db_loader.isRunning():
+            self._db_loader.quit()
+            self._db_loader.wait(500)
+
         loader = DatabaseLoaderWorker(db_path, parent=self)
+        self._db_loader = loader
         loader.success.connect(self._on_db_loaded)
         loader.error.connect(self._on_db_error)
+        loader.finished.connect(lambda: self._on_loader_finished(loader))
         loader.start()
+
+    def _on_loader_finished(self, worker: DatabaseLoaderWorker) -> None:
+        if self._db_loader is worker:
+            self._db_loader = None
 
     def _on_db_loaded(
         self,
@@ -699,3 +710,12 @@ class MainWindow(QMainWindow):
 
     def _show_status_message(self, msg: str) -> None:
         self.status_bar.showMessage(msg, 5000)
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        """Safely terminate or wait for active background workers before closing."""
+        if self._db_loader and self._db_loader.isRunning():
+            self._db_loader.quit()
+            self._db_loader.wait(1000)
+        if self._backup_worker and self._backup_worker.isRunning():
+            self._backup_worker.wait(2000)
+        super().closeEvent(event)
