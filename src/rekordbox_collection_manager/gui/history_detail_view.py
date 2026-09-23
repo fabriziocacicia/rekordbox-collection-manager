@@ -1197,7 +1197,7 @@ class HistoryDetailView(QWidget):
         """Select and scroll to track in table when detail view navigates."""
         if 0 <= idx < self.table.rowCount():
             self.table.selectRow(idx)
-            self.table.scrollToItem(self.table.item(idx, 0))
+            self.table.scrollToRow(idx)
 
     def set_available_locations(self, locations: List[str]) -> None:
         """Update available locations for autocompleter."""

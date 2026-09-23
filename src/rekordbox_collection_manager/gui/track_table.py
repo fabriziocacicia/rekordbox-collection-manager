@@ -11,6 +11,7 @@ import os
 from typing import Any, Dict, List, Optional, Tuple
 
 from PySide6.QtCore import (
+    QAbstractTableModel,
     QEvent,
     QModelIndex,
     QObject,
@@ -38,6 +39,7 @@ from PySide6.QtWidgets import (
     QStyle,
     QStyledItemDelegate,
     QStyleOptionViewItem,
+    QTableView,
     QTableWidget,
     QTableWidgetItem,
     QWidget,
@@ -391,8 +393,441 @@ class FileTypeBadgeDelegate(QStyledItemDelegate):
         return QSize(fm.horizontalAdvance(text_str) + 24, 36)
 
 
-class TracksTableWidget(QTableWidget):
-    """Customizable tracklist table widget supporting rich badges, Cmd-clicks, and context menu."""
+class _TableItemProxy:
+    """Lightweight compatibility proxy simulating QTableWidgetItem for legacy callers/tests."""
+
+    def __init__(
+        self,
+        row: int,
+        col: int,
+        text_val: str,
+        user_data: Any = None,
+        font_val: Optional[QFont] = None,
+        fg_val: Optional[QColor] = None,
+        align_val: Optional[Qt.AlignmentFlag] = None,
+        tip_val: str = "",
+    ):
+        self._row = row
+        self._col = col
+        self._text = text_val
+        self._user_data = user_data
+        self._font = font_val or QFont()
+        self._fg = fg_val
+        self._align = align_val
+        self._tip = tip_val
+
+    def text(self) -> str:
+        return self._text
+
+    def data(self, role: int = Qt.ItemDataRole.UserRole) -> Any:
+        if role == Qt.ItemDataRole.DisplayRole:
+            return self._text
+        elif role == Qt.ItemDataRole.ToolTipRole:
+            return self._tip
+        elif role == Qt.ItemDataRole.ForegroundRole:
+            return self._fg
+        elif role == Qt.ItemDataRole.FontRole:
+            return self._font
+        return self._user_data
+
+    def setData(self, role: int, value: Any) -> None:
+        if role == Qt.ItemDataRole.DisplayRole:
+            self._text = str(value)
+        elif role == Qt.ItemDataRole.ToolTipRole:
+            self._tip = str(value)
+        elif role == Qt.ItemDataRole.UserRole:
+            self._user_data = value
+
+    def row(self) -> int:
+        return self._row
+
+    def column(self) -> int:
+        return self._col
+
+    def font(self) -> QFont:
+        return self._font
+
+    def setFont(self, f: QFont) -> None:
+        self._font = f
+
+    def foreground(self) -> Optional[QBrush]:
+        return QBrush(self._fg) if self._fg else None
+
+    def setForeground(self, c: Any) -> None:
+        self._fg = c if isinstance(c, QColor) else QColor(c)
+
+    def toolTip(self) -> str:
+        return self._tip
+
+    def setToolTip(self, tip: str) -> None:
+        self._tip = tip
+
+    def textAlignment(self) -> Optional[Qt.AlignmentFlag]:
+        return self._align
+
+    def setTextAlignment(self, align: Any) -> None:
+        self._align = align
+
+    def flags(self) -> Qt.ItemFlags:
+        return Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+
+    def setFlags(self, flags: Any) -> None:
+        pass
+
+
+class TracksTableModel(QAbstractTableModel):
+    """Virtualized, high-performance table model for track collections."""
+
+    def flags(self, index: QModelIndex) -> Qt.ItemFlags:
+        if not index.isValid():
+            return Qt.ItemFlag.NoItemFlags
+        return Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+
+    def __init__(
+        self,
+        records: Optional[List[Dict[str, Any]]] = None,
+        config: Optional[TrackTableConfig] = None,
+        parent: Optional[QObject] = None,
+    ):
+        super().__init__(parent)
+        self.records: List[Dict[str, Any]] = records if records is not None else []
+        self.config: TrackTableConfig = config or TrackTableConfig()
+
+        self._title_font = QFont()
+        self._title_font.setBold(True)
+
+        self._color_white = QColor("#ffffff")
+        self._color_secondary = QColor(COLOR_TEXT_SECONDARY)
+        self._color_muted = QColor(COLOR_TEXT_MUTED)
+        self._color_blue = QColor(COLOR_BLUE)
+        self._color_green = QColor(COLOR_GREEN)
+
+    def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
+        if parent.isValid():
+            return 0
+        return len(self.records)
+
+    def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:
+        if parent.isValid():
+            return 0
+        return len(self.config.columns)
+
+    def set_config(self, config: TrackTableConfig) -> None:
+        self.beginResetModel()
+        self.config = config
+        self.endResetModel()
+
+    def set_records(self, records: List[Dict[str, Any]]) -> None:
+        self.beginResetModel()
+        self.records = records
+        self.endResetModel()
+
+    def update_track_playlists(self, row_idx: int, playlists: List[str]) -> None:
+        if 0 <= row_idx < len(self.records):
+            self.records[row_idx]["playlists"] = list(playlists)
+            if TrackColumn.PLAYLISTS in self.config.columns:
+                col_idx = self.config.columns.index(TrackColumn.PLAYLISTS)
+                idx = self.index(row_idx, col_idx)
+                self.dataChanged.emit(
+                    idx,
+                    idx,
+                    [
+                        Qt.ItemDataRole.DisplayRole,
+                        Qt.ItemDataRole.UserRole,
+                        Qt.ItemDataRole.ToolTipRole,
+                    ],
+                )
+
+    def headerData(
+        self,
+        section: int,
+        orientation: Qt.Orientation,
+        role: int = Qt.ItemDataRole.DisplayRole,
+    ) -> Any:
+        if orientation == Qt.Orientation.Horizontal and 0 <= section < len(self.config.columns):
+            col_name = self.config.columns[section]
+            if role == Qt.ItemDataRole.DisplayRole:
+                return col_name
+            elif role == Qt.ItemDataRole.TextAlignmentRole:
+                if col_name in (
+                    TrackColumn.INDEX,
+                    TrackColumn.KEY,
+                    TrackColumn.BPM,
+                    TrackColumn.TIME,
+                    TrackColumn.PLAYS,
+                    TrackColumn.BITRATE,
+                    TrackColumn.FILE_TYPE,
+                ):
+                    return Qt.AlignmentFlag.AlignCenter
+                return int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            elif role == Qt.ItemDataRole.ToolTipRole:
+                return self._get_header_tooltip(col_name)
+        return None
+
+    def _get_header_tooltip(self, col_name: str) -> str:
+        if col_name == TrackColumn.INDEX:
+            return self.config.index_header_tooltip
+        tooltips = {
+            TrackColumn.TITLE: "Sort by Title",
+            TrackColumn.ARTIST: "Sort by Artist",
+            TrackColumn.ALBUM: "Sort by Album",
+            TrackColumn.KEY: "Sort by Musical / Camelot Key",
+            TrackColumn.BPM: "Sort by BPM (Tempos)",
+            TrackColumn.TIME: "Sort by Track Duration",
+            TrackColumn.PLAYS: "Sort by Play Count",
+            TrackColumn.BITRATE: "Sort by Audio Bitrate",
+            TrackColumn.FILE_TYPE: "Sort by File Type (MP3, AIFF, FLAC, etc.)",
+            TrackColumn.TAGS: "Sort by Tags",
+            TrackColumn.PLAYLISTS: "Sort by Real Playlists",
+            TrackColumn.FOLDER: "Sort by Folder (Ctrl+Click or Cmd+Click cell to open in Finder)",
+            TrackColumn.FILE_NAME: "Sort by File Name (Ctrl+Click or Cmd+Click cell to reveal with highlight in Finder)",
+        }
+        return tooltips.get(col_name, "")
+
+    def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole) -> Any:
+        if not index.isValid():
+            return None
+
+        row = index.row()
+        col = index.column()
+
+        if not (0 <= row < len(self.records) and 0 <= col < len(self.config.columns)):
+            return None
+
+        t = self.records[row]
+        col_name = self.config.columns[col]
+
+        # 1. INDEX (#)
+        if col_name == TrackColumn.INDEX:
+            if role == Qt.ItemDataRole.DisplayRole:
+                if self.config.index_mode == "track_no":
+                    return str(t.get("track_no") or (row + 1))
+                return str(row + 1)
+            elif role == Qt.ItemDataRole.UserRole:
+                if self.config.index_mode == "track_no":
+                    return float(t.get("track_no") or (row + 1))
+                return float(row + 1)
+            elif role == Qt.ItemDataRole.TextAlignmentRole:
+                return Qt.AlignmentFlag.AlignCenter
+            elif role == Qt.ItemDataRole.ForegroundRole:
+                return self._color_muted
+            elif role == Qt.ItemDataRole.SizeHintRole:
+                return QSize(58, 36)
+
+        # 2. TITLE
+        elif col_name == TrackColumn.TITLE:
+            title_text = t.get("title") or "(Untitled)"
+            if role == Qt.ItemDataRole.DisplayRole:
+                return title_text
+            elif role == Qt.ItemDataRole.ToolTipRole:
+                return title_text
+            elif role == Qt.ItemDataRole.FontRole:
+                return self._title_font
+            elif role == Qt.ItemDataRole.ForegroundRole:
+                return self._color_white
+            elif role == Qt.ItemDataRole.UserRole:
+                return title_text
+
+        # 3. ARTIST
+        elif col_name == TrackColumn.ARTIST:
+            artist_text = t.get("artist") or "Unknown Artist"
+            if role == Qt.ItemDataRole.DisplayRole:
+                return artist_text
+            elif role == Qt.ItemDataRole.ToolTipRole:
+                return artist_text
+            elif role == Qt.ItemDataRole.ForegroundRole:
+                return self._color_secondary
+            elif role == Qt.ItemDataRole.UserRole:
+                return artist_text
+
+        # 4. ALBUM
+        elif col_name == TrackColumn.ALBUM:
+            album_text = t.get("album") or "—"
+            if role == Qt.ItemDataRole.DisplayRole:
+                return album_text
+            elif role == Qt.ItemDataRole.ToolTipRole:
+                return t.get("album") or ""
+            elif role == Qt.ItemDataRole.ForegroundRole:
+                return self._color_muted
+            elif role == Qt.ItemDataRole.UserRole:
+                return album_text
+
+        # 5. KEY
+        elif col_name == TrackColumn.KEY:
+            key_text = t.get("key") or "—"
+            if role == Qt.ItemDataRole.DisplayRole:
+                return key_text
+            elif role == Qt.ItemDataRole.TextAlignmentRole:
+                return Qt.AlignmentFlag.AlignCenter
+            elif role == Qt.ItemDataRole.ForegroundRole:
+                return self._color_blue if t.get("key") else self._color_muted
+            elif role == Qt.ItemDataRole.UserRole:
+                return key_text
+
+        # 6. BPM
+        elif col_name == TrackColumn.BPM:
+            bpm_val = float(t.get("bpm") or 0.0)
+            if role == Qt.ItemDataRole.DisplayRole:
+                return f"{bpm_val:.1f}" if bpm_val > 0 else "—"
+            elif role == Qt.ItemDataRole.UserRole:
+                return bpm_val
+            elif role == Qt.ItemDataRole.TextAlignmentRole:
+                return Qt.AlignmentFlag.AlignCenter
+
+        # 7. TIME
+        elif col_name == TrackColumn.TIME:
+            dur_sec = float(t.get("duration_sec") or 0)
+            if role == Qt.ItemDataRole.DisplayRole:
+                return t.get("duration_str") or "--:--"
+            elif role == Qt.ItemDataRole.UserRole:
+                return dur_sec
+            elif role == Qt.ItemDataRole.TextAlignmentRole:
+                return Qt.AlignmentFlag.AlignCenter
+
+        # 8. PLAYS
+        elif col_name == TrackColumn.PLAYS:
+            plays_val = int(t.get("play_count") or 0)
+            if role == Qt.ItemDataRole.DisplayRole:
+                return str(plays_val)
+            elif role == Qt.ItemDataRole.UserRole:
+                return plays_val
+            elif role == Qt.ItemDataRole.TextAlignmentRole:
+                return Qt.AlignmentFlag.AlignCenter
+            elif role == Qt.ItemDataRole.ForegroundRole:
+                if plays_val > 0:
+                    return self._color_green
+
+        # 9. BITRATE
+        elif col_name == TrackColumn.BITRATE:
+            br_val = int(t.get("bitrate") or 0)
+            if role == Qt.ItemDataRole.DisplayRole:
+                return f"{br_val} kbps" if br_val > 0 else "—"
+            elif role == Qt.ItemDataRole.UserRole:
+                return float(br_val)
+            elif role == Qt.ItemDataRole.TextAlignmentRole:
+                return Qt.AlignmentFlag.AlignCenter
+            elif role == Qt.ItemDataRole.ForegroundRole:
+                return self._color_muted
+
+        # 10. FILE_TYPE
+        elif col_name == TrackColumn.FILE_TYPE:
+            file_type = t.get("file_type") or "—"
+            if role == Qt.ItemDataRole.DisplayRole:
+                return file_type
+            elif role == Qt.ItemDataRole.ToolTipRole:
+                return f"Format: {file_type}"
+            elif role == Qt.ItemDataRole.UserRole:
+                return file_type
+            elif role == Qt.ItemDataRole.TextAlignmentRole:
+                return Qt.AlignmentFlag.AlignCenter
+
+        # 11. TAGS
+        elif col_name == TrackColumn.TAGS:
+            tags = t.get("tags") or []
+            if role == Qt.ItemDataRole.DisplayRole:
+                return ", ".join(tags) if tags else "—"
+            elif role == Qt.ItemDataRole.UserRole:
+                return tags
+            elif role == Qt.ItemDataRole.ToolTipRole:
+                return f"Tags: {', '.join(tags)}" if tags else "No tags"
+
+        # 12. PLAYLISTS
+        elif col_name == TrackColumn.PLAYLISTS:
+            playlists = t.get("playlists") or []
+            if role == Qt.ItemDataRole.DisplayRole:
+                return ", ".join(playlists) if playlists else "—"
+            elif role == Qt.ItemDataRole.UserRole:
+                return playlists
+            elif role == Qt.ItemDataRole.ToolTipRole:
+                return (
+                    f"Playlists: {', '.join(playlists)}"
+                    if playlists
+                    else "Not in any playlist"
+                )
+
+        # 13. FOLDER
+        elif col_name == TrackColumn.FOLDER:
+            folder_name = t.get("folder_name") or "—"
+            folder_dir = t.get("folder_dir") or t.get("folder_path") or ""
+            if role == Qt.ItemDataRole.DisplayRole:
+                return folder_name
+            elif role == Qt.ItemDataRole.UserRole:
+                return folder_dir
+            elif role == Qt.ItemDataRole.ToolTipRole:
+                return (
+                    f"Folder: {folder_dir}\n💡 Ctrl+Click or Cmd+Click to open folder in Finder"
+                    if folder_dir
+                    else "Folder: (None)"
+                )
+            elif role == Qt.ItemDataRole.ForegroundRole:
+                return self._color_muted
+
+        # 14. FILE_NAME
+        elif col_name == TrackColumn.FILE_NAME:
+            file_name = t.get("file_name") or t.get("filename") or "—"
+            file_path = t.get("file_path") or t.get("folder_path") or ""
+            if role == Qt.ItemDataRole.DisplayRole:
+                return file_name
+            elif role == Qt.ItemDataRole.UserRole:
+                return file_path
+            elif role == Qt.ItemDataRole.ToolTipRole:
+                return (
+                    f"File: {file_path}\n💡 Ctrl+Click or Cmd+Click to reveal with highlight in Finder"
+                    if file_path
+                    else "File: (None)"
+                )
+            elif role == Qt.ItemDataRole.ForegroundRole:
+                return self._color_muted
+
+        return None
+
+    def sort(self, column: int, order: Qt.SortOrder = Qt.SortOrder.AscendingOrder) -> None:
+        if not (0 <= column < len(self.config.columns)):
+            return
+
+        col_name = self.config.columns[column]
+        is_reverse = (order == Qt.SortOrder.DescendingOrder)
+
+        def get_sort_key(t: Dict[str, Any]) -> Any:
+            if col_name == TrackColumn.INDEX:
+                return int(t.get("track_no") or 0)
+            elif col_name == TrackColumn.TITLE:
+                return (t.get("title") or "").lower()
+            elif col_name == TrackColumn.ARTIST:
+                return (t.get("artist") or "").lower()
+            elif col_name == TrackColumn.ALBUM:
+                return (t.get("album") or "").lower()
+            elif col_name == TrackColumn.KEY:
+                return (t.get("key") or "").lower()
+            elif col_name == TrackColumn.BPM:
+                return float(t.get("bpm") or 0.0)
+            elif col_name == TrackColumn.TIME:
+                return float(t.get("duration_sec") or 0)
+            elif col_name == TrackColumn.PLAYS:
+                return int(t.get("play_count") or 0)
+            elif col_name == TrackColumn.BITRATE:
+                return int(t.get("bitrate") or 0)
+            elif col_name == TrackColumn.FILE_TYPE:
+                return (t.get("file_type") or "").lower()
+            elif col_name == TrackColumn.TAGS:
+                tags = t.get("tags") or []
+                return ", ".join(tags).lower()
+            elif col_name == TrackColumn.PLAYLISTS:
+                playlists = t.get("playlists") or []
+                return ", ".join(playlists).lower()
+            elif col_name == TrackColumn.FOLDER:
+                return (t.get("folder_name") or "").lower()
+            elif col_name == TrackColumn.FILE_NAME:
+                return (t.get("file_name") or t.get("filename") or "").lower()
+            return ""
+
+        self.layoutAboutToBeChanged.emit()
+        self.records.sort(key=get_sort_key, reverse=is_reverse)
+        self.layoutChanged.emit()
+
+
+class TracksTableWidget(QTableView):
+    """Customizable tracklist table view supporting rich badges, Cmd-clicks, and context menu."""
 
     folder_clicked = Signal(str)
     file_clicked = Signal(str)
@@ -424,11 +859,19 @@ class TracksTableWidget(QTableWidget):
             self._key_filter = ModifierKeyFilter(self._on_modifier_changed, self)
             app.installEventFilter(self._key_filter)
 
+        self._model = TracksTableModel(records=self.records, config=self.config, parent=self)
+        self.setModel(self._model)
+
+        self.doubleClicked.connect(self._on_cell_double_clicked)
+        self.customContextMenuRequested.connect(self._on_table_context_menu)
+        self.horizontalHeader().sectionClicked.connect(self._on_header_section_clicked)
+
         self._init_table_structure()
 
     def configure(self, config: TrackTableConfig) -> None:
         """Reconfigure table columns and behavior."""
         self.config = config
+        self._model.set_config(config)
         self._init_table_structure()
         if self.records:
             self.set_tracks(self.records)
@@ -436,12 +879,10 @@ class TracksTableWidget(QTableWidget):
     def _init_table_structure(self) -> None:
         """Set up columns, resize modes, alignments, tooltips, and delegates."""
         cols = self.config.columns
-        self.setColumnCount(len(cols))
-        self.setHorizontalHeaderLabels(cols)
 
         self.setAlternatingRowColors(True)
-        self.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
+        self.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
+        self.setSelectionMode(QTableView.SelectionMode.ExtendedSelection)
         self.verticalHeader().setDefaultSectionSize(36)
         self.verticalHeader().setVisible(False)
 
@@ -453,13 +894,11 @@ class TracksTableWidget(QTableWidget):
             self.setSortingEnabled(True)
         else:
             self.setSortingEnabled(False)
-            header.sectionClicked.connect(self._on_header_section_clicked)
 
         if self.config.enable_context_menu:
             self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-            self.customContextMenuRequested.connect(self._on_table_context_menu)
-
-        self.cellDoubleClicked.connect(self._on_cell_double_clicked)
+        else:
+            self.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
 
         # Delegate singletons
         file_type_delegate = FileTypeBadgeDelegate(parent=self)
@@ -481,23 +920,10 @@ class TracksTableWidget(QTableWidget):
         self._file_col_idx = -1
 
         for col_idx, col_name in enumerate(cols):
-            # Center alignments
-            if col_name in (
-                TrackColumn.INDEX,
-                TrackColumn.KEY,
-                TrackColumn.BPM,
-                TrackColumn.TIME,
-                TrackColumn.PLAYS,
-                TrackColumn.BITRATE,
-                TrackColumn.FILE_TYPE,
-            ):
-                h_item = self.horizontalHeaderItem(col_idx)
-                if h_item:
-                    h_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-
             # Resize modes and widths
             if col_name == TrackColumn.INDEX:
-                header.setSectionResizeMode(col_idx, QHeaderView.ResizeMode.ResizeToContents)
+                header.setSectionResizeMode(col_idx, QHeaderView.ResizeMode.Interactive)
+                self.setColumnWidth(col_idx, 58)
             elif col_name == TrackColumn.TITLE:
                 header.setSectionResizeMode(col_idx, QHeaderView.ResizeMode.Interactive)
                 self.setColumnWidth(col_idx, 190)
@@ -542,32 +968,6 @@ class TracksTableWidget(QTableWidget):
                 self.setItemDelegateForColumn(col_idx, path_link_delegate)
                 self._file_col_idx = col_idx
 
-            # Header Tooltips
-            tip = self._get_header_tooltip(col_name)
-            h_item = self.horizontalHeaderItem(col_idx)
-            if h_item and tip:
-                h_item.setToolTip(tip)
-
-    def _get_header_tooltip(self, col_name: str) -> str:
-        if col_name == TrackColumn.INDEX:
-            return self.config.index_header_tooltip
-        tooltips = {
-            TrackColumn.TITLE: "Sort by Title",
-            TrackColumn.ARTIST: "Sort by Artist",
-            TrackColumn.ALBUM: "Sort by Album",
-            TrackColumn.KEY: "Sort by Musical / Camelot Key",
-            TrackColumn.BPM: "Sort by BPM (Tempos)",
-            TrackColumn.TIME: "Sort by Track Duration",
-            TrackColumn.PLAYS: "Sort by Play Count",
-            TrackColumn.BITRATE: "Sort by Audio Bitrate",
-            TrackColumn.FILE_TYPE: "Sort by File Type (MP3, AIFF, FLAC, etc.)",
-            TrackColumn.TAGS: "Sort by Tags",
-            TrackColumn.PLAYLISTS: "Sort by Real Playlists",
-            TrackColumn.FOLDER: "Sort by Folder (Ctrl+Click or Cmd+Click cell to open in Finder)",
-            TrackColumn.FILE_NAME: "Sort by File Name (Ctrl+Click or Cmd+Click cell to reveal with highlight in Finder)",
-        }
-        return tooltips.get(col_name, "")
-
     def _on_modifier_changed(self) -> None:
         self._update_hover_state()
 
@@ -584,11 +984,11 @@ class TracksTableWidget(QTableWidget):
                 mod & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.MetaModifier)
             )
             if is_cmd:
-                item = self.itemAt(mouse_pos)
-                if item and item.column() in (self._folder_col_idx, self._file_col_idx):
-                    path_data = item.data(Qt.ItemDataRole.UserRole)
+                idx = self.indexAt(mouse_pos)
+                if idx.isValid() and idx.column() in (self._folder_col_idx, self._file_col_idx):
+                    path_data = idx.data(Qt.ItemDataRole.UserRole)
                     if path_data and str(path_data) not in ("", "—"):
-                        new_cell = (item.row(), item.column())
+                        new_cell = (idx.row(), idx.column())
 
         if new_cell != self.hovered_link_cell:
             self.hovered_link_cell = new_cell
@@ -613,18 +1013,18 @@ class TracksTableWidget(QTableWidget):
         if event.button() == Qt.MouseButton.LeftButton and self.config.enable_finder_clicks:
             mod = event.modifiers()
             if mod & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.MetaModifier):
-                item = self.itemAt(event.position().toPoint())
-                if item:
-                    col = item.column()
+                idx = self.indexAt(event.position().toPoint())
+                if idx.isValid():
+                    col = idx.column()
                     if col == self._folder_col_idx:
-                        path_data = item.data(Qt.ItemDataRole.UserRole)
+                        path_data = idx.data(Qt.ItemDataRole.UserRole)
                         if path_data and str(path_data) not in ("", "—"):
                             self.open_folder(str(path_data))
                             self.folder_clicked.emit(str(path_data))
                             event.accept()
                             return
                     elif col == self._file_col_idx:
-                        path_data = item.data(Qt.ItemDataRole.UserRole)
+                        path_data = idx.data(Qt.ItemDataRole.UserRole)
                         if path_data and str(path_data) not in ("", "—"):
                             self.reveal_file(str(path_data))
                             self.file_clicked.emit(str(path_data))
@@ -682,166 +1082,132 @@ class TracksTableWidget(QTableWidget):
     def set_tracks(self, records: List[Dict[str, Any]]) -> None:
         """Populate the table with records according to the active configuration."""
         self.records = records
-        self.setSortingEnabled(False)
-        self.setRowCount(0)
+        self._model.set_records(records)
+        self._update_index_column_width()
 
-        cols = self.config.columns
-
-        for row_idx, t in enumerate(records):
-            self.insertRow(row_idx)
-
-            for col_idx, col_name in enumerate(cols):
-                item = self._create_item_for_column(col_name, t, row_idx)
-                item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
-                self.setItem(row_idx, col_idx, item)
-
-        if self.config.sorting_mode == "client":
-            self.setSortingEnabled(True)
+    def _update_index_column_width(self) -> None:
+        """Ensure column 0 (#) has plenty of room for all digits and never truncates with ellipsis."""
+        if TrackColumn.INDEX in self.config.columns:
+            col_idx = self.config.columns.index(TrackColumn.INDEX)
+            max_val = max(len(self.records), 999)
+            fm = self.fontMetrics()
+            num_w = fm.horizontalAdvance(str(max_val))
+            header_w = fm.horizontalAdvance(" # ")
+            col_w = max(58, max(num_w, header_w) + 26)
+            self.setColumnWidth(col_idx, col_w)
 
     def update_track_playlists(self, row_idx: int, playlists: List[str]) -> None:
         """Update the playlists column cell for a specific row without rebuilding table."""
-        if TrackColumn.PLAYLISTS in self.config.columns and 0 <= row_idx < self.rowCount():
-            col_idx = self.config.columns.index(TrackColumn.PLAYLISTS)
-            item = QTableWidgetItem(", ".join(playlists) if playlists else "—")
-            item.setData(Qt.ItemDataRole.UserRole, playlists)
-            item.setToolTip(
-                f"Playlists: {', '.join(playlists)}"
-                if playlists
-                else "Not in any playlist"
+        self._model.update_track_playlists(row_idx, playlists)
+
+    def rowCount(self) -> int:
+        """Return the number of rows in the table model."""
+        return self._model.rowCount()
+
+    def columnCount(self) -> int:
+        """Return the number of columns in the table model."""
+        return self._model.columnCount()
+
+    def setColumnCount(self, count: int) -> None:
+        """Compatibility no-op (column count is defined by table config)."""
+        pass
+
+    def setHorizontalHeaderLabels(self, labels: List[str]) -> None:
+        """Compatibility no-op (labels are managed by TracksTableModel)."""
+        pass
+
+    def horizontalHeaderItem(self, col_idx: int) -> Optional[_TableItemProxy]:
+        """Compatibility accessor returning header item proxy for tooltips/text."""
+        if 0 <= col_idx < self.columnCount():
+            name = str(
+                self._model.headerData(
+                    col_idx, Qt.Orientation.Horizontal, Qt.ItemDataRole.DisplayRole
+                )
+                or ""
             )
-            item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
-            self.setItem(row_idx, col_idx, item)
-            if 0 <= row_idx < len(self.records):
-                self.records[row_idx]["playlists"] = list(playlists)
+            tip = str(
+                self._model.headerData(
+                    col_idx, Qt.Orientation.Horizontal, Qt.ItemDataRole.ToolTipRole
+                )
+                or ""
+            )
+            return _TableItemProxy(row=-1, col=col_idx, text_val=name, user_data=tip, tip_val=tip)
+        return None
+
+    def item(self, row: int, col: int) -> Optional[_TableItemProxy]:
+        """Compatibility accessor returning a lightweight item proxy for callers/tests."""
+        if 0 <= row < self.rowCount() and 0 <= col < self.columnCount():
+            idx = self._model.index(row, col)
+            text_val = str(self._model.data(idx, Qt.ItemDataRole.DisplayRole) or "")
+            user_data = self._model.data(idx, Qt.ItemDataRole.UserRole)
+            font_val = self._model.data(idx, Qt.ItemDataRole.FontRole)
+            fg_val = self._model.data(idx, Qt.ItemDataRole.ForegroundRole)
+            align_val = self._model.data(idx, Qt.ItemDataRole.TextAlignmentRole)
+            tip_val = str(self._model.data(idx, Qt.ItemDataRole.ToolTipRole) or "")
+            return _TableItemProxy(
+                row=row,
+                col=col,
+                text_val=text_val,
+                user_data=user_data,
+                font_val=font_val,
+                fg_val=fg_val,
+                align_val=align_val,
+                tip_val=tip_val,
+            )
+        return None
+
+    def selected_rows(self) -> List[int]:
+        """Return list of selected row indices."""
+        sel_model = self.selectionModel()
+        if not sel_model:
+            return []
+        return [idx.row() for idx in sel_model.selectedRows()]
+
+    def selected_records(self) -> List[Dict[str, Any]]:
+        """Return list of track dictionary records for selected rows."""
+        return [self.records[r] for r in self.selected_rows() if 0 <= r < len(self.records)]
+
+    def selectedItems(self) -> List[_TableItemProxy]:
+        """Compatibility accessor returning item proxies for selected rows."""
+        return [_TableItemProxy(row=r, col=0, text_val="") for r in self.selected_rows()]
+
+    def scrollToRow(self, row: int) -> None:
+        """Scroll to the specified row smoothly."""
+        if 0 <= row < self.rowCount():
+            idx = self._model.index(row, 0)
+            self.scrollTo(idx, QTableView.ScrollHint.EnsureVisible)
+
+    def scrollToItem(self, item: Any) -> None:
+        """Compatibility scroll method supporting row proxy or index."""
+        if hasattr(item, "row"):
+            self.scrollToRow(item.row())
+        elif isinstance(item, int):
+            self.scrollToRow(item)
 
     def _create_item_for_column(
         self, col_name: str, t: Dict[str, Any], row_idx: int
-    ) -> QTableWidgetItem:
-        if col_name == TrackColumn.INDEX:
-            if self.config.index_mode == "track_no":
-                seq_val = int(t.get("track_no") or (row_idx + 1))
-            else:
-                seq_val = row_idx + 1
-            item = NumericTableWidgetItem(str(seq_val), float(seq_val))
-            item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            item.setForeground(QColor(COLOR_TEXT_MUTED))
-            return item
-
-        if col_name == TrackColumn.TITLE:
-            title_text = t.get("title") or "(Untitled)"
-            item = QTableWidgetItem(title_text)
-            font = item.font()
-            font.setBold(True)
-            item.setFont(font)
-            item.setForeground(QColor("#ffffff"))
-            item.setToolTip(title_text)
-            return item
-
-        if col_name == TrackColumn.ARTIST:
-            artist_text = t.get("artist") or "Unknown Artist"
-            item = QTableWidgetItem(artist_text)
-            item.setForeground(QColor(COLOR_TEXT_SECONDARY))
-            item.setToolTip(artist_text)
-            return item
-
-        if col_name == TrackColumn.ALBUM:
-            album_text = t.get("album") or "—"
-            item = QTableWidgetItem(album_text)
-            item.setForeground(QColor(COLOR_TEXT_MUTED))
-            item.setToolTip(t.get("album") or "")
-            return item
-
-        if col_name == TrackColumn.KEY:
-            key_text = t.get("key") or "—"
-            item = QTableWidgetItem(key_text)
-            item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            if t.get("key"):
-                item.setForeground(QColor(COLOR_BLUE))
-            else:
-                item.setForeground(QColor(COLOR_TEXT_MUTED))
-            return item
-
-        if col_name == TrackColumn.BPM:
-            bpm_val = float(t.get("bpm") or 0.0)
-            bpm_text = f"{bpm_val:.1f}" if bpm_val > 0 else "—"
-            item = NumericTableWidgetItem(bpm_text, bpm_val)
-            item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            return item
-
-        if col_name == TrackColumn.TIME:
-            dur_sec = float(t.get("duration_sec") or 0)
-            item = NumericTableWidgetItem(t.get("duration_str") or "--:--", dur_sec)
-            item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            return item
-
-        if col_name == TrackColumn.PLAYS:
-            plays_val = int(t.get("play_count") or 0)
-            item = NumericTableWidgetItem(str(plays_val), float(plays_val))
-            item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            if plays_val > 0:
-                item.setForeground(QColor(COLOR_GREEN))
-            return item
-
-        if col_name == TrackColumn.BITRATE:
-            br_val = int(t.get("bitrate") or 0)
-            br_text = f"{br_val} kbps" if br_val > 0 else "—"
-            item = NumericTableWidgetItem(br_text, float(br_val))
-            item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            item.setForeground(QColor(COLOR_TEXT_MUTED))
-            return item
-
-        if col_name == TrackColumn.FILE_TYPE:
-            file_type = t.get("file_type") or "—"
-            item = QTableWidgetItem(file_type)
-            item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            item.setToolTip(f"Format: {file_type}")
-            return item
-
-        if col_name == TrackColumn.TAGS:
-            tags = t.get("tags") or []
-            item = QTableWidgetItem(", ".join(tags) if tags else "—")
-            item.setData(Qt.ItemDataRole.UserRole, tags)
-            item.setToolTip(f"Tags: {', '.join(tags)}" if tags else "No tags")
-            return item
-
-        if col_name == TrackColumn.PLAYLISTS:
-            playlists = t.get("playlists") or []
-            item = QTableWidgetItem(", ".join(playlists) if playlists else "—")
-            item.setData(Qt.ItemDataRole.UserRole, playlists)
-            item.setToolTip(
-                f"Playlists: {', '.join(playlists)}"
-                if playlists
-                else "Not in any playlist"
+    ) -> _TableItemProxy:
+        """Compatibility helper generating item proxy for a column."""
+        if col_name in self.config.columns:
+            col_idx = self.config.columns.index(col_name)
+            idx = self._model.index(row_idx, col_idx)
+            text_val = str(self._model.data(idx, Qt.ItemDataRole.DisplayRole) or "")
+            user_data = self._model.data(idx, Qt.ItemDataRole.UserRole)
+            font_val = self._model.data(idx, Qt.ItemDataRole.FontRole)
+            fg_val = self._model.data(idx, Qt.ItemDataRole.ForegroundRole)
+            align_val = self._model.data(idx, Qt.ItemDataRole.TextAlignmentRole)
+            tip_val = str(self._model.data(idx, Qt.ItemDataRole.ToolTipRole) or "")
+            return _TableItemProxy(
+                row=row_idx,
+                col=col_idx,
+                text_val=text_val,
+                user_data=user_data,
+                font_val=font_val,
+                fg_val=fg_val,
+                align_val=align_val,
+                tip_val=tip_val,
             )
-            return item
-
-        if col_name == TrackColumn.FOLDER:
-            folder_name = t.get("folder_name") or "—"
-            folder_dir = t.get("folder_dir") or t.get("folder_path") or ""
-            item = QTableWidgetItem(folder_name)
-            item.setData(Qt.ItemDataRole.UserRole, folder_dir)
-            item.setToolTip(
-                f"Folder: {folder_dir}\n💡 Ctrl+Click or Cmd+Click to open folder in Finder"
-                if folder_dir
-                else "Folder: (None)"
-            )
-            item.setForeground(QColor(COLOR_TEXT_MUTED))
-            return item
-
-        if col_name == TrackColumn.FILE_NAME:
-            file_name = t.get("file_name") or t.get("filename") or "—"
-            file_path = t.get("file_path") or t.get("folder_path") or ""
-            item = QTableWidgetItem(file_name)
-            item.setData(Qt.ItemDataRole.UserRole, file_path)
-            item.setToolTip(
-                f"File: {file_path}\n💡 Ctrl+Click or Cmd+Click to reveal with highlight in Finder"
-                if file_path
-                else "File: (None)"
-            )
-            item.setForeground(QColor(COLOR_TEXT_MUTED))
-            return item
-
-        return QTableWidgetItem("—")
+        return _TableItemProxy(row=row_idx, col=0, text_val="—")
 
     def open_folder(self, folder_path: str) -> None:
         """Open folder in Finder/File Manager and emit status update."""
@@ -883,17 +1249,23 @@ class TracksTableWidget(QTableWidget):
                 msg = f"❌ File not found on disk: {file_path}"
         self.status_message.emit(msg)
 
-    def _on_cell_double_clicked(self, row: int, column: int) -> None:
+    def _on_cell_double_clicked(self, index_or_row: Any, column: Optional[int] = None) -> None:
         """Double clicking a track row emits track_detail_requested with track record."""
+        if isinstance(index_or_row, QModelIndex):
+            row = index_or_row.row()
+        elif isinstance(index_or_row, int):
+            row = index_or_row
+        else:
+            return
         if 0 <= row < len(self.records):
             self.track_detail_requested.emit(self.records[row])
 
     def _on_table_context_menu(self, pos: QPoint) -> None:
         """Right-click menu on track rows."""
-        item = self.itemAt(pos)
-        if not item:
+        idx = self.indexAt(pos)
+        if not idx.isValid():
             return
-        row = item.row()
+        row = idx.row()
         if row < 0 or row >= len(self.records):
             return
 

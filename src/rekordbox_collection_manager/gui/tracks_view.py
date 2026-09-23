@@ -99,17 +99,8 @@ class TracksView(QWidget):
         toolbar.addWidget(self.filter_combo, stretch=1)
 
         self.limit_combo = QComboBox()
-        self.limit_combo.addItems([
-            "Limit: 50",
-            "Limit: 100",
-            "Limit: 250",
-            "Limit: 500",
-            "Limit: 1000",
-            "Limit: 2500",
-            "All Tracks",
-        ])
-        self.limit_combo.setCurrentIndex(1)  # Default: Limit 100
         self.limit_combo.currentIndexChanged.connect(lambda _: self._execute_search())
+        self.update_limit_options(0)  # Initially hidden until total collection size is loaded
         toolbar.addWidget(self.limit_combo, stretch=1)
 
         self.search_btn = QPushButton("Search")
@@ -167,13 +158,41 @@ class TracksView(QWidget):
         """Reset view to collection tracks table list."""
         self.stack.setCurrentIndex(0)
 
+    def update_limit_options(self, total_tracks: int) -> None:
+        """Dynamically configure limit dropdown based on total collection tracks.
+
+        - If total_tracks <= 2500:
+          Limiter is hidden from the top bar and defaults to 'All Tracks'.
+        - If total_tracks > 2500:
+          Limiter is shown with increments of 2500 strictly less than total_tracks,
+          followed by 'All Tracks'. Defaults to 'Limit: 2500'.
+        """
+        self.total_collection_tracks = total_tracks
+        self.limit_combo.blockSignals(True)
+        self.limit_combo.clear()
+
+        if total_tracks <= 2500:
+            self.limit_combo.setVisible(False)
+            self.limit_combo.addItem("All Tracks", userData=0)
+            self.limit_combo.setCurrentIndex(0)
+        else:
+            self.limit_combo.setVisible(True)
+            limit_val = 2500
+            while limit_val < total_tracks:
+                self.limit_combo.addItem(f"Limit: {limit_val}", userData=limit_val)
+                limit_val += 2500
+            self.limit_combo.addItem("All Tracks", userData=0)
+            self.limit_combo.setCurrentIndex(0)  # Always default to Limit: 2500
+
+        self.limit_combo.blockSignals(False)
+
     def set_engine(
         self, engine: Engine, total_tracks: int = 0, db_path: Optional[str] = None
     ) -> None:
         """Assign active database engine and initiate initial track search."""
         self.engine = engine
         self.db_path = db_path
-        self.total_collection_tracks = total_tracks
+        self.update_limit_options(total_tracks)
         self._execute_search()
 
     def _on_search_text_changed(self, text: str) -> None:
@@ -195,10 +214,12 @@ class TracksView(QWidget):
 
         query = self.search_input.text().strip()
 
-        # Limit
-        limit_map = [50, 100, 250, 500, 1000, 2500, 0]
-        idx = self.limit_combo.currentIndex()
-        limit = limit_map[idx] if idx < len(limit_map) else 100
+        # Limit: None if hidden or 0 (All Tracks); otherwise int limit
+        if self.limit_combo.isHidden():
+            limit = None
+        else:
+            limit_data = self.limit_combo.currentData()
+            limit = int(limit_data) if (limit_data is not None and limit_data > 0) else None
 
         # Filter mode
         filter_mode_idx = self.filter_combo.currentIndex()
@@ -218,7 +239,7 @@ class TracksView(QWidget):
         self.active_search_worker = TrackSearchWorker(
             self.engine,
             query,
-            limit=limit if limit > 0 else None,
+            limit=limit,
             sort_by=self.current_sort_field,
             sort_order=sort_order_str,
             play_count_filter=play_filter,
@@ -336,17 +357,17 @@ class TracksView(QWidget):
                 self.table.update_track_playlists(idx, track["playlists"])
         if 0 <= idx < self.table.rowCount():
             self.table.selectRow(idx)
-            self.table.scrollToItem(self.table.item(idx, 0))
+            self.table.scrollToRow(idx)
 
     def _on_open_selected_track_detail(self) -> None:
         """Open details for currently selected table row."""
-        selected = self.table.selectedItems()
-        if not selected:
+        selected_rows = self.table.selected_rows()
+        if not selected_rows:
             msg = "⚠️ Select a track in the table to view details."
             self.status_label.setText(msg)
             self.notify_status.emit(msg)
             return
-        row = selected[0].row()
+        row = selected_rows[0]
         if 0 <= row < len(self.records):
             self._open_track_detail(self.records[row])
 

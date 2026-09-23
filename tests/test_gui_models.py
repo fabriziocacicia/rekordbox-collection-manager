@@ -1169,7 +1169,44 @@ class TestTracksView(unittest.TestCase):
         self.assertEqual(self.view.filter_combo.itemText(0), "All Tracks")
         self.assertEqual(self.view.filter_combo.itemText(1), "Played Tracks (> 0)")
         self.assertEqual(self.view.filter_combo.itemText(2), "Unplayed (0)")
-        self.assertEqual(self.view.limit_combo.currentIndex(), 1)  # Default: Limit 100
+        # Under 2500 tracks, limit_combo is hidden and defaults to All Tracks
+        self.assertTrue(self.view.limit_combo.isHidden())
+        self.assertEqual(self.view.limit_combo.currentText(), "All Tracks")
+
+    def test_tracks_view_dynamic_limit_logic(self):
+        # 1. Less than or equal to 2500 tracks -> Hidden, 'All Tracks'
+        self.view.update_limit_options(1500)
+        self.assertTrue(self.view.limit_combo.isHidden())
+        self.assertEqual(self.view.limit_combo.count(), 1)
+        self.assertEqual(self.view.limit_combo.itemText(0), "All Tracks")
+
+        # 2. Between 2501 and 5000 tracks -> Shown, ['Limit: 2500', 'All Tracks'], default 2500
+        self.view.update_limit_options(4000)
+        self.assertFalse(self.view.limit_combo.isHidden())
+        self.assertEqual(self.view.limit_combo.count(), 2)
+        self.assertEqual(self.view.limit_combo.itemText(0), "Limit: 2500")
+        self.assertEqual(self.view.limit_combo.itemText(1), "All Tracks")
+        self.assertEqual(self.view.limit_combo.currentIndex(), 0)
+
+        # 3. Between 5001 and 7500 tracks -> Shown, ['Limit: 2500', 'Limit: 5000', 'All Tracks']
+        self.view.update_limit_options(6000)
+        self.assertFalse(self.view.limit_combo.isHidden())
+        self.assertEqual(self.view.limit_combo.count(), 3)
+        self.assertEqual(self.view.limit_combo.itemText(0), "Limit: 2500")
+        self.assertEqual(self.view.limit_combo.itemText(1), "Limit: 5000")
+        self.assertEqual(self.view.limit_combo.itemText(2), "All Tracks")
+        self.assertEqual(self.view.limit_combo.currentIndex(), 0)
+
+        # 4. Over 10000 tracks
+        self.view.update_limit_options(11000)
+        self.assertFalse(self.view.limit_combo.isHidden())
+        self.assertEqual(self.view.limit_combo.count(), 5)
+        self.assertEqual(self.view.limit_combo.itemText(0), "Limit: 2500")
+        self.assertEqual(self.view.limit_combo.itemText(1), "Limit: 5000")
+        self.assertEqual(self.view.limit_combo.itemText(2), "Limit: 7500")
+        self.assertEqual(self.view.limit_combo.itemText(3), "Limit: 10000")
+        self.assertEqual(self.view.limit_combo.itemText(4), "All Tracks")
+        self.assertEqual(self.view.limit_combo.currentIndex(), 0)
 
     def test_tracks_view_population_and_read_only(self):
         self.view.records = list(self.mock_records)
@@ -1480,6 +1517,58 @@ class TestTracksTableWidget(unittest.TestCase):
         hint = delegate.sizeHint(opt, model_idx)
         self.assertGreater(hint.width(), 0)
         self.assertEqual(hint.height(), 36)
+
+    def test_large_collection_performance(self):
+        import time
+        from rekordbox_collection_manager.gui.track_table import (
+            DEFAULT_COLLECTION_COLUMNS,
+            TrackTableConfig,
+            TracksTableWidget,
+        )
+
+        cfg = TrackTableConfig(
+            columns=list(DEFAULT_COLLECTION_COLUMNS),
+            index_mode="row_number",
+            sorting_mode="server",
+        )
+        table = TracksTableWidget(config=cfg)
+
+        large_tracks = [
+            {
+                "id": str(i),
+                "title": f"Track {i}",
+                "artist": f"Artist {i % 100}",
+                "album": f"Album {i % 50}",
+                "key": "5A",
+                "bpm": 124.0,
+                "duration_sec": 180,
+                "duration_str": "3:00",
+                "play_count": i % 10,
+                "bitrate": 320,
+                "file_type": "AIFF",
+                "tags": ["Tag1", "Tag2"],
+                "playlists": ["PlaylistA"],
+                "folder_name": "Folder",
+                "folder_dir": "/Music/Folder",
+                "file_name": f"Track_{i}.aiff",
+                "file_path": f"/Music/Folder/Track_{i}.aiff",
+            }
+            for i in range(10000)
+        ]
+
+        t0 = time.perf_counter()
+        table.set_tracks(large_tracks)
+        elapsed_sec = time.perf_counter() - t0
+
+        # Assert instantaneous population (< 0.1s for 10k rows)
+        self.assertLess(elapsed_sec, 0.1, f"Table population took {elapsed_sec:.4f}s, expected < 0.1s")
+        self.assertEqual(table.rowCount(), 10000)
+        self.assertEqual(table.item(9999, 1).text(), "Track 9999")
+
+        # Assert selection and scrolling are instant
+        table.selectRow(5000)
+        table.scrollToRow(5000)
+        self.assertEqual(table.selected_rows(), [5000])
 
 
 if __name__ == "__main__":
