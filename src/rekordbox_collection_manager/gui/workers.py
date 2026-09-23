@@ -21,6 +21,7 @@ from rekordbox_collection_manager.rename_history import (
     soft_delete_history_session,
 )
 from rekordbox_collection_manager.utils import (
+    build_exclude_streaming_clause,
     detect_content_table,
     detect_history_table,
     open_database,
@@ -46,14 +47,15 @@ class DatabaseLoaderWorker(QThread):
             history_table = detect_history_table(engine)
             history_records = fetch_history_records(engine, history_table, include_deleted=True)
 
-            # Count total tracks
+            # Count total tracks (excluding deleted and streaming tracks)
             total_tracks = 0
             try:
                 content_table = detect_content_table(engine)
                 with engine.connect() as conn:
                     cols = {r[1] for r in conn.exec_driver_sql(f"PRAGMA table_info({content_table});").fetchall()}
-                    del_filter = "WHERE (rb_local_deleted = 0 OR rb_local_deleted IS NULL)" if "rb_local_deleted" in cols else ""
-                    row = conn.execute(text(f"SELECT count(*) FROM {content_table} {del_filter};")).fetchone()
+                    del_filter = "WHERE (rb_local_deleted = 0 OR rb_local_deleted IS NULL)" if "rb_local_deleted" in cols else "WHERE 1=1"
+                    streaming_filter = build_exclude_streaming_clause(cols, table_alias=None)
+                    row = conn.execute(text(f"SELECT count(*) FROM {content_table} {del_filter} {streaming_filter};")).fetchone()
                     total_tracks = int(row[0]) if row else 0
             except Exception:
                 total_tracks = 0
@@ -77,6 +79,7 @@ class TrackSearchWorker(QThread):
         sort_by: str = "title",
         sort_order: str = "asc",
         play_count_filter: Optional[str] = "all",
+        exclude_streaming: bool = True,
         parent: Optional[Any] = None,
     ):
         super().__init__(parent)
@@ -86,6 +89,7 @@ class TrackSearchWorker(QThread):
         self.sort_by = sort_by
         self.sort_order = sort_order
         self.play_count_filter = play_count_filter
+        self.exclude_streaming = exclude_streaming
 
     def run(self) -> None:
         try:
@@ -96,6 +100,7 @@ class TrackSearchWorker(QThread):
                 sort_by=self.sort_by,
                 sort_order=self.sort_order,
                 play_count_filter=self.play_count_filter,
+                exclude_streaming=self.exclude_streaming,
             )
             self.success.emit(self.query, records)
         except Exception as e:

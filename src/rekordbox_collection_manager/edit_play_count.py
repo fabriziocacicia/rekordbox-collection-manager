@@ -12,6 +12,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from rekordbox_collection_manager.utils import (
+    build_exclude_streaming_clause,
     detect_content_table,
     ensure_rekordbox_not_running,
     format_location_display,
@@ -78,13 +79,14 @@ def search_tracks(
     sort_order: str = "asc",
     play_count_filter: Optional[str] = "all",
     content_id: Optional[str] = None,
+    exclude_streaming: bool = True,
 ) -> List[Dict[str, Any]]:
     """Search for tracks matching query string with rich metadata support.
 
     Dynamically queries djmdContent (or generic content table) and joins
     artist, album, genre, key, tags, and real playlists when present.
     Supports text searching, play count filtering ('all', 'played', 'unplayed'),
-    and column sorting.
+    streaming track exclusion (Spotify, Apple Music, etc.), and column sorting.
     """
     if table_name is None:
         table_name = detect_content_table(engine)
@@ -195,6 +197,11 @@ def search_tracks(
             elif play_count_filter == "unplayed":
                 play_filter = f"AND ({play_col} = 0 OR {play_col} IS NULL)"
 
+            # Streaming tracks filter (exclude Spotify, Apple Music, and other streaming tracks)
+            streaming_filter = ""
+            if exclude_streaming and content_id is None:
+                streaming_filter = build_exclude_streaming_clause(cols, table_alias="c")
+
             # Search condition
             search_condition = ""
             if content_id is not None:
@@ -302,7 +309,7 @@ def search_tracks(
                     {color_expr}
                 FROM djmdContent c
                 {join_clause}
-                WHERE 1=1 {deleted_filter} {play_filter} {search_condition}
+                WHERE 1=1 {deleted_filter} {play_filter} {streaming_filter} {search_condition}
                 ORDER BY {order_clause}
                 {limit_clause};
             """
@@ -405,11 +412,15 @@ def search_tracks(
 
             limit_clause = "LIMIT :limit" if (limit and limit > 0) else ""
 
+            fallback_streaming_filter = ""
+            if exclude_streaming and content_id is None:
+                fallback_streaming_filter = build_exclude_streaming_clause(cols, table_alias=None)
+
             if content_id is not None:
                 where_clause = "WHERE ID = :content_id"
                 params = {"content_id": str(content_id)}
             else:
-                where_clause = f"WHERE Title LIKE :pattern {play_filter}"
+                where_clause = f"WHERE Title LIKE :pattern {play_filter} {fallback_streaming_filter}"
                 params = {"pattern": pattern}
 
             if limit and limit > 0:

@@ -42,6 +42,7 @@ class TestEditPlayCount(unittest.TestCase):
                     DJPlayCount INTEGER,
                     FolderPath VARCHAR(255),
                     FileNameL VARCHAR(255),
+                    FileType INTEGER DEFAULT 1,
                     rb_local_deleted INTEGER DEFAULT 0,
                     updated_at VARCHAR(255)
                 );
@@ -55,15 +56,17 @@ class TestEditPlayCount(unittest.TestCase):
             conn.exec_driver_sql("""
                 INSERT INTO djmdContent (
                     ID, Title, ArtistID, SrcArtistName, SearchStr, DJPlayCount,
-                    FolderPath, FileNameL, rb_local_deleted, updated_at
+                    FolderPath, FileNameL, FileType, rb_local_deleted, updated_at
                 )
                 VALUES 
-                    ('1', 'Titanium', 'art-1', 'David Guetta', 'titanium', 5, '/music/1.mp3', '1.mp3', 0, '2026-01-01'),
-                    ('2', 'One More Time', 'art-2', 'Daft Punk', 'one more time', 2, '/music/2.mp3', '2.mp3', 0, '2026-01-01'),
-                    ('3', 'Zero Plays Song', 'art-1', 'David Guetta', 'zero', 0, '/music/3.mp3', '3.mp3', 0, '2026-01-01'),
-                    ('4', 'Deleted Track Titanium', 'art-1', 'David Guetta', 'deleted titanium', 10, '/music/4.mp3', '4.mp3', 1, '2026-01-01'),
-                    ('5', 'Null Count Track', NULL, 'Solo Artist', 'null count', NULL, '/music/5.mp3', '5.mp3', 0, '2026-01-01'),
-                    ('6', 'Titanium Remix', 'art-1', 'David Guetta', 'titanium remix', 1, '/music/6.mp3', '6.mp3', 0, '2026-01-01');
+                    ('1', 'Titanium', 'art-1', 'David Guetta', 'titanium', 5, '/music/1.mp3', '1.mp3', 1, 0, '2026-01-01'),
+                    ('2', 'One More Time', 'art-2', 'Daft Punk', 'one more time', 2, '/music/2.mp3', '2.mp3', 1, 0, '2026-01-01'),
+                    ('3', 'Zero Plays Song', 'art-1', 'David Guetta', 'zero', 0, '/music/3.mp3', '3.mp3', 1, 0, '2026-01-01'),
+                    ('4', 'Deleted Track Titanium', 'art-1', 'David Guetta', 'deleted titanium', 10, '/music/4.mp3', '4.mp3', 1, 1, '2026-01-01'),
+                    ('5', 'Null Count Track', NULL, 'Solo Artist', 'null count', NULL, '/music/5.mp3', '5.mp3', 1, 0, '2026-01-01'),
+                    ('6', 'Titanium Remix', 'art-1', 'David Guetta', 'titanium remix', 1, '/music/6.mp3', '6.mp3', 1, 0, '2026-01-01'),
+                    ('7', '', NULL, NULL, 'spotify', 0, 'spotify:track:123', 'spotify:track:123', 25, 0, '2026-01-01'),
+                    ('8', 'Streaming Song', NULL, 'Apple Artist', 'streaming', 3, 'apple-music:tracks:456', 'apple-music:tracks:456', 26, 0, '2026-01-01');
             """)
 
     def test_parse_args_defaults(self):
@@ -164,6 +167,34 @@ class TestEditPlayCount(unittest.TestCase):
         self.assertIn("3", unplayed_ids)
         self.assertIn("5", unplayed_ids)
         self.assertNotIn("1", unplayed_ids)
+
+    def test_search_tracks_excludes_streaming_by_default(self):
+        # Default exclude_streaming=True
+        results = search_tracks(self.engine, "")
+        result_ids = {r["id"] for r in results}
+        # Local tracks should be present
+        self.assertIn("1", result_ids)
+        self.assertIn("2", result_ids)
+        self.assertIn("3", result_ids)
+        self.assertIn("5", result_ids)
+        self.assertIn("6", result_ids)
+        # Streaming tracks (Spotify ID 7, Apple Music ID 8) must NOT be present
+        self.assertNotIn("7", result_ids)
+        self.assertNotIn("8", result_ids)
+
+    def test_search_tracks_includes_streaming_when_flag_false(self):
+        # Explicit exclude_streaming=False
+        results = search_tracks(self.engine, "", exclude_streaming=False)
+        result_ids = {r["id"] for r in results}
+        self.assertIn("7", result_ids)
+        self.assertIn("8", result_ids)
+
+    def test_search_tracks_by_content_id_bypasses_streaming_filter(self):
+        # Direct lookup by content_id still retrieves track details
+        results = search_tracks(self.engine, "", content_id="7")
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["id"], "7")
+        self.assertEqual(results[0]["file_type"], "Spotify")
 
     def test_update_track_play_count_increment(self):
         old_count, new_count = update_track_play_count(self.engine, "1", delta=1)

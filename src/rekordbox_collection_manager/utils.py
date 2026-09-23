@@ -13,7 +13,7 @@ import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple, Union
 
 import questionary
 from pyrekordbox.db6.database import get_rekordbox_pid
@@ -674,6 +674,69 @@ def reveal_in_file_manager(path: str) -> bool:
         return False
 
 
+STREAMING_FILE_TYPES: Tuple[int, ...] = (25, 26)  # 25: Spotify, 26: Apple Music
+STREAMING_URI_PREFIXES: Tuple[str, ...] = (
+    "spotify:",
+    "apple-music:",
+    "beatport:",
+    "beatsource:",
+    "soundcloud:",
+    "tidal:",
+)
+
+
+def is_streaming_track(
+    raw_file_type: Any = None,
+    filename: Optional[str] = None,
+    folder_path: Optional[str] = None,
+    ext_info: Optional[str] = None,
+) -> bool:
+    """Check if a track is a streaming service track (Spotify, Apple Music, Tidal, etc.)."""
+    try:
+        if raw_file_type is not None and int(raw_file_type) in STREAMING_FILE_TYPES:
+            return True
+    except (ValueError, TypeError):
+        pass
+
+    target_str = filename or folder_path or ""
+    if any(target_str.startswith(prefix) for prefix in STREAMING_URI_PREFIXES):
+        return True
+
+    fp = folder_path or ""
+    if any(fp.startswith(prefix) for prefix in STREAMING_URI_PREFIXES):
+        return True
+
+    if ext_info and "StreamingInfo" in str(ext_info):
+        return True
+
+    return False
+
+
+def build_exclude_streaming_clause(cols: Set[str], table_alias: Optional[str] = "c") -> str:
+    """Build SQL WHERE conditions to exclude streaming tracks from queries."""
+    prefix = f"{table_alias}." if table_alias else ""
+    parts = []
+
+    if "FileType" in cols:
+        ft_list = ", ".join(str(ft) for ft in STREAMING_FILE_TYPES)
+        parts.append(f"({prefix}FileType NOT IN ({ft_list}) OR {prefix}FileType IS NULL)")
+
+    if "FileNameL" in cols:
+        for p in STREAMING_URI_PREFIXES:
+            parts.append(f"({prefix}FileNameL NOT LIKE '{p}%' OR {prefix}FileNameL IS NULL)")
+
+    if "FolderPath" in cols:
+        for p in STREAMING_URI_PREFIXES:
+            parts.append(f"({prefix}FolderPath NOT LIKE '{p}%' OR {prefix}FolderPath IS NULL)")
+
+    if "ExtInfo" in cols:
+        parts.append(f"({prefix}ExtInfo NOT LIKE '%StreamingInfo%' OR {prefix}ExtInfo IS NULL)")
+
+    if not parts:
+        return ""
+    return "AND " + " AND ".join(parts)
+
+
 def resolve_file_type(
     raw_file_type: Any,
     filename: Optional[str] = None,
@@ -702,6 +765,9 @@ def resolve_file_type(
         return "Apple Music"
     if target_str.startswith("spotify:"):
         return "Spotify"
+    for prefix in STREAMING_URI_PREFIXES:
+        if target_str.startswith(prefix):
+            return prefix.rstrip(":").replace("-", " ").title()
 
     ext = os.path.splitext(target_str)[1].lstrip(".").upper()
     if ext:
@@ -719,7 +785,7 @@ def format_location_display(
     """Return 'containing_folder/filename' if containing folder exists, else filename or path."""
     fp = folder_path or ""
     fn = filename or ""
-    if fp.startswith("apple-music:") or fp.startswith("spotify:"):
+    if any(fp.startswith(p) for p in STREAMING_URI_PREFIXES):
         return fp
 
     if fp:
@@ -749,7 +815,7 @@ def resolve_file_and_folder_paths(
     fp = folder_path or ""
     fn = filename or ""
 
-    if fp.startswith("apple-music:") or fp.startswith("spotify:"):
+    if any(fp.startswith(p) for p in STREAMING_URI_PREFIXES):
         return ("Streaming", fp, fn or fp, fp)
 
     if not fp and not fn:

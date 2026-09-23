@@ -19,6 +19,10 @@ from rekordbox_collection_manager.utils import (
     extract_year_month_from_name_or_date,
     get_rekordbox_timestamp,
     is_rekordbox_running,
+    STREAMING_FILE_TYPES,
+    STREAMING_URI_PREFIXES,
+    build_exclude_streaming_clause,
+    is_streaming_track,
     natural_sort_key,
     normalize_date_input,
     parse_history_name,
@@ -331,6 +335,48 @@ class TestUtils(unittest.TestCase):
         self.assertEqual(compose_played_with([]), "")
         self.assertEqual(compose_played_with(None), "")
         self.assertEqual(compose_played_with(["  Carl Cox  ", ""]), "Carl Cox")
+
+    # --- Streaming Detection & Filtering ---
+
+    def test_is_streaming_track(self):
+        # 1. By FileType
+        self.assertTrue(is_streaming_track(raw_file_type=25))
+        self.assertTrue(is_streaming_track(raw_file_type=26))
+        self.assertTrue(is_streaming_track(raw_file_type="25"))
+        self.assertFalse(is_streaming_track(raw_file_type=1))
+        self.assertFalse(is_streaming_track(raw_file_type=12))
+
+        # 2. By URI Scheme in filename or folder_path
+        self.assertTrue(is_streaming_track(filename="spotify:track:123"))
+        self.assertTrue(is_streaming_track(folder_path="spotify:track:123"))
+        self.assertTrue(is_streaming_track(filename="apple-music:tracks:456"))
+        self.assertTrue(is_streaming_track(folder_path="beatport:track:789"))
+        self.assertTrue(is_streaming_track(folder_path="tidal:track:999"))
+        self.assertTrue(is_streaming_track(folder_path="soundcloud:track:888"))
+
+        # 3. By ExtInfo StreamingInfo
+        self.assertTrue(is_streaming_track(ext_info='{"StreamingInfo": {"AudioQuality": "4"}}'))
+
+        # 4. Standard local files
+        self.assertFalse(is_streaming_track(
+            raw_file_type=1,
+            filename="Track.mp3",
+            folder_path="/Users/dj/Music/Track.mp3",
+            ext_info="null",
+        ))
+
+    def test_build_exclude_streaming_clause(self):
+        cols = {"FileType", "FileNameL", "FolderPath", "ExtInfo"}
+        clause_c = build_exclude_streaming_clause(cols, table_alias="c")
+        self.assertIn("c.FileType NOT IN (25, 26)", clause_c)
+        self.assertIn("c.FileNameL NOT LIKE 'spotify:%'", clause_c)
+        self.assertIn("c.FolderPath NOT LIKE 'apple-music:%'", clause_c)
+        self.assertIn("c.ExtInfo NOT LIKE '%StreamingInfo%'", clause_c)
+
+        # Generic table without alias
+        clause_no_alias = build_exclude_streaming_clause(cols, table_alias=None)
+        self.assertIn("FileType NOT IN (25, 26)", clause_no_alias)
+        self.assertNotIn("c.FileType", clause_no_alias)
 
 
 if __name__ == "__main__":
