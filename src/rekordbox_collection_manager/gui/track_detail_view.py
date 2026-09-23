@@ -132,6 +132,7 @@ class TrackDetailView(QWidget):
 
     back_clicked = Signal()
     open_history_session_requested = Signal(str)  # Emits history_id
+    open_playlist_requested = Signal(str)  # Emits playlist_id or playlist_name
     status_message = Signal(str)
     track_changed = Signal(int, dict)  # Emits (current_index, track_dict)
     replace_file_requested = Signal(dict)  # Emits track_dict to open Replace File tool
@@ -378,6 +379,7 @@ class TrackDetailView(QWidget):
         self.playlists_container = PlaylistChipsContainer(parent=self)
         self.playlists_container.playlist_added.connect(self._on_playlist_added_or_removed)
         self.playlists_container.playlist_removed.connect(self._on_playlist_added_or_removed)
+        self.playlists_container.playlist_clicked.connect(self.open_playlist_requested.emit)
         cat_layout.addWidget(self.playlists_container)
 
         # Comments (if present)
@@ -1386,6 +1388,7 @@ class TrackDetailDialog(QDialog):
     """Compatibility dialog wrapper hosting TrackDetailView inside a modal dialog if needed."""
 
     open_history_session_requested = Signal(str)
+    open_playlist_requested = Signal(str)
     status_message = Signal(str)
     track_changed = Signal(int, dict)
 
@@ -1424,6 +1427,7 @@ class TrackDetailDialog(QDialog):
         )
         self.detail_view.back_clicked.connect(self.reject)
         self.detail_view.open_history_session_requested.connect(self._on_open_history_session)
+        self.detail_view.open_playlist_requested.connect(self._on_open_playlist)
         self.detail_view.status_message.connect(self.status_message.emit)
         self.detail_view.track_changed.connect(self.track_changed.emit)
         layout.addWidget(self.detail_view)
@@ -1435,6 +1439,10 @@ class TrackDetailDialog(QDialog):
 
     def _on_open_history_session(self, history_id: str) -> None:
         self.open_history_session_requested.emit(history_id)
+        self.accept()
+
+    def _on_open_playlist(self, playlist_name_or_id: str) -> None:
+        self.open_playlist_requested.emit(playlist_name_or_id)
         self.accept()
 
     def closeEvent(self, event) -> None:

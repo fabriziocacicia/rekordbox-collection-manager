@@ -39,6 +39,7 @@ from rekordbox_collection_manager.gui.assets import (
 )
 from rekordbox_collection_manager.gui.history_view import HistoryView
 from rekordbox_collection_manager.gui.play_count_view import PlayCountView
+from rekordbox_collection_manager.gui.playlists_view import PlaylistsView
 from rekordbox_collection_manager.gui.replace_file_view import ReplaceFileView
 from rekordbox_collection_manager.gui.restore_dialog import RestoreDialog
 from rekordbox_collection_manager.gui.tracks_view import TracksView
@@ -139,16 +140,21 @@ class MainWindow(QMainWindow):
             },
             {
                 "id": 2,
+                "icon": "📁",
+                "title": "Playlists",
+            },
+            {
+                "id": 3,
                 "icon": "🔢",
                 "title": "Play Counts",
             },
             {
-                "id": 3,
+                "id": 4,
                 "icon": "🔄",
                 "title": "Replace File",
             },
             {
-                "id": 4,
+                "id": 5,
                 "icon": "ℹ️",
                 "title": "Collection Info",
             },
@@ -297,9 +303,10 @@ class MainWindow(QMainWindow):
 
         self.btn_history = self.nav_buttons[0]
         self.btn_tracks = self.nav_buttons[1]
-        self.btn_play_count = self.nav_buttons[2]
-        self.btn_replace_file = self.nav_buttons[3]
-        self.btn_info = self.nav_buttons[4]
+        self.btn_playlists = self.nav_buttons[2]
+        self.btn_play_count = self.nav_buttons[3]
+        self.btn_replace_file = self.nav_buttons[4]
+        self.btn_info = self.nav_buttons[5]
 
         sidebar_layout.addStretch(1)
 
@@ -326,16 +333,26 @@ class MainWindow(QMainWindow):
         self.history_view = HistoryView(self)
         self.history_view.notify_status.connect(self._show_status_message)
         self.history_view.request_reload.connect(lambda: self.load_database(self.db_path))
+        self.history_view.open_playlist_requested.connect(self.open_playlist)
         self.stacked_widget.addWidget(self.history_view)
 
         self.tracks_view = TracksView(self)
         self.tracks_view.notify_status.connect(self._show_status_message)
         self.tracks_view.open_history_session_requested.connect(self.open_history_session)
+        self.tracks_view.open_playlist_requested.connect(self.open_playlist)
         self.stacked_widget.addWidget(self.tracks_view)
+
+        self.playlists_view = PlaylistsView(self)
+        self.playlists_view.notify_status.connect(self._show_status_message)
+        self.playlists_view.open_history_session_requested.connect(self.open_history_session)
+        self.playlists_view.open_playlist_requested.connect(self.open_playlist)
+        self.playlists_view.replace_file_requested.connect(self.open_replace_file_for_track)
+        self.stacked_widget.addWidget(self.playlists_view)
 
         self.play_count_view = PlayCountView(self)
         self.play_count_view.notify_status.connect(self._show_status_message)
         self.play_count_view.open_history_session_requested.connect(self.open_history_session)
+        self.play_count_view.open_playlist_requested.connect(self.open_playlist)
         self.stacked_widget.addWidget(self.play_count_view)
 
         self.replace_file_view = ReplaceFileView(self)
@@ -368,7 +385,9 @@ class MainWindow(QMainWindow):
                 self.history_view.reset_to_list()
             elif page_id == 1 and hasattr(self.tracks_view, "reset_to_list"):
                 self.tracks_view.reset_to_list()
-            elif page_id == 2 and hasattr(self.play_count_view, "reset_to_list"):
+            elif page_id == 2 and hasattr(self.playlists_view, "reset_to_list"):
+                self.playlists_view.reset_to_list()
+            elif page_id == 3 and hasattr(self.play_count_view, "reset_to_list"):
                 self.play_count_view.reset_to_list()
         self.stacked_widget.setCurrentIndex(page_id)
 
@@ -379,11 +398,18 @@ class MainWindow(QMainWindow):
         self.stacked_widget.setCurrentIndex(0)
         self.history_view.open_session_by_id(history_id)
 
+    def open_playlist(self, playlist_name_or_id: str) -> None:
+        """Switch navigation to Playlists tab and select the requested playlist."""
+        if self.nav_buttons and len(self.nav_buttons) > 2:
+            self.nav_buttons[2].setChecked(True)
+        self.stacked_widget.setCurrentIndex(2)
+        self.playlists_view.open_playlist_by_id_or_name(playlist_name_or_id)
+
     def open_replace_file_for_track(self, track_data: Dict[str, Any]) -> None:
         """Switch navigation to Replace File tab and preselect track."""
-        if self.nav_buttons and len(self.nav_buttons) > 3:
-            self.nav_buttons[3].setChecked(True)
-        self.stacked_widget.setCurrentIndex(3)
+        if self.nav_buttons and len(self.nav_buttons) > 4:
+            self.nav_buttons[4].setChecked(True)
+        self.stacked_widget.setCurrentIndex(4)
         self.replace_file_view.preselect_track(track_data)
 
     def toggle_sidebar(self) -> None:
@@ -544,6 +570,7 @@ class MainWindow(QMainWindow):
         # Populate Views
         self.history_view.set_data(engine, history_records, db_path=path)
         self.tracks_view.set_engine(engine, total_tracks=total_tracks, db_path=path)
+        self.playlists_view.set_engine(engine, db_path=path)
         self.play_count_view.set_engine(engine, db_path=path)
         self.replace_file_view.set_engine(engine, db_path=path)
 

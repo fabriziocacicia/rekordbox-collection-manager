@@ -142,12 +142,14 @@ class BadgeChip(QFrame):
     """
 
     delete_requested = Signal(str)
+    clicked = Signal(str)
 
     def __init__(
         self,
         text: str,
         scheme: str = "teal",
         removable: bool = False,
+        clickable: bool = False,
         parent: Optional[QWidget] = None,
     ):
         super().__init__(parent)
@@ -156,7 +158,11 @@ class BadgeChip(QFrame):
         self.scheme_name = scheme
         self.scheme = CHIP_SCHEMES.get(scheme, CHIP_SCHEMES["teal"])
         self.removable = removable
+        self.clickable = clickable
         self._hovered = False
+
+        if self.clickable:
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
 
         self.headroom_top = 4 if removable else 0
         self.headroom_bottom = 4 if removable else 0
@@ -188,6 +194,18 @@ class BadgeChip(QFrame):
             self.x_btn.setVisible(False)
             self.x_btn.clicked.connect(lambda: self.delete_requested.emit(self.text))
             self._position_x_btn()
+
+    def mousePressEvent(self, event: Any) -> None:
+        if event.button() == Qt.MouseButton.LeftButton and self.clickable:
+            if hasattr(self, "x_btn") and self.x_btn.isVisible():
+                pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+                if self.x_btn.geometry().contains(pos):
+                    super().mousePressEvent(event)
+                    return
+            self.clicked.emit(self.text)
+            event.accept()
+            return
+        super().mousePressEvent(event)
 
     def text(self) -> str:
         return self.label.text()
@@ -269,8 +287,9 @@ class BadgeChip(QFrame):
 class PlaylistChip(BadgeChip):
     """Specialized removable badge chip for playlist membership (teal color scheme)."""
 
-    def __init__(self, name: str, parent: Optional[QWidget] = None):
-        super().__init__(text=name, scheme="teal", removable=True, parent=parent)
+    def __init__(self, name: str, parent: Optional[QWidget] = None, clickable: bool = True):
+        super().__init__(text=name, scheme="teal", removable=True, clickable=clickable, parent=parent)
+        self.setToolTip(f"Open playlist '{name}' (click to view)")
 
 
 class TagChip(BadgeChip):
@@ -453,6 +472,7 @@ class EditableChipsContainer(QWidget):
     item_added = Signal(str)
     item_removed = Signal(str)
     items_changed = Signal(list)
+    item_clicked = Signal(str)
     editing_state_changed = Signal(bool)
 
     def __init__(
@@ -583,6 +603,8 @@ class EditableChipsContainer(QWidget):
         for name in self.items:
             chip = self.chip_class(name, self)
             chip.delete_requested.connect(self._on_chip_delete)
+            if hasattr(chip, "clicked"):
+                chip.clicked.connect(self.item_clicked.emit)
             self.chips.append(chip)
             self.flow_layout.addWidget(chip)
 
@@ -651,6 +673,8 @@ class EditableChipsContainer(QWidget):
             self.all_available_items.append(name)
         chip = self.chip_class(name, self)
         chip.delete_requested.connect(self._on_chip_delete)
+        if hasattr(chip, "clicked"):
+            chip.clicked.connect(self.item_clicked.emit)
         self.chips.append(chip)
 
         self.flow_layout.removeWidget(self.input_edit)
@@ -723,6 +747,7 @@ class PlaylistChipsContainer(EditableChipsContainer):
 
     playlist_added = Signal(str)
     playlist_removed = Signal(str)
+    playlist_clicked = Signal(str)
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(
@@ -736,6 +761,7 @@ class PlaylistChipsContainer(EditableChipsContainer):
         )
         self.item_added.connect(self.playlist_added.emit)
         self.item_removed.connect(self.playlist_removed.emit)
+        self.item_clicked.connect(self.playlist_clicked.emit)
 
     @property
     def playlists(self) -> List[str]:

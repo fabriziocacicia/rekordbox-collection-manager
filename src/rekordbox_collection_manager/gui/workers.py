@@ -12,6 +12,10 @@ from rekordbox_collection_manager.edit_play_count import (
     set_track_play_count,
     update_track_play_count,
 )
+from rekordbox_collection_manager.playlists import (
+    fetch_playlist_tracks,
+    fetch_playlists_tree,
+)
 from rekordbox_collection_manager.rename_history import (
     batch_update_history_records,
     fetch_history_records,
@@ -454,4 +458,67 @@ class HistoryRestoreWorker(QThread):
             self.error.emit(self.history_id, str(e))
 
 
+class PlaylistLoaderWorker(QThread):
+    """Worker to fetch playlist tree and track counts asynchronously."""
 
+    success = Signal(list)  # tree
+    error = Signal(str)
+
+    def __init__(
+        self,
+        engine: Engine,
+        include_deleted: bool = False,
+        parent: Optional[Any] = None,
+    ):
+        super().__init__(parent)
+        self.engine = engine
+        self.include_deleted = include_deleted
+
+    def run(self) -> None:
+        try:
+            tree = fetch_playlists_tree(self.engine, include_deleted=self.include_deleted)
+            self.success.emit(tree)
+        except Exception as e:
+            self.error.emit(str(e))
+
+
+class PlaylistTracksWorker(QThread):
+    """Worker to query and populate playlist tracks without UI freeze."""
+
+    success = Signal(str, list)  # playlist_id, records
+    error = Signal(str)
+
+    def __init__(
+        self,
+        engine: Engine,
+        playlist_id: str,
+        query: str = "",
+        limit: Optional[int] = None,
+        sort_by: Optional[str] = None,
+        sort_order: str = "asc",
+        exclude_streaming: bool = True,
+        parent: Optional[Any] = None,
+    ):
+        super().__init__(parent)
+        self.engine = engine
+        self.playlist_id = playlist_id
+        self.query = query
+        self.limit = limit
+        self.sort_by = sort_by
+        self.sort_order = sort_order
+        self.exclude_streaming = exclude_streaming
+
+    def run(self) -> None:
+        try:
+            tracks = fetch_playlist_tracks(
+                self.engine,
+                self.playlist_id,
+                query=self.query,
+                limit=self.limit,
+                sort_by=self.sort_by,
+                sort_order=self.sort_order,
+                exclude_streaming=self.exclude_streaming,
+            )
+            self.success.emit(self.playlist_id, tracks)
+        except Exception as e:
+            self.error.emit(str(e))

@@ -237,6 +237,7 @@ class HistoryView(QWidget):
     notify_status = Signal(str)
     request_reload = Signal()
     replace_file_requested = Signal(dict)
+    open_playlist_requested = Signal(str)
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -411,6 +412,7 @@ class HistoryView(QWidget):
         self.detail_view.next_session_requested.connect(self._on_next_session)
         self.detail_view.notify_status.connect(self.notify_status.emit)
         self.detail_view.open_history_session_requested.connect(self._open_session_detail)
+        self.detail_view.open_playlist_requested.connect(self.open_playlist_requested.emit)
         self.detail_view.track_detail_requested.connect(self._open_track_detail)
         self.detail_view.restore_session_requested.connect(self._on_restore_from_detail)
         self.detail_view.delete_session_requested.connect(self._on_delete_from_detail)
@@ -427,6 +429,7 @@ class HistoryView(QWidget):
         self.track_detail_view = TrackDetailView(parent=self, back_button_text="← Back to Session")
         self.track_detail_view.back_clicked.connect(self._on_back_from_track_detail)
         self.track_detail_view.open_history_session_requested.connect(self._open_session_detail)
+        self.track_detail_view.open_playlist_requested.connect(self.open_playlist_requested.emit)
         self.track_detail_view.status_message.connect(self.notify_status.emit)
         self.track_detail_view.track_changed.connect(self._on_track_detail_changed)
         self.track_detail_view.replace_file_requested.connect(self.replace_file_requested.emit)

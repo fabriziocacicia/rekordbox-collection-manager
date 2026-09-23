@@ -319,6 +319,37 @@ class ChipBadgeDelegate(QStyledItemDelegate):
             total_w += min(fm.horizontalAdvance(str(t)) + 10, 140) + 4
         return QSize(min(total_w, 400), 36)
 
+    def item_at_point(
+        self, rect: QRectF, point: QPoint, items: List[Any]
+    ) -> Optional[str]:
+        """Detect which badge chip text is located under the given point inside the cell rect."""
+        if not items:
+            return None
+        chip_h = 18
+        y = rect.y() + (rect.height() - chip_h) // 2
+        x = rect.x() + 5
+        max_x = rect.right() - 5
+        max_chip_w = 140
+        for i, text_val in enumerate(items):
+            text_str = str(text_val)
+            raw_w = self.fm.horizontalAdvance(text_str)
+            if raw_w + 10 > max_chip_w:
+                display_str = self.fm.elidedText(
+                    text_str, Qt.TextElideMode.ElideRight, max_chip_w - 10
+                )
+                chip_w = self.fm.horizontalAdvance(display_str) + 10
+            else:
+                chip_w = raw_w + 10
+
+            if x + chip_w > max_x:
+                break
+
+            chip_rect = QRectF(x, y, chip_w, chip_h)
+            if chip_rect.contains(point):
+                return text_str
+            x += chip_w + 4
+        return None
+
 
 class FileTypeBadgeDelegate(QStyledItemDelegate):
     """Renders audio file types as colored badge pills with lossless distinctions."""
@@ -747,7 +778,7 @@ class TracksTableModel(QAbstractTableModel):
 
         # 13. FOLDER
         elif col_name == TrackColumn.FOLDER:
-            folder_name = t.get("folder_name") or "—"
+            folder_name = t.get("folder_name") or t.get("folder") or "—"
             folder_dir = t.get("folder_dir") or t.get("folder_path") or ""
             if role == Qt.ItemDataRole.DisplayRole:
                 return folder_name
@@ -835,6 +866,7 @@ class TracksTableWidget(QTableView):
     status_message = Signal(str)
     track_detail_requested = Signal(dict)
     replace_file_requested = Signal(dict)
+    open_playlist_requested = Signal(str)
 
     def __init__(
         self,
@@ -850,6 +882,7 @@ class TracksTableWidget(QTableView):
 
         self._folder_col_idx: int = -1
         self._file_col_idx: int = -1
+        self._playlist_col_idx: int = -1
 
         self.setMouseTracking(True)
         self.viewport().setMouseTracking(True)
@@ -918,6 +951,7 @@ class TracksTableWidget(QTableView):
 
         self._folder_col_idx = -1
         self._file_col_idx = -1
+        self._playlist_col_idx = -1
 
         for col_idx, col_name in enumerate(cols):
             # Resize modes and widths
@@ -950,9 +984,10 @@ class TracksTableWidget(QTableView):
                 self.setColumnWidth(col_idx, 270)
             elif col_name == TrackColumn.FOLDER:
                 header.setSectionResizeMode(col_idx, QHeaderView.ResizeMode.Interactive)
-                self.setColumnWidth(col_idx, 150)
+                self.setColumnWidth(col_idx, 160)
             elif col_name == TrackColumn.FILE_NAME:
-                header.setSectionResizeMode(col_idx, QHeaderView.ResizeMode.Stretch)
+                header.setSectionResizeMode(col_idx, QHeaderView.ResizeMode.Interactive)
+                self.setColumnWidth(col_idx, 280)
 
             # Assign delegates
             if col_name == TrackColumn.FILE_TYPE:
@@ -961,6 +996,7 @@ class TracksTableWidget(QTableView):
                 self.setItemDelegateForColumn(col_idx, tags_delegate)
             elif col_name == TrackColumn.PLAYLISTS:
                 self.setItemDelegateForColumn(col_idx, playlist_delegate)
+                self._playlist_col_idx = col_idx
             elif col_name == TrackColumn.FOLDER:
                 self.setItemDelegateForColumn(col_idx, path_link_delegate)
                 self._folder_col_idx = col_idx
@@ -1010,6 +1046,24 @@ class TracksTableWidget(QTableView):
         super().leaveEvent(event)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            idx = self.indexAt(event.position().toPoint())
+            if idx.isValid() and idx.column() == self._playlist_col_idx:
+                items = idx.data(Qt.ItemDataRole.UserRole)
+                if items:
+                    if isinstance(items, str):
+                        items = [items]
+                    delegate = self.itemDelegateForColumn(self._playlist_col_idx)
+                    if isinstance(delegate, ChipBadgeDelegate):
+                        cell_rect = self.visualRect(idx)
+                        clicked_item = delegate.item_at_point(
+                            QRectF(cell_rect), event.position().toPoint(), items
+                        )
+                        if clicked_item:
+                            self.open_playlist_requested.emit(clicked_item)
+                            event.accept()
+                            return
+
         if event.button() == Qt.MouseButton.LeftButton and self.config.enable_finder_clicks:
             mod = event.modifiers()
             if mod & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.MetaModifier):
@@ -1288,6 +1342,21 @@ class TracksTableWidget(QTableView):
         else:
             act_replace = menu.addAction("🔄 Upgrade to AIFF (MP3 only)")
             act_replace.setEnabled(False)
+
+        playlists = track.get("playlists") or []
+        act_pl_map = {}
+        if playlists:
+            menu.addSeparator()
+            if len(playlists) == 1:
+                pl_name = playlists[0]
+                act_pl = menu.addAction(f"📑 Open Playlist '{pl_name}'")
+                act_pl_map[act_pl] = pl_name
+            else:
+                pl_sub = menu.addMenu("📑 Open in Playlist")
+                for pl_name in playlists:
+                    sub_act = pl_sub.addAction(pl_name)
+                    act_pl_map[sub_act] = pl_name
+
         menu.addSeparator()
         act_open_folder = menu.addAction("📁 Open Containing Folder")
         act_reveal_file = menu.addAction("🔍 Reveal in Finder")
@@ -1301,6 +1370,8 @@ class TracksTableWidget(QTableView):
             self.track_detail_requested.emit(track)
         elif action == act_replace:
             self.replace_file_requested.emit(track)
+        elif action in act_pl_map:
+            self.open_playlist_requested.emit(act_pl_map[action])
         elif action == act_open_folder:
             self.open_folder(folder_dir)
         elif action == act_reveal_file:
