@@ -311,8 +311,8 @@ class TestPlaylistsGUI(unittest.TestCase):
         with patch.object(MainWindow, "load_database"), patch.object(MainWindow, "_check_rekordbox_status"):
             win = MainWindow(initial_db_path=None)
             try:
-                # Verify initial nav setup has 6 tabs and index 2 is Playlists
-                self.assertEqual(len(win.nav_items), 6)
+                # Verify initial nav setup has 7 tabs and index 2 is Playlists
+                self.assertEqual(len(win.nav_items), 7)
                 self.assertEqual(win.nav_items[2]["title"], "Playlists")
                 self.assertEqual(win.btn_playlists.toolTip(), "Playlists")
 

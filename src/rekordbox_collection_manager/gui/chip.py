@@ -295,8 +295,9 @@ class PlaylistChip(BadgeChip):
 class TagChip(BadgeChip):
     """Specialized removable badge chip for My Tags (purple color scheme)."""
 
-    def __init__(self, name: str, parent: Optional[QWidget] = None):
-        super().__init__(text=name, scheme="purple", removable=True, parent=parent)
+    def __init__(self, name: str, parent: Optional[QWidget] = None, clickable: bool = True):
+        super().__init__(text=name, scheme="purple", removable=True, clickable=clickable, parent=parent)
+        self.setToolTip(f"Open tag '{name}' (click to view)")
 
 
 class DJChip(BadgeChip):
@@ -797,6 +798,7 @@ class TagChipsContainer(EditableChipsContainer):
 
     tag_added = Signal(str)
     tag_removed = Signal(str)
+    tag_clicked = Signal(str)
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(
@@ -810,6 +812,7 @@ class TagChipsContainer(EditableChipsContainer):
         )
         self.item_added.connect(self.tag_added.emit)
         self.item_removed.connect(self.tag_removed.emit)
+        self.item_clicked.connect(self.tag_clicked.emit)
 
     @property
     def tags(self) -> List[str]:

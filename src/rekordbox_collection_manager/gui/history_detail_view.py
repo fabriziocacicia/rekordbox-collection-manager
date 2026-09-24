@@ -247,6 +247,7 @@ class HistoryDetailView(QWidget):
     notify_status = Signal(str)
     open_history_session_requested = Signal(str)  # Emits history_id
     open_playlist_requested = Signal(str)  # Emits playlist_name_or_id
+    open_tag_requested = Signal(str)  # Emits tag_name_or_id
     track_detail_requested = Signal(dict, int)  # Emits (track_dict, track_idx)
     delete_session_requested = Signal(str)  # Emits history_id
     restore_session_requested = Signal(str)  # Emits history_id
@@ -895,6 +896,7 @@ class HistoryDetailView(QWidget):
         self.table.status_message.connect(self._on_table_status_message)
         self.table.track_detail_requested.connect(self._open_track_detail)
         self.table.open_playlist_requested.connect(self.open_playlist_requested.emit)
+        self.table.open_tag_requested.connect(self.open_tag_requested.emit)
         main_layout.addWidget(self.table, stretch=1)
 
         # 5. Bottom Action Bar for Unsaved Changes

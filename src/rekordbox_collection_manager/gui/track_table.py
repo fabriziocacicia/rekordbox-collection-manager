@@ -867,6 +867,7 @@ class TracksTableWidget(QTableView):
     track_detail_requested = Signal(dict)
     replace_file_requested = Signal(dict)
     open_playlist_requested = Signal(str)
+    open_tag_requested = Signal(str)
 
     def __init__(
         self,
@@ -883,6 +884,7 @@ class TracksTableWidget(QTableView):
         self._folder_col_idx: int = -1
         self._file_col_idx: int = -1
         self._playlist_col_idx: int = -1
+        self._tags_col_idx: int = -1
 
         self.setMouseTracking(True)
         self.viewport().setMouseTracking(True)
@@ -952,6 +954,7 @@ class TracksTableWidget(QTableView):
         self._folder_col_idx = -1
         self._file_col_idx = -1
         self._playlist_col_idx = -1
+        self._tags_col_idx = -1
 
         for col_idx, col_name in enumerate(cols):
             # Resize modes and widths
@@ -994,6 +997,7 @@ class TracksTableWidget(QTableView):
                 self.setItemDelegateForColumn(col_idx, file_type_delegate)
             elif col_name == TrackColumn.TAGS:
                 self.setItemDelegateForColumn(col_idx, tags_delegate)
+                self._tags_col_idx = col_idx
             elif col_name == TrackColumn.PLAYLISTS:
                 self.setItemDelegateForColumn(col_idx, playlist_delegate)
                 self._playlist_col_idx = col_idx
@@ -1061,6 +1065,21 @@ class TracksTableWidget(QTableView):
                         )
                         if clicked_item:
                             self.open_playlist_requested.emit(clicked_item)
+                            event.accept()
+                            return
+            elif idx.isValid() and idx.column() == self._tags_col_idx:
+                items = idx.data(Qt.ItemDataRole.UserRole)
+                if items:
+                    if isinstance(items, str):
+                        items = [items]
+                    delegate = self.itemDelegateForColumn(self._tags_col_idx)
+                    if isinstance(delegate, ChipBadgeDelegate):
+                        cell_rect = self.visualRect(idx)
+                        clicked_item = delegate.item_at_point(
+                            QRectF(cell_rect), event.position().toPoint(), items
+                        )
+                        if clicked_item:
+                            self.open_tag_requested.emit(clicked_item)
                             event.accept()
                             return
 
@@ -1357,6 +1376,20 @@ class TracksTableWidget(QTableView):
                     sub_act = pl_sub.addAction(pl_name)
                     act_pl_map[sub_act] = pl_name
 
+        tags = track.get("tags") or []
+        act_tag_map = {}
+        if tags:
+            menu.addSeparator()
+            if len(tags) == 1:
+                t_name = tags[0]
+                act_tag = menu.addAction(f"🏷️ Open Tag '{t_name}'")
+                act_tag_map[act_tag] = t_name
+            else:
+                tag_sub = menu.addMenu("🏷️ Open in Tag")
+                for t_name in tags:
+                    sub_act = tag_sub.addAction(t_name)
+                    act_tag_map[sub_act] = t_name
+
         menu.addSeparator()
         act_open_folder = menu.addAction("📁 Open Containing Folder")
         act_reveal_file = menu.addAction("🔍 Reveal in Finder")
@@ -1372,6 +1405,8 @@ class TracksTableWidget(QTableView):
             self.replace_file_requested.emit(track)
         elif action in act_pl_map:
             self.open_playlist_requested.emit(act_pl_map[action])
+        elif action in act_tag_map:
+            self.open_tag_requested.emit(act_tag_map[action])
         elif action == act_open_folder:
             self.open_folder(folder_dir)
         elif action == act_reveal_file:

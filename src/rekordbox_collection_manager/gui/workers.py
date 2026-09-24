@@ -16,6 +16,10 @@ from rekordbox_collection_manager.playlists import (
     fetch_playlist_tracks,
     fetch_playlists_tree,
 )
+from rekordbox_collection_manager.tags import (
+    fetch_tag_tracks,
+    fetch_tags_tree,
+)
 from rekordbox_collection_manager.rename_history import (
     batch_update_history_records,
     fetch_history_records,
@@ -522,3 +526,76 @@ class PlaylistTracksWorker(QThread):
             self.success.emit(self.playlist_id, tracks)
         except Exception as e:
             self.error.emit(str(e))
+
+
+class TagsTreeLoaderWorker(QThread):
+    """Worker to fetch tags tree and track counts asynchronously."""
+
+    success = Signal(list)  # tree
+    error = Signal(str)
+
+    def __init__(
+        self,
+        engine: Engine,
+        include_deleted: bool = False,
+        category_names: Any = ("Genre", "Style"),
+        parent: Optional[Any] = None,
+    ):
+        super().__init__(parent)
+        self.engine = engine
+        self.include_deleted = include_deleted
+        self.category_names = category_names
+
+    def run(self) -> None:
+        try:
+            tree = fetch_tags_tree(
+                self.engine,
+                include_deleted=self.include_deleted,
+                category_names=self.category_names,
+            )
+            self.success.emit(tree)
+        except Exception as e:
+            self.error.emit(str(e))
+
+
+class TagTracksWorker(QThread):
+    """Worker to query and populate tag tracks without UI freeze."""
+
+    success = Signal(str, list)  # tag_id, records
+    error = Signal(str)
+
+    def __init__(
+        self,
+        engine: Engine,
+        tag_id: str,
+        query: str = "",
+        limit: Optional[int] = None,
+        sort_by: Optional[str] = None,
+        sort_order: str = "asc",
+        exclude_streaming: bool = True,
+        parent: Optional[Any] = None,
+    ):
+        super().__init__(parent)
+        self.engine = engine
+        self.tag_id = tag_id
+        self.query = query
+        self.limit = limit
+        self.sort_by = sort_by
+        self.sort_order = sort_order
+        self.exclude_streaming = exclude_streaming
+
+    def run(self) -> None:
+        try:
+            tracks = fetch_tag_tracks(
+                self.engine,
+                self.tag_id,
+                query=self.query,
+                limit=self.limit,
+                sort_by=self.sort_by,
+                sort_order=self.sort_order,
+                exclude_streaming=self.exclude_streaming,
+            )
+            self.success.emit(self.tag_id, tracks)
+        except Exception as e:
+            self.error.emit(str(e))
+

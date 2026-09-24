@@ -497,12 +497,14 @@ class TestMainWindowSidebar(unittest.TestCase):
         self.assertEqual(self.window.stacked_widget.currentIndex(), 1)
         self.window.btn_playlists.click()
         self.assertEqual(self.window.stacked_widget.currentIndex(), 2)
-        self.window.btn_play_count.click()
+        self.window.btn_tags.click()
         self.assertEqual(self.window.stacked_widget.currentIndex(), 3)
-        self.window.btn_replace_file.click()
+        self.window.btn_play_count.click()
         self.assertEqual(self.window.stacked_widget.currentIndex(), 4)
-        self.window.btn_info.click()
+        self.window.btn_replace_file.click()
         self.assertEqual(self.window.stacked_widget.currentIndex(), 5)
+        self.window.btn_info.click()
+        self.assertEqual(self.window.stacked_widget.currentIndex(), 6)
 
     def test_refresh_button_icon_and_action(self):
         from rekordbox_collection_manager.gui.assets import get_refresh_icon

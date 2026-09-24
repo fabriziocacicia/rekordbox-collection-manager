@@ -99,6 +99,7 @@ class PlayCountView(QWidget):
     notify_status = Signal(str)
     open_history_session_requested = Signal(str)
     open_playlist_requested = Signal(str)
+    open_tag_requested = Signal(str)
     replace_file_requested = Signal(dict)
 
     def __init__(self, parent: Optional[QWidget] = None):
@@ -263,6 +264,7 @@ class PlayCountView(QWidget):
         self.track_detail_view.back_clicked.connect(self._on_back_from_detail)
         self.track_detail_view.open_history_session_requested.connect(self.open_history_session_requested.emit)
         self.track_detail_view.open_playlist_requested.connect(self.open_playlist_requested.emit)
+        self.track_detail_view.open_tag_requested.connect(self.open_tag_requested.emit)
         self.track_detail_view.status_message.connect(self.notify_status.emit)
         self.track_detail_view.track_changed.connect(self._on_detail_track_changed)
         self.track_detail_view.replace_file_requested.connect(self.replace_file_requested.emit)

@@ -133,6 +133,7 @@ class TrackDetailView(QWidget):
     back_clicked = Signal()
     open_history_session_requested = Signal(str)  # Emits history_id
     open_playlist_requested = Signal(str)  # Emits playlist_id or playlist_name
+    open_tag_requested = Signal(str)  # Emits tag_id or tag_name
     status_message = Signal(str)
     track_changed = Signal(int, dict)  # Emits (current_index, track_dict)
     replace_file_requested = Signal(dict)  # Emits track_dict to open Replace File tool
@@ -366,6 +367,7 @@ class TrackDetailView(QWidget):
         self.tags_container = TagChipsContainer(parent=self)
         self.tags_container.tag_added.connect(self._on_tag_added_or_removed)
         self.tags_container.tag_removed.connect(self._on_tag_added_or_removed)
+        self.tags_container.tag_clicked.connect(self.open_tag_requested.emit)
         cat_layout.addWidget(self.tags_container)
 
         # Playlists Row
