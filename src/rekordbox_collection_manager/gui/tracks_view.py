@@ -109,11 +109,6 @@ class TracksView(QWidget):
         self.search_btn.clicked.connect(self._execute_search)
         toolbar.addWidget(self.search_btn)
 
-        self.detail_btn = QPushButton("ℹ️ Details")
-        self.detail_btn.setToolTip("View full metadata and history sessions for selected track (or double-click row)")
-        self.detail_btn.clicked.connect(self._on_open_selected_track_detail)
-        toolbar.addWidget(self.detail_btn)
-
         self.copy_btn = QPushButton("📋 Copy Tracklist")
         self.copy_btn.setToolTip("Copy formatted tracklist to clipboard (e.g. 01. Artist - Title)")
         self.copy_btn.clicked.connect(self._on_copy_tracklist)
