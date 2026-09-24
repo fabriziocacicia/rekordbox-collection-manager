@@ -52,7 +52,7 @@ from rekordbox_collection_manager.gui.track_table import (
     TrackTableConfig,
     TracksTableWidget,
 )
-from rekordbox_collection_manager.gui.chip import BadgeChip, DJChipsContainer
+from rekordbox_collection_manager.gui.chip import BadgeChip, DJChip, DJChipsContainer
 from rekordbox_collection_manager.gui.workers import HistorySessionDetailWorker
 from rekordbox_collection_manager.utils import (
     MONTH_INT_TO_NAME,
@@ -63,80 +63,8 @@ from rekordbox_collection_manager.utils import (
     parse_played_with,
 )
 
-
-class DetailDJChip(QFrame):
-    """Sleek horizontal badge chip for collaborator DJs in HistoryDetailView."""
-
-    delete_requested = Signal(str)
-
-    def __init__(self, name: str, removable: bool = True, parent: Optional[QWidget] = None):
-        super().__init__(parent)
-        self.name = name
-        self.removable = removable
-        self.setFixedHeight(22)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setStyleSheet("""
-            QFrame {
-                background-color: rgba(245, 158, 11, 0.12);
-                border: 1px solid #784e10;
-                border-radius: 5px;
-            }
-            QFrame:hover {
-                background-color: rgba(245, 158, 11, 0.22);
-                border-color: #f59e0b;
-            }
-        """)
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, 0, 6 if removable else 8, 0)
-        layout.setSpacing(4)
-        layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-
-        self.label = QLabel(name)
-        self.label.setStyleSheet(
-            "color: #fef3c7; font-size: 11px; font-weight: 500; background: transparent; border: none;"
-        )
-        layout.addWidget(self.label)
-
-        if removable:
-            self.x_btn = QPushButton("×")
-            self.x_btn.setFixedSize(14, 14)
-            self.x_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            self.x_btn.setToolTip(f"Remove {name}")
-            self.x_btn.setStyleSheet("""
-                QPushButton {
-                    color: #d97706;
-                    font-size: 13px;
-                    font-weight: 700;
-                    background: transparent;
-                    border: none;
-                    padding: 0;
-                    margin: 0;
-                }
-                QPushButton:hover {
-                    color: #ef4444;
-                }
-            """)
-            self.x_btn.setVisible(False)
-            self.x_btn.clicked.connect(lambda: self.delete_requested.emit(self.name))
-            layout.addWidget(self.x_btn)
-
-    def enterEvent(self, event: Any) -> None:
-        super().enterEvent(event)
-        if self.removable and hasattr(self, "x_btn"):
-            self.x_btn.setVisible(True)
-
-    def leaveEvent(self, event: Any) -> None:
-        super().leaveEvent(event)
-        if self.removable and hasattr(self, "x_btn"):
-            self.x_btn.setVisible(False)
-
-    @property
-    def text(self) -> str:
-        return self.name
-
-    def setText(self, text: str) -> None:
-        self.name = text
-        self.label.setText(text)
+# Standard DJ badge chip for collaborator DJs in HistoryDetailView
+DetailDJChip = DJChip
 
 
 class LocationChip(QFrame):

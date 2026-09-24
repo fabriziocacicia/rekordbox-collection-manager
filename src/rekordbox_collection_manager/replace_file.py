@@ -19,7 +19,10 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from rekordbox_collection_manager.utils import (
+    EXTENSION_TO_FILE_TYPE,
+    FILE_TYPE_TO_NAME,
     ensure_rekordbox_not_running,
+    format_duration,
     get_rekordbox_timestamp,
     is_rekordbox_running,
     open_database,
@@ -28,25 +31,11 @@ from rekordbox_collection_manager.utils import (
 )
 
 
-# Rekordbox FileType mappings
-EXTENSION_TO_FILE_TYPE: Dict[str, int] = {
-    "MP3": 1,
-    "M4A": 4,
-    "AAC": 4,
-    "FLAC": 5,
-    "WAV": 11,
-    "WAVE": 11,
-    "AIF": 12,
-    "AIFF": 12,
-}
-
-FILE_TYPE_TO_NAME: Dict[int, str] = {
-    1: "MP3",
-    4: "M4A",
-    5: "FLAC",
-    11: "WAV",
-    12: "AIFF",
-}
+# Re-export for backward compatibility
+__all__ = [
+    "EXTENSION_TO_FILE_TYPE",
+    "FILE_TYPE_TO_NAME",
+]
 
 
 def inspect_audio_file(file_path: str) -> Dict[str, Any]:
@@ -117,9 +106,7 @@ def inspect_audio_file(file_path: str) -> Dict[str, Any]:
                 if hasattr(ainfo, "length") and ainfo.length:
                     sec = int(round(ainfo.length))
                     info["duration_sec"] = sec
-                    mins = sec // 60
-                    s = sec % 60
-                    info["duration_str"] = f"{mins}:{s:02d}"
+                    info["duration_str"] = format_duration(sec)
                 # Bitrate
                 if hasattr(ainfo, "bitrate") and ainfo.bitrate:
                     raw_br = ainfo.bitrate

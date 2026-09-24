@@ -13,7 +13,7 @@ import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple, Union
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple, Union
 
 import questionary
 from pyrekordbox.db6.database import get_rekordbox_pid
@@ -360,6 +360,30 @@ def format_file_size(size_bytes: int) -> str:
         return f"{mb:.1f} MB"
     kb = size_bytes / 1024
     return f"{kb:.0f} KB"
+
+
+def format_duration(duration_sec: Optional[Union[int, float]]) -> str:
+    """Format duration in seconds into 'M:SS' or '--:--' if 0 or None."""
+    try:
+        sec = int(round(duration_sec or 0))
+    except (ValueError, TypeError):
+        return "--:--"
+    if sec > 0:
+        mins = sec // 60
+        secs = sec % 60
+        return f"{mins}:{secs:02d}"
+    return "--:--"
+
+
+def format_rating_stars(rating: Optional[int]) -> str:
+    """Format numeric rating (0..255 or 1..5) to 5-star string (e.g. '★★★★☆')."""
+    if not rating or rating <= 0:
+        return "☆☆☆☆☆"
+    if rating > 5:
+        stars = max(1, min(5, round(rating / 51.0)))
+    else:
+        stars = max(1, min(5, rating))
+    return "★" * stars + "☆" * (5 - stars)
 
 
 def extract_date_from_name(name: Optional[str]) -> Optional[str]:
@@ -737,26 +761,84 @@ def build_exclude_streaming_clause(cols: Set[str], table_alias: Optional[str] = 
     return "AND " + " AND ".join(parts)
 
 
+# Rekordbox FileType mappings
+EXTENSION_TO_FILE_TYPE: Dict[str, int] = {
+    "MP3": 1,
+    "M4A": 4,
+    "AAC": 4,
+    "FLAC": 5,
+    "WAV": 11,
+    "WAVE": 11,
+    "AIF": 12,
+    "AIFF": 12,
+}
+
+FILE_TYPE_TO_NAME: Dict[int, str] = {
+    1: "MP3",
+    4: "M4A",
+    5: "FLAC",
+    11: "WAV",
+    12: "AIFF",
+    25: "Spotify",
+    26: "Apple Music",
+}
+
+
+def is_mp3_track(track_dict_or_path: Any) -> bool:
+    """Check if a track dictionary or file path represents an MP3 file."""
+    if not track_dict_or_path:
+        return False
+    if isinstance(track_dict_or_path, str):
+        return os.path.splitext(track_dict_or_path)[1].lower() == ".mp3"
+    if isinstance(track_dict_or_path, dict):
+        if track_dict_or_path.get("raw_file_type") == 1:
+            return True
+        ft = str(track_dict_or_path.get("file_type") or "").strip().upper()
+        if ft == "MP3":
+            return True
+        target = (
+            track_dict_or_path.get("file_name")
+            or track_dict_or_path.get("filename")
+            or track_dict_or_path.get("file_path")
+            or ""
+        )
+        return os.path.splitext(target)[1].lower() == ".mp3"
+    return False
+
+
+def is_aiff_track(track_dict_or_path: Any) -> bool:
+    """Check if a track dictionary or file path represents an AIFF file."""
+    if not track_dict_or_path:
+        return False
+    if isinstance(track_dict_or_path, str):
+        return os.path.splitext(track_dict_or_path)[1].lower() in (".aiff", ".aif")
+    if isinstance(track_dict_or_path, dict):
+        if track_dict_or_path.get("raw_file_type") == 12:
+            return True
+        ft = str(track_dict_or_path.get("file_type") or "").strip().upper()
+        if ft in ("AIFF", "AIF"):
+            return True
+        target = (
+            track_dict_or_path.get("file_name")
+            or track_dict_or_path.get("filename")
+            or track_dict_or_path.get("file_path")
+            or ""
+        )
+        return os.path.splitext(target)[1].lower() in (".aiff", ".aif")
+    return False
+
+
 def resolve_file_type(
     raw_file_type: Any,
     filename: Optional[str] = None,
     folder_path: Optional[str] = None,
 ) -> str:
     """Resolve human-readable audio file format (MP3, AIFF, FLAC, WAV, M4A, etc.)."""
-    type_map = {
-        1: "MP3",
-        4: "M4A",
-        5: "FLAC",
-        11: "WAV",
-        12: "AIFF",
-        25: "Spotify",
-        26: "Apple Music",
-    }
     try:
         if raw_file_type is not None:
             ft_int = int(raw_file_type)
-            if ft_int in type_map:
-                return type_map[ft_int]
+            if ft_int in FILE_TYPE_TO_NAME:
+                return FILE_TYPE_TO_NAME[ft_int]
     except (ValueError, TypeError):
         pass
 
@@ -835,6 +917,103 @@ def resolve_file_and_folder_paths(
         return (folder_name or "—", folder_dir, file_name or "—", file_path)
 
     return ("—", "", fn or "—", fn or "")
+
+
+def build_track_record(
+    row: Mapping[str, Any],
+    extra: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Normalize a database row mapping into a standard collection track dictionary.
+
+    Extracts, calculates, and formats:
+    - ID / content_id
+    - Title, Artist, Album, Genre, Key
+    - BPM (divided by 100 and rounded to 1 decimal place)
+    - Length (seconds) and formatted duration ('MM:SS')
+    - Play count (DJPlayCount or PlayCount)
+    - Rating, Year / ReleaseYear, Bitrate
+    - Audio format string and raw FileType
+    - Tag list and Playlist list (splitting delimiter '|||')
+    - Resolved folder and filename paths
+    - Creation, date added (StockDate), and audio specs (sample rate, bit depth, file size, color)
+    """
+    raw_count = row.get("DJPlayCount")
+    if raw_count is None:
+        raw_count = row.get("PlayCount")
+    try:
+        count_int = int(raw_count) if raw_count is not None else 0
+    except (ValueError, TypeError):
+        count_int = 0
+
+    bpm_raw = row.get("BPM")
+    bpm_val = round(float(bpm_raw) / 100.0, 1) if bpm_raw and bpm_raw > 0 else 0.0
+
+    duration_sec = int(row.get("Length") or 0)
+    dur_str = format_duration(duration_sec)
+
+    raw_tags = row.get("TagNames")
+    tags_list = [t.strip() for t in raw_tags.split("|||") if t.strip()] if raw_tags else []
+
+    raw_playlists = row.get("PlaylistNames")
+    playlists_list = [p.strip() for p in raw_playlists.split("|||") if p.strip()] if raw_playlists else []
+
+    raw_fn = row.get("FileNameL") or ""
+    raw_fp = row.get("FolderPath") or ""
+    file_type_str = resolve_file_type(row.get("FileType"), raw_fn, raw_fp)
+    loc_disp = format_location_display(raw_fn, raw_fp)
+    f_name, f_dir, fn_disp, f_full = resolve_file_and_folder_paths(raw_fn, raw_fp)
+
+    content_id = str(row.get("ContentID") or row.get("ID") or "")
+    rating_val = int(row.get("Rating") or 0)
+    release_year = row.get("ReleaseYear")
+    try:
+        year_int = int(release_year) if release_year is not None else 0
+    except (ValueError, TypeError):
+        year_int = 0
+
+    record: Dict[str, Any] = {
+        "id": content_id,
+        "content_id": content_id,
+        "title": row.get("Title") or "(Untitled)",
+        "artist": row.get("ArtistName") or "Unknown Artist",
+        "album": row.get("AlbumName") or "",
+        "genre": row.get("GenreName") or "",
+        "key": row.get("KeyName") or "",
+        "bpm": bpm_val,
+        "duration_sec": duration_sec,
+        "duration_str": dur_str,
+        "play_count": count_int,
+        "plays": count_int,
+        "rating": rating_val,
+        "year": year_int,
+        "release_year": release_year,
+        "bitrate": int(row.get("BitRate") or 0),
+        "raw_file_type": row.get("FileType"),
+        "file_type": file_type_str,
+        "tags": tags_list,
+        "playlists": playlists_list,
+        "folder": f_name,
+        "folder_name": f_name,
+        "folder_dir": f_dir,
+        "file_name": fn_disp,
+        "filename": raw_fn or fn_disp,
+        "folder_path": raw_fp or f_dir,
+        "file_path": f_full,
+        "location": loc_disp,
+        "location_display": loc_disp,
+        "comment": row.get("Commnt") or "",
+        "image_path": row.get("ImagePath") or "",
+        "date_added": str(row.get("StockDate") or "")[:10],
+        "created_at": str(row.get("created_at") or "") if row.get("created_at") is not None else "",
+        "sample_rate": int(row.get("SampleRate") or 0),
+        "bit_depth": int(row.get("BitDepth") or 0),
+        "file_size": int(row.get("FileSize") or 0),
+        "color_id": str(row.get("ColorID") or ""),
+        "table": str(row.get("table") or "djmdContent"),
+    }
+    if extra:
+        record.update(extra)
+    return record
 
 
 def resolve_artwork_path(

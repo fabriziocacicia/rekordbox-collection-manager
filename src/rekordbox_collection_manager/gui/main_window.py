@@ -2,7 +2,6 @@
 
 import os
 import shutil
-import subprocess
 import sys
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -57,6 +56,8 @@ from rekordbox_collection_manager.gui.workers import BackupWorker, DatabaseLoade
 from rekordbox_collection_manager.utils import (
     get_default_master_db_path,
     is_rekordbox_running,
+    open_in_folder,
+    reveal_in_file_manager,
 )
 
 
@@ -746,23 +747,17 @@ class MainWindow(QMainWindow):
         self.load_database(self.db_path)
 
     def _on_reveal_db_in_finder(self) -> None:
-        """Reveal active database file in macOS Finder."""
+        """Reveal active database file in system file manager (Finder / Explorer)."""
         if self.db_path and os.path.exists(self.db_path):
-            if sys.platform == "darwin":
-                subprocess.run(["open", "-R", self.db_path], check=False)
-            else:
-                subprocess.run(["xdg-open", os.path.dirname(self.db_path)], check=False)
+            reveal_in_file_manager(self.db_path)
         else:
             QMessageBox.warning(self, "Reveal in Finder", "Database file not found on disk.")
 
     def _on_reveal_backups_in_finder(self) -> None:
-        """Open default Backups folder in macOS Finder."""
+        """Open default Backups folder in system file manager (Finder / Explorer)."""
         backup_dir = get_default_backup_dir()
         backup_dir.mkdir(parents=True, exist_ok=True)
-        if sys.platform == "darwin":
-            subprocess.run(["open", str(backup_dir)], check=False)
-        else:
-            subprocess.run(["xdg-open", str(backup_dir)], check=False)
+        open_in_folder(str(backup_dir))
 
     def _show_status_message(self, msg: str) -> None:
         self.status_bar.showMessage(msg, 5000)

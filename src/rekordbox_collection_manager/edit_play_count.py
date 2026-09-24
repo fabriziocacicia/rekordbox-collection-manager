@@ -13,6 +13,7 @@ from sqlalchemy.engine import Engine
 
 from rekordbox_collection_manager.utils import (
     build_exclude_streaming_clause,
+    build_track_record,
     detect_content_table,
     ensure_rekordbox_not_running,
     format_location_display,
@@ -21,7 +22,6 @@ from rekordbox_collection_manager.utils import (
     open_database,
     resolve_artwork_path,
     resolve_db_path,
-    resolve_file_and_folder_paths,
     resolve_file_type,
 )
 
@@ -326,71 +326,7 @@ def search_tracks(
             rows = conn.execute(text(sql), params).mappings().fetchall()
 
             for r in rows:
-                raw_count = r.get("DJPlayCount")
-                try:
-                    count_int = int(raw_count) if raw_count is not None else 0
-                except (ValueError, TypeError):
-                    count_int = 0
-
-                bpm_raw = r.get("BPM")
-                bpm_val = round(float(bpm_raw) / 100.0, 1) if bpm_raw and bpm_raw > 0 else 0.0
-
-                duration_sec = int(r.get("Length") or 0)
-                if duration_sec > 0:
-                    mins = duration_sec // 60
-                    secs = duration_sec % 60
-                    dur_str = f"{mins}:{secs:02d}"
-                else:
-                    dur_str = "--:--"
-
-                raw_tags = r.get("TagNames")
-                tags_list = [t.strip() for t in raw_tags.split("|||") if t.strip()] if raw_tags else []
-
-                raw_playlists = r.get("PlaylistNames")
-                playlists_list = [p.strip() for p in raw_playlists.split("|||") if p.strip()] if raw_playlists else []
-
-                raw_fn = r.get("FileNameL") or ""
-                raw_fp = r.get("FolderPath") or ""
-                file_type_str = resolve_file_type(r.get("FileType"), raw_fn, raw_fp)
-                loc_disp = format_location_display(raw_fn, raw_fp)
-                f_name, f_dir, fn_disp, f_full = resolve_file_and_folder_paths(raw_fn, raw_fp)
-
-                records.append({
-                    "id": str(r.get("ID")),
-                    "content_id": str(r.get("ID")),
-                    "title": r.get("Title") or "(Untitled)",
-                    "artist": r.get("ArtistName") or "Unknown Artist",
-                    "album": r.get("AlbumName") or "",
-                    "genre": r.get("GenreName") or "",
-                    "key": r.get("KeyName") or "",
-                    "bpm": bpm_val,
-                    "duration_sec": duration_sec,
-                    "duration_str": dur_str,
-                    "play_count": count_int,
-                    "rating": int(r.get("Rating") or 0),
-                    "year": int(r.get("ReleaseYear") or 0),
-                    "bitrate": int(r.get("BitRate") or 0),
-                    "raw_file_type": r.get("FileType"),
-                    "file_type": file_type_str,
-                    "tags": tags_list,
-                    "playlists": playlists_list,
-                    "folder_name": f_name,
-                    "folder_dir": f_dir,
-                    "file_name": fn_disp,
-                    "file_path": f_full,
-                    "location_display": loc_disp,
-                    "comment": r.get("Commnt") or "",
-                    "folder_path": raw_fp,
-                    "filename": raw_fn,
-                    "image_path": r.get("ImagePath") or "",
-                    "date_added": str(r.get("StockDate") or "")[:10],
-                    "created_at": str(r.get("created_at") or "") if r.get("created_at") is not None else "",
-                    "sample_rate": int(r.get("SampleRate") or 0),
-                    "bit_depth": int(r.get("BitDepth") or 0),
-                    "file_size": int(r.get("FileSize") or 0),
-                    "color_id": str(r.get("ColorID") or ""),
-                    "table": "djmdContent",
-                })
+                records.append(build_track_record(r, extra={"table": "djmdContent"}))
 
         else:
             # Fallback for generic content table
@@ -436,47 +372,7 @@ def search_tracks(
 
             rows = conn.execute(text(sql), params).mappings().fetchall()
             for r in rows:
-                raw_count = r.get("DJPlayCount")
-                try:
-                    count_int = int(raw_count) if raw_count is not None else 0
-                except (ValueError, TypeError):
-                    count_int = 0
-                records.append({
-                    "id": str(r.get("ID")),
-                    "content_id": str(r.get("ID")),
-                    "title": r.get("Title") or "(Untitled)",
-                    "artist": "Unknown Artist",
-                    "album": "",
-                    "genre": "",
-                    "key": "",
-                    "bpm": 0.0,
-                    "duration_sec": 0,
-                    "duration_str": "--:--",
-                    "play_count": count_int,
-                    "rating": 0,
-                    "year": 0,
-                    "bitrate": 0,
-                    "raw_file_type": None,
-                    "file_type": "—",
-                    "tags": [],
-                    "playlists": [],
-                    "folder_name": "—",
-                    "folder_dir": "",
-                    "file_name": "—",
-                    "file_path": "",
-                    "location_display": "—",
-                    "comment": "",
-                    "folder_path": "",
-                    "filename": "",
-                    "image_path": "",
-                    "date_added": "",
-                    "created_at": "",
-                    "sample_rate": 0,
-                    "bit_depth": 0,
-                    "file_size": 0,
-                    "color_id": "",
-                    "table": table_name,
-                })
+                records.append(build_track_record(r, extra={"table": table_name}))
 
     return records
 
@@ -498,41 +394,7 @@ def fetch_track_full_details(
     if results:
         track = dict(results[0])
     else:
-        track = {
-            "id": str(content_id),
-            "content_id": str(content_id),
-            "title": "(Track Not Found)",
-            "artist": "Unknown Artist",
-            "album": "",
-            "genre": "",
-            "key": "",
-            "bpm": 0.0,
-            "duration_sec": 0,
-            "duration_str": "--:--",
-            "play_count": 0,
-            "rating": 0,
-            "year": 0,
-            "bitrate": 0,
-            "file_type": "—",
-            "tags": [],
-            "playlists": [],
-            "folder_name": "—",
-            "folder_dir": "",
-            "file_name": "—",
-            "file_path": "",
-            "location_display": "—",
-            "comment": "",
-            "folder_path": "",
-            "filename": "",
-            "image_path": "",
-            "date_added": "",
-            "created_at": "",
-            "sample_rate": 0,
-            "bit_depth": 0,
-            "file_size": 0,
-            "color_id": "",
-            "table": "djmdContent",
-        }
+        track = build_track_record({"ID": content_id, "Title": "(Track Not Found)"})
 
     raw_img = track.get("image_path")
     track["artwork_path"] = resolve_artwork_path(raw_img, db_path=db_path)

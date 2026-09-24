@@ -88,33 +88,13 @@ from rekordbox_collection_manager.gui.theme import (
 )
 from rekordbox_collection_manager.gui.workers import TrackDetailWorker
 from rekordbox_collection_manager.utils import (
+    format_file_size,
+    format_rating_stars,
     is_rekordbox_running,
     open_in_folder,
     parse_history_name,
     reveal_in_file_manager,
 )
-
-
-def format_file_size(size_bytes: int) -> str:
-    """Format file size in bytes to human-readable MB or KB string."""
-    if not size_bytes or size_bytes <= 0:
-        return "—"
-    mb = size_bytes / (1024 * 1024)
-    if mb >= 1.0:
-        return f"{mb:.1f} MB"
-    kb = size_bytes / 1024
-    return f"{kb:.0f} KB"
-
-
-def format_rating_stars(rating: int) -> str:
-    """Format numeric rating (0..255 or 1..5) to 5-star string."""
-    if not rating or rating <= 0:
-        return "☆☆☆☆☆"
-    if rating > 5:
-        stars = max(1, min(5, round(rating / 51.0)))
-    else:
-        stars = max(1, min(5, rating))
-    return "★" * stars + "☆" * (5 - stars)
 
 
 def format_created_at_tooltip(created_at: Any, date_added: str = "") -> str:

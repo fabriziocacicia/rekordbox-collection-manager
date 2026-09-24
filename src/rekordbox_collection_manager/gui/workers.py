@@ -1,6 +1,6 @@
 """Background worker threads for non-blocking database operations."""
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 from PySide6.QtCore import QThread, Signal
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
@@ -485,12 +485,52 @@ class PlaylistLoaderWorker(QThread):
         except Exception as e:
             self.error.emit(str(e))
 
+class CategoryTracksWorker(QThread):
+    """Base worker to query and populate category tracks (playlists, tags, etc.) asynchronously."""
 
-class PlaylistTracksWorker(QThread):
-    """Worker to query and populate playlist tracks without UI freeze."""
-
-    success = Signal(str, list)  # playlist_id, records
+    success = Signal(str, list)  # category_id, records
     error = Signal(str)
+
+    def __init__(
+        self,
+        engine: Engine,
+        category_id: str,
+        fetch_fn: Callable[..., List[Dict[str, Any]]],
+        query: str = "",
+        limit: Optional[int] = None,
+        sort_by: Optional[str] = None,
+        sort_order: str = "asc",
+        exclude_streaming: bool = True,
+        parent: Optional[Any] = None,
+    ):
+        super().__init__(parent)
+        self.engine = engine
+        self.category_id = category_id
+        self.fetch_fn = fetch_fn
+        self.query = query
+        self.limit = limit
+        self.sort_by = sort_by
+        self.sort_order = sort_order
+        self.exclude_streaming = exclude_streaming
+
+    def run(self) -> None:
+        try:
+            tracks = self.fetch_fn(
+                self.engine,
+                self.category_id,
+                query=self.query,
+                limit=self.limit,
+                sort_by=self.sort_by,
+                sort_order=self.sort_order,
+                exclude_streaming=self.exclude_streaming,
+            )
+            self.success.emit(self.category_id, tracks)
+        except Exception as e:
+            self.error.emit(str(e))
+
+
+class PlaylistTracksWorker(CategoryTracksWorker):
+    """Worker to query and populate playlist tracks without UI freeze."""
 
     def __init__(
         self,
@@ -503,29 +543,18 @@ class PlaylistTracksWorker(QThread):
         exclude_streaming: bool = True,
         parent: Optional[Any] = None,
     ):
-        super().__init__(parent)
-        self.engine = engine
+        super().__init__(
+            engine=engine,
+            category_id=playlist_id,
+            fetch_fn=fetch_playlist_tracks,
+            query=query,
+            limit=limit,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            exclude_streaming=exclude_streaming,
+            parent=parent,
+        )
         self.playlist_id = playlist_id
-        self.query = query
-        self.limit = limit
-        self.sort_by = sort_by
-        self.sort_order = sort_order
-        self.exclude_streaming = exclude_streaming
-
-    def run(self) -> None:
-        try:
-            tracks = fetch_playlist_tracks(
-                self.engine,
-                self.playlist_id,
-                query=self.query,
-                limit=self.limit,
-                sort_by=self.sort_by,
-                sort_order=self.sort_order,
-                exclude_streaming=self.exclude_streaming,
-            )
-            self.success.emit(self.playlist_id, tracks)
-        except Exception as e:
-            self.error.emit(str(e))
 
 
 class TagsTreeLoaderWorker(QThread):
@@ -558,11 +587,8 @@ class TagsTreeLoaderWorker(QThread):
             self.error.emit(str(e))
 
 
-class TagTracksWorker(QThread):
+class TagTracksWorker(CategoryTracksWorker):
     """Worker to query and populate tag tracks without UI freeze."""
-
-    success = Signal(str, list)  # tag_id, records
-    error = Signal(str)
 
     def __init__(
         self,
@@ -575,27 +601,16 @@ class TagTracksWorker(QThread):
         exclude_streaming: bool = True,
         parent: Optional[Any] = None,
     ):
-        super().__init__(parent)
-        self.engine = engine
+        super().__init__(
+            engine=engine,
+            category_id=tag_id,
+            fetch_fn=fetch_tag_tracks,
+            query=query,
+            limit=limit,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            exclude_streaming=exclude_streaming,
+            parent=parent,
+        )
         self.tag_id = tag_id
-        self.query = query
-        self.limit = limit
-        self.sort_by = sort_by
-        self.sort_order = sort_order
-        self.exclude_streaming = exclude_streaming
-
-    def run(self) -> None:
-        try:
-            tracks = fetch_tag_tracks(
-                self.engine,
-                self.tag_id,
-                query=self.query,
-                limit=self.limit,
-                sort_by=self.sort_by,
-                sort_order=self.sort_order,
-                exclude_streaming=self.exclude_streaming,
-            )
-            self.success.emit(self.tag_id, tracks)
-        except Exception as e:
-            self.error.emit(str(e))
 

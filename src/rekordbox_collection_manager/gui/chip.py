@@ -303,8 +303,19 @@ class TagChip(BadgeChip):
 class DJChip(BadgeChip):
     """Specialized removable badge chip for played with DJ / artist (amber color scheme)."""
 
-    def __init__(self, name: str, parent: Optional[QWidget] = None):
-        super().__init__(text=name, scheme="amber", removable=True, parent=parent)
+    def __init__(
+        self,
+        name: str,
+        parent_or_removable: Any = None,
+        parent: Optional[QWidget] = None,
+        removable: bool = True,
+        clickable: bool = False,
+    ):
+        if isinstance(parent_or_removable, bool):
+            removable = parent_or_removable
+        elif isinstance(parent_or_removable, QWidget):
+            parent = parent_or_removable
+        super().__init__(text=name, scheme="amber", removable=removable, clickable=clickable, parent=parent)
 
 
 class FlowLayout(QLayout):

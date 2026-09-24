@@ -46,7 +46,6 @@ from rekordbox_collection_manager.gui.workers import (
     TagTracksWorker,
     TagsTreeLoaderWorker,
 )
-from rekordbox_collection_manager.utils import open_in_folder, reveal_in_file_manager
 
 
 class TagsView(QWidget):
@@ -246,8 +245,6 @@ class TagsView(QWidget):
         self.table = TracksTableWidget(config=table_config, parent=self)
         self.table.sort_requested.connect(self._on_table_sort_requested)
         self.table.status_message.connect(self._on_table_status_message)
-        self.table.folder_clicked.connect(self._on_open_folder)
-        self.table.file_clicked.connect(self._on_reveal_file)
         self.table.track_detail_requested.connect(self._open_track_detail)
         self.table.replace_file_requested.connect(self.replace_file_requested.emit)
         self.table.open_playlist_requested.connect(self.open_playlist_requested.emit)
@@ -655,50 +652,6 @@ class TagsView(QWidget):
         self.table.copy_tracklist_to_clipboard(self.records)
 
     def _on_table_status_message(self, msg: str) -> None:
-        self.status_label.setText(msg)
-        self.notify_status.emit(msg)
-
-    def _on_open_folder(self, folder_path: str) -> None:
-        if not folder_path or folder_path == "—":
-            msg = "⚠️ No folder path available."
-            self.status_label.setText(msg)
-            self.notify_status.emit(msg)
-            return
-        if folder_path.startswith("apple-music:") or folder_path.startswith("spotify:"):
-            msg = f"Streaming track URI: {folder_path}"
-            self.status_label.setText(msg)
-            self.notify_status.emit(msg)
-            return
-
-        success = open_in_folder(folder_path)
-        if success:
-            msg = f"📂 Opened folder: {os.path.basename(folder_path) or folder_path}"
-        else:
-            msg = f"❌ Folder not found on disk: {folder_path}"
-        self.status_label.setText(msg)
-        self.notify_status.emit(msg)
-
-    def _on_reveal_file(self, file_path: str) -> None:
-        if not file_path or file_path == "—":
-            msg = "⚠️ No file path available."
-            self.status_label.setText(msg)
-            self.notify_status.emit(msg)
-            return
-        if file_path.startswith("apple-music:") or file_path.startswith("spotify:"):
-            msg = f"Streaming track URI: {file_path}"
-            self.status_label.setText(msg)
-            self.notify_status.emit(msg)
-            return
-
-        success = reveal_in_file_manager(file_path)
-        if success:
-            msg = f"🔍 Revealed in Finder: {os.path.basename(file_path)}"
-        else:
-            folder = os.path.dirname(file_path) if os.path.splitext(file_path)[1] else file_path
-            if folder and open_in_folder(folder):
-                msg = f"⚠️ File missing on disk, opened folder: {os.path.basename(folder)}"
-            else:
-                msg = f"❌ File not found on disk: {file_path}"
         self.status_label.setText(msg)
         self.notify_status.emit(msg)
 

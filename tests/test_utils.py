@@ -10,6 +10,8 @@ from sqlalchemy import create_engine
 
 from rekordbox_collection_manager.utils import (
     MONTH_NAME_TO_INT,
+    build_exclude_streaming_clause,
+    build_track_record,
     clean_session_name,
     compose_history_name,
     compose_played_with,
@@ -17,11 +19,12 @@ from rekordbox_collection_manager.utils import (
     ensure_rekordbox_not_running,
     extract_date_from_name,
     extract_year_month_from_name_or_date,
+    format_duration,
+    format_rating_stars,
     get_rekordbox_timestamp,
+    is_aiff_track,
+    is_mp3_track,
     is_rekordbox_running,
-    STREAMING_FILE_TYPES,
-    STREAMING_URI_PREFIXES,
-    build_exclude_streaming_clause,
     is_streaming_track,
     natural_sort_key,
     normalize_date_input,
@@ -377,6 +380,71 @@ class TestUtils(unittest.TestCase):
         clause_no_alias = build_exclude_streaming_clause(cols, table_alias=None)
         self.assertIn("FileType NOT IN (25, 26)", clause_no_alias)
         self.assertNotIn("c.FileType", clause_no_alias)
+
+    def test_format_duration(self):
+        self.assertEqual(format_duration(0), "--:--")
+        self.assertEqual(format_duration(None), "--:--")
+        self.assertEqual(format_duration(65), "1:05")
+        self.assertEqual(format_duration(360), "6:00")
+        self.assertEqual(format_duration(214.8), "3:35")
+
+    def test_format_rating_stars(self):
+        self.assertEqual(format_rating_stars(0), "☆☆☆☆☆")
+        self.assertEqual(format_rating_stars(1), "★☆☆☆☆")
+        self.assertEqual(format_rating_stars(3), "★★★☆☆")
+        self.assertEqual(format_rating_stars(5), "★★★★★")
+        # 0..255 scale
+        self.assertEqual(format_rating_stars(255), "★★★★★")
+        self.assertEqual(format_rating_stars(128), "★★★☆☆")
+
+    def test_is_mp3_and_aiff_track(self):
+        self.assertTrue(is_mp3_track("test.mp3"))
+        self.assertTrue(is_mp3_track({"file_type": "MP3"}))
+        self.assertTrue(is_mp3_track({"raw_file_type": 1}))
+        self.assertTrue(is_mp3_track({"file_name": "song.mp3"}))
+        self.assertFalse(is_mp3_track("test.aiff"))
+
+        self.assertTrue(is_aiff_track("test.aiff"))
+        self.assertTrue(is_aiff_track("test.aif"))
+        self.assertTrue(is_aiff_track({"file_type": "AIFF"}))
+        self.assertTrue(is_aiff_track({"raw_file_type": 12}))
+        self.assertFalse(is_aiff_track("test.wav"))
+
+    def test_build_track_record(self):
+        row = {
+            "ID": 101,
+            "Title": "Sunrise Groove",
+            "ArtistName": "DJ Tester",
+            "AlbumName": "Test Album",
+            "GenreName": "House",
+            "KeyName": "8A",
+            "BPM": 12400,
+            "Length": 365,
+            "DJPlayCount": 5,
+            "Rating": 4,
+            "ReleaseYear": 2024,
+            "BitRate": 320,
+            "FileType": 1,
+            "TagNames": "Peak Time|||Vocal",
+            "PlaylistNames": "Ibiza 2024|||Warm Up",
+            "FolderPath": "/Music/Afro House",
+            "FileNameL": "Sunrise.mp3",
+        }
+        record = build_track_record(row, extra={"track_no": 1})
+        self.assertEqual(record["id"], "101")
+        self.assertEqual(record["title"], "Sunrise Groove")
+        self.assertEqual(record["artist"], "DJ Tester")
+        self.assertEqual(record["bpm"], 124.0)
+        self.assertEqual(record["duration_sec"], 365)
+        self.assertEqual(record["duration_str"], "6:05")
+        self.assertEqual(record["play_count"], 5)
+        self.assertEqual(record["plays"], 5)
+        self.assertEqual(record["tags"], ["Peak Time", "Vocal"])
+        self.assertEqual(record["playlists"], ["Ibiza 2024", "Warm Up"])
+        self.assertEqual(record["track_no"], 1)
+        self.assertEqual(record["file_type"], "MP3")
+        self.assertEqual(record["year"], 2024)
+        self.assertEqual(record["release_year"], 2024)
 
 
 if __name__ == "__main__":

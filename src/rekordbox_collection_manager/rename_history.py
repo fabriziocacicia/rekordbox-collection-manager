@@ -18,12 +18,12 @@ from sqlcipher3 import dbapi2 as sqlcipher_driver
 from rekordbox_collection_manager.utils import (
     DEVICE_LIBRARY_PLUS_KEY,
     MONTH_NAME_TO_INT,
+    build_track_record,
     clean_session_name,
     compose_history_name,
     ensure_rekordbox_not_running,
     extract_date_from_name,
     extract_year_month_from_name_or_date,
-    format_location_display,
     get_default_master_db_path,
     get_rekordbox_timestamp,
     is_rekordbox_running,
@@ -35,8 +35,6 @@ from rekordbox_collection_manager.utils import (
     parse_session_paren_number,
     parse_year_month,
     resolve_db_path,
-    resolve_file_and_folder_paths,
-    resolve_file_type,
 )
 
 
@@ -881,59 +879,15 @@ def fetch_session_tracks(engine: Engine, history_id: str) -> Dict[str, Any]:
             """
             rows = conn.execute(text(query), {"hid": history_id}).mappings().fetchall()
             for r in rows:
-                bpm_raw = r.get("BPM")
-                bpm_val = round(float(bpm_raw) / 100.0, 1) if bpm_raw and bpm_raw > 0 else 0.0
-
-                duration_sec = int(r.get("Length") or 0)
-                if duration_sec > 0:
-                    mins = duration_sec // 60
-                    secs = duration_sec % 60
-                    dur_str = f"{mins}:{secs:02d}"
-                else:
-                    dur_str = "--:--"
-
-                raw_tags = r.get("TagNames")
-                tags_list = [t.strip() for t in raw_tags.split("|||") if t.strip()] if raw_tags else []
-
-                raw_playlists = r.get("PlaylistNames")
-                playlists_list = [p.strip() for p in raw_playlists.split("|||") if p.strip()] if raw_playlists else []
-
-                raw_fn = r.get("FileNameL") or ""
-                raw_fp = r.get("FolderPath") or ""
-                file_type_str = resolve_file_type(r.get("FileType"), raw_fn, raw_fp)
-                f_name, f_dir, fn_disp, f_full = resolve_file_and_folder_paths(raw_fn, raw_fp)
-                loc_disp = format_location_display(raw_fn, raw_fp)
-
-                tracks.append({
-                    "track_no": int(r.get("TrackNo") or 0),
-                    "content_id": str(r.get("ContentID") or ""),
-                    "id": str(r.get("ContentID") or ""),
-                    "title": r.get("Title") or "(Untitled)",
-                    "artist": r.get("ArtistName") or "Unknown Artist",
-                    "album": r.get("AlbumName") or "",
-                    "genre": r.get("GenreName") or "",
-                    "key": r.get("KeyName") or "",
-                    "bpm": bpm_val,
-                    "duration_sec": duration_sec,
-                    "duration_str": dur_str,
-                    "play_count": int(r.get("DJPlayCount") or 0),
-                    "rating": int(r.get("Rating") or 0),
-                    "year": int(r.get("ReleaseYear") or 0),
-                    "bitrate": int(r.get("BitRate") or 0),
-                    "file_type": file_type_str,
-                    "raw_file_type": r.get("FileType"),
-                    "tags": tags_list,
-                    "playlists": playlists_list,
-                    "folder_name": f_name,
-                    "folder_dir": f_dir,
-                    "file_name": fn_disp,
-                    "file_path": f_full,
-                    "location_display": loc_disp,
-                    "comment": r.get("Commnt") or "",
-                    "folder_path": raw_fp,
-                    "filename": raw_fn,
-                    "played_at": str(r.get("PlayedAt") or ""),
-                })
+                tracks.append(
+                    build_track_record(
+                        r,
+                        extra={
+                            "track_no": int(r.get("TrackNo") or 0),
+                            "played_at": str(r.get("PlayedAt") or ""),
+                        },
+                    )
+                )
 
     # 3. Compute Aggregate Stats
     total_tracks = len(tracks)

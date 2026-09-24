@@ -71,48 +71,14 @@ from rekordbox_collection_manager.gui.workers import (
     TrackSearchWorker,
 )
 from rekordbox_collection_manager.utils import (
+    format_file_size,
+    is_aiff_track,
+    is_mp3_track,
     is_rekordbox_running,
     open_in_folder,
     resolve_artwork_path,
     reveal_in_file_manager,
 )
-
-
-def is_mp3_track(r: Optional[Dict[str, Any]]) -> bool:
-    """Check if a track dictionary represents an MP3 file."""
-    if not r:
-        return False
-    if r.get("raw_file_type") == 1:
-        return True
-    ft = str(r.get("file_type") or "").strip().upper()
-    if ft == "MP3":
-        return True
-    ext = os.path.splitext(r.get("file_name") or r.get("file_path") or "")[1].lower()
-    return ext == ".mp3"
-
-
-def is_aiff_track(r: Optional[Dict[str, Any]]) -> bool:
-    """Check if a track dictionary represents an AIFF file."""
-    if not r:
-        return False
-    if r.get("raw_file_type") == 12:
-        return True
-    ft = str(r.get("file_type") or "").strip().upper()
-    if ft in ("AIFF", "AIF"):
-        return True
-    ext = os.path.splitext(r.get("file_name") or r.get("file_path") or "")[1].lower()
-    return ext in (".aiff", ".aif")
-
-
-def format_file_size(size_bytes: int) -> str:
-    """Format file size in bytes to human-readable MB or KB string."""
-    if not size_bytes or size_bytes <= 0:
-        return "—"
-    mb = size_bytes / (1024 * 1024)
-    if mb >= 1.0:
-        return f"{mb:.1f} MB"
-    kb = size_bytes / 1024
-    return f"{kb:.0f} KB"
 
 
 class FileDropZone(QFrame):

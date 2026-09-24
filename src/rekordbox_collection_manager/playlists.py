@@ -11,9 +11,7 @@ from sqlalchemy.engine import Engine
 
 from rekordbox_collection_manager.utils import (
     build_exclude_streaming_clause,
-    format_location_display,
-    resolve_file_and_folder_paths,
-    resolve_file_type,
+    build_track_record,
 )
 
 
@@ -606,70 +604,6 @@ def fetch_playlist_tracks(
         tracks: List[Dict[str, Any]] = []
         for idx, r in enumerate(rows, 1):
             track_num = idx if is_smart else int(r.get("TrackNo") or idx)
-            bpm_raw = r.get("BPM")
-            bpm_val = (
-                round(float(bpm_raw) / 100.0, 1) if bpm_raw and bpm_raw > 0 else 0.0
-            )
-
-            duration_sec = int(r.get("Length") or 0)
-            if duration_sec > 0:
-                mins = duration_sec // 60
-                secs = duration_sec % 60
-                dur_str = f"{mins}:{secs:02d}"
-            else:
-                dur_str = "--:--"
-
-            raw_tags = r.get("TagNames")
-            tags_list = (
-                [t.strip() for t in raw_tags.split("|||") if t.strip()]
-                if raw_tags
-                else []
-            )
-
-            raw_playlists = r.get("PlaylistNames")
-            playlists_list = (
-                [p.strip() for p in raw_playlists.split("|||") if p.strip()]
-                if raw_playlists
-                else []
-            )
-
-            raw_fn = r.get("FileNameL") or ""
-            raw_fp = r.get("FolderPath") or ""
-            file_type_str = resolve_file_type(r.get("FileType"), raw_fn, raw_fp)
-            f_name, f_dir, fn_disp, f_full = resolve_file_and_folder_paths(
-                raw_fn, raw_fp
-            )
-            loc_disp = format_location_display(raw_fn, raw_fp)
-
-            tracks.append({
-                "track_no": track_num,
-                "content_id": str(r.get("ContentID") or ""),
-                "id": str(r.get("ContentID") or ""),
-                "title": r.get("Title") or "(Untitled)",
-                "artist": r.get("ArtistName") or "Unknown Artist",
-                "album": r.get("AlbumName") or "",
-                "genre": r.get("GenreName") or "",
-                "key": r.get("KeyName") or "",
-                "bpm": bpm_val,
-                "duration_sec": duration_sec,
-                "duration_str": dur_str,
-                "play_count": int(r.get("DJPlayCount") or 0),
-                "rating": int(r.get("Rating") or 0),
-                "release_year": r.get("ReleaseYear"),
-                "bitrate": int(r.get("BitRate") or 0),
-                "file_type": file_type_str,
-                "comment": r.get("Commnt") or "",
-                "folder": f_name,
-                "folder_name": f_name,
-                "folder_dir": f_dir,
-                "file_name": fn_disp,
-                "filename": raw_fn or fn_disp,
-                "folder_path": raw_fp or f_dir,
-                "file_path": f_full,
-                "location": loc_disp,
-                "location_display": loc_disp,
-                "tags": tags_list,
-                "playlists": playlists_list,
-            })
+            tracks.append(build_track_record(r, extra={"track_no": track_num}))
 
         return tracks
