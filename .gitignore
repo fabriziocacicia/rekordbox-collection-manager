@@ -11,3 +11,7 @@ wheels/
 
 # macOS metadata
 .DS_Store
+
+# Secrets / Config
+.env
+turso_secrets.json

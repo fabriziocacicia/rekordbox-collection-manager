@@ -8,7 +8,9 @@ authors = [
 ]
 requires-python = ">=3.11"
 dependencies = [
+    "libsql-client>=0.3.1",
     "mutagen>=1.47.0",
+    "pyobjc-framework-cocoa>=12.2.2",
     "pyrekordbox>=0.4.4",
     "pyside6>=6.11.2",
     "questionary>=2.1.1",
@@ -20,6 +22,7 @@ rekordbox-gui = "rekordbox_collection_manager.gui.app:main"
 rename-history = "rekordbox_collection_manager.rename_history:main"
 edit-play-count = "rekordbox_collection_manager.edit_play_count:main"
 replace-file = "rekordbox_collection_manager.replace_file:main"
+rekordbox-daemon = "rekordbox_collection_manager.daemon:main"
 
 [build-system]
 requires = ["uv_build>=0.12.5,<0.13.0"]
