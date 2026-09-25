@@ -593,6 +593,30 @@ class TestTrackDetailViewIntegration(unittest.TestCase):
         view.back_btn.click()
         self.assertEqual(len(back_emitted), 1)
 
+    def test_replace_btn_visibility_mp3_only(self):
+        """Verify replace_btn is only visible for MP3 tracks and hidden for other file types."""
+        flac_track = dict(self.sample_tracks[0])
+        mp3_track = dict(self.sample_tracks[0])
+        mp3_track["file_type"] = "MP3"
+        mp3_track["file_path"] = "/Music/solaris.mp3"
+
+        view = TrackDetailView(
+            engine=self.engine,
+            track_data=flac_track,
+            tracks_list=[flac_track, mp3_track],
+            current_index=0,
+        )
+        self.assertTrue(view.replace_btn.isHidden())
+
+        # Advance to next track (MP3)
+        view._on_next_track()
+        self.assertFalse(view.replace_btn.isHidden())
+        self.assertTrue(view.replace_btn.isEnabled())
+
+        # Back to previous track (FLAC)
+        view._on_prev_track()
+        self.assertTrue(view.replace_btn.isHidden())
+
     def test_view_esc_key_emits_back(self):
         """Verify pressing Escape key emits back_clicked."""
         view = TrackDetailView(

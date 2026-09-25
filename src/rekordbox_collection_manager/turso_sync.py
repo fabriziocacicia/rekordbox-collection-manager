@@ -16,9 +16,23 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from rekordbox_collection_manager.backup_restore import create_database_backup
-from rekordbox_collection_manager.utils import get_rekordbox_timestamp
+from rekordbox_collection_manager.utils import (
+    get_default_master_db_path,
+    get_rekordbox_timestamp,
+    is_rekordbox_running,
+    open_database,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def is_turso_configured() -> bool:
+    """Check if Turso cloud database credentials are configured in env or .env."""
+    try:
+        url, token = get_turso_credentials()
+        return bool(url and token)
+    except Exception:
+        return False
 
 
 def get_turso_credentials() -> Tuple[str, str]:
@@ -727,3 +741,125 @@ def _mark_event_status(client: TursoHttpClient, event_id: str, status: str, erro
         """,
         [status, now_str, error_msg, event_id],
     )
+
+
+class SyncResult:
+    """Result of a Turso cloud sync cycle."""
+
+    def __init__(
+        self,
+        success: bool,
+        applied_events: int = 0,
+        stats: Optional[Dict[str, int]] = None,
+        message: str = "",
+    ):
+        self.success = success
+        self.applied_events = applied_events
+        self.stats = stats or {}
+        self.message = message
+
+    def __bool__(self) -> bool:
+        return self.success
+
+    def __repr__(self) -> str:
+        return (
+            f"<SyncResult success={self.success} applied_events={self.applied_events} "
+            f"stats={self.stats} message='{self.message}'>"
+        )
+
+
+def run_sync_cycle(
+    db_path: Optional[str] = None,
+    engine: Optional[Engine] = None,
+    force: bool = False,
+    create_backup: bool = True,
+    progress_cb: Optional[Callable[[str, int, int], None]] = None,
+) -> SyncResult:
+    """Execute a single sync cycle.
+
+    1. Checks if Turso credentials are configured.
+    2. If Rekordbox is running and force=False, skips to avoid database lock/conflict.
+    3. Connects to Turso client.
+    4. Creates a local safety backup if create_backup=True.
+    5. Ingests and applies pending changelog events from Turso into master.db.
+    6. Exports fresh collection snapshot (tracks, playlists, tags) to Turso.
+    """
+    if not is_turso_configured():
+        logger.debug("Turso credentials not configured. Skipping cloud sync.")
+        return SyncResult(success=False, message="Turso credentials not configured")
+
+    if is_rekordbox_running() and not force:
+        logger.info("Rekordbox is currently running. Sync deferred until Rekordbox closes.")
+        return SyncResult(success=False, message="Rekordbox is currently running")
+
+    resolved_db_path = db_path or get_default_master_db_path()
+    if not resolved_db_path or not os.path.exists(resolved_db_path):
+        logger.error("Could not locate Rekordbox master.db at: %s", resolved_db_path)
+        return SyncResult(success=False, message=f"Could not locate Rekordbox master.db at {resolved_db_path}")
+
+    logger.info("Starting Turso sync cycle for database: %s", resolved_db_path)
+
+    # 1. Connect to Turso
+    try:
+        client = create_turso_client()
+    except Exception as e:
+        logger.error("Failed to connect to Turso: %s", e)
+        return SyncResult(success=False, message=f"Failed to connect to Turso: {e}")
+
+    # 2. Open database engine if not provided
+    created_engine = False
+    if engine is None:
+        try:
+            engine, _ = open_database(resolved_db_path)
+            created_engine = True
+        except Exception as e:
+            logger.error("Failed to open master.db: %s", e)
+            return SyncResult(success=False, message=f"Failed to open database: {e}")
+
+    # 3. Create safety backup before modifying or exporting
+    if create_backup:
+        try:
+            backup_res = create_database_backup(resolved_db_path, force=True)
+            logger.info("Created safety backup at: %s", backup_res.get("backup_path") or backup_res.get("backup_folder"))
+        except Exception as e:
+            logger.warning("Backup warning (proceeding with caution): %s", e)
+
+    # 4. Ingest pending changelog events from mobile (iOS)
+    processed = 0
+    try:
+        processed = apply_changelog_events(engine, client)
+        if processed > 0:
+            logger.info("Successfully applied %d change events to master.db", processed)
+        else:
+            logger.info("No pending changelog events to apply.")
+    except Exception as e:
+        logger.error("Error applying changelog events: %s", e)
+
+    # 5. Export fresh snapshot to Turso
+    try:
+        stats = export_collection_to_turso(engine, client, progress_cb=progress_cb)
+        logger.info(
+            "Export to Turso complete: %d tracks, %d playlists, %d tags synced.",
+            stats.get("tracks", 0),
+            stats.get("playlists", 0),
+            stats.get("tags", 0),
+        )
+        return SyncResult(
+            success=True,
+            applied_events=processed,
+            stats=stats,
+            message="Cloud sync complete",
+        )
+    except Exception as e:
+        logger.error("Error exporting to Turso: %s", e)
+        return SyncResult(
+            success=False,
+            applied_events=processed,
+            message=f"Error exporting to Turso: {e}",
+        )
+    finally:
+        if created_engine and engine:
+            try:
+                engine.dispose()
+            except Exception:
+                pass

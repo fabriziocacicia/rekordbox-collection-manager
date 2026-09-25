@@ -187,6 +187,7 @@ class ReplaceFileView(QWidget):
     notify_status = Signal(str)
     open_track_detail_requested = Signal(dict)
     open_history_session_requested = Signal(str)
+    db_saved = Signal()
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -1065,6 +1066,7 @@ class ReplaceFileView(QWidget):
         )
         QMessageBox.information(self, "Replacement Complete", success_msg)
         self.notify_status.emit(f"Replaced audio file for '{res['title']}' with {res['new_file']['format']}")
+        self.db_saved.emit()
 
         # Reset form
         self._reset_mode1()
@@ -1226,6 +1228,7 @@ class ReplaceFileView(QWidget):
         )
         QMessageBox.information(self, "Merge Complete", msg)
         self.notify_status.emit(f"Merged history and plays for '{res['title']}'")
+        self.db_saved.emit()
         self._reset_mode2()
 
     def _on_merge_error(self, err: str) -> None:

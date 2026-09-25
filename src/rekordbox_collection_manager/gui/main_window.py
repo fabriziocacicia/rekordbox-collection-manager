@@ -1,5 +1,6 @@
 """Main Application Window for Rekordbox Collection Manager."""
 
+import logging
 import os
 import shutil
 import sys
@@ -52,13 +53,24 @@ from rekordbox_collection_manager.gui.theme import (
     COLOR_TEXT_PRIMARY,
     COLOR_TEXT_SECONDARY,
 )
-from rekordbox_collection_manager.gui.workers import BackupWorker, DatabaseLoaderWorker
+from rekordbox_collection_manager.gui.workers import (
+    BackupWorker,
+    DatabaseLoaderWorker,
+    SyncWorker,
+)
+from rekordbox_collection_manager.turso_sync import (
+    SyncResult,
+    is_turso_configured,
+    run_sync_cycle,
+)
 from rekordbox_collection_manager.utils import (
     get_default_master_db_path,
     is_rekordbox_running,
     open_in_folder,
     reveal_in_file_manager,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class CollapsibleSidebarFrame(QFrame):
@@ -128,6 +140,9 @@ class MainWindow(QMainWindow):
         self.is_sidebar_collapsed: bool = False
         self._db_loader: Optional[DatabaseLoaderWorker] = None
         self._backup_worker: Optional[BackupWorker] = None
+        self._sync_worker: Optional[SyncWorker] = None
+        self._sync_pending: bool = False
+        self._initial_sync_done: bool = False
 
         self.nav_items = [
             {
@@ -384,6 +399,14 @@ class MainWindow(QMainWindow):
         self.history_view.replace_file_requested.connect(self.open_replace_file_for_track)
         self.play_count_view.replace_file_requested.connect(self.open_replace_file_for_track)
 
+        # Database save signals -> trigger cloud sync
+        self.history_view.db_saved.connect(self._on_db_saved)
+        self.tracks_view.db_saved.connect(self._on_db_saved)
+        self.playlists_view.db_saved.connect(self._on_db_saved)
+        self.tags_view.db_saved.connect(self._on_db_saved)
+        self.play_count_view.db_saved.connect(self._on_db_saved)
+        self.replace_file_view.db_saved.connect(self._on_db_saved)
+
         self.info_view = InfoView(self)
         self.stacked_widget.addWidget(self.info_view)
 
@@ -622,6 +645,11 @@ class MainWindow(QMainWindow):
             5000,
         )
 
+        # Trigger cloud sync on opening our custom manager
+        if not self._initial_sync_done:
+            self._initial_sync_done = True
+            self.trigger_sync(background=True, create_backup=True)
+
     def _on_db_error(self, err_msg: str) -> None:
         self.setWindowTitle("Rekordbox Collection Manager")
         self.status_bar.showMessage(f"❌ Database load error: {err_msg}")
@@ -677,6 +705,13 @@ class MainWindow(QMainWindow):
         act_restore = QAction("📥 Restore from Backup...", self)
         act_restore.triggered.connect(self._on_open_restore_dialog)
         db_menu.addAction(act_restore)
+
+        db_menu.addSeparator()
+
+        act_sync = QAction("☁️ Sync with Turso Cloud", self)
+        act_sync.setShortcut(QKeySequence("Ctrl+Shift+S"))
+        act_sync.triggered.connect(lambda: self.trigger_sync(background=True, create_backup=True))
+        db_menu.addAction(act_sync)
 
         db_menu.addSeparator()
 
@@ -745,6 +780,7 @@ class MainWindow(QMainWindow):
         """Handle completion of restore operation and reload database."""
         self.status_bar.showMessage("✅ Collection restored. Reloading database...", 6000)
         self.load_database(self.db_path)
+        self.trigger_sync(background=True, create_backup=False)
 
     def _on_reveal_db_in_finder(self) -> None:
         """Reveal active database file in system file manager (Finder / Explorer)."""
@@ -762,11 +798,79 @@ class MainWindow(QMainWindow):
     def _show_status_message(self, msg: str) -> None:
         self.status_bar.showMessage(msg, 5000)
 
+    def _on_db_saved(self) -> None:
+        """Trigger background cloud sync after database modifications."""
+        self.trigger_sync(background=True, create_backup=True)
+
+    def trigger_sync(
+        self,
+        background: bool = True,
+        create_backup: bool = True,
+    ) -> None:
+        """Trigger a Turso cloud sync cycle using the unified sync engine."""
+        if not is_turso_configured():
+            return
+
+        if is_rekordbox_running():
+            self.status_bar.showMessage("☁️ Cloud sync deferred: Rekordbox is currently running.", 5000)
+            return
+
+        if not self.db_path:
+            return
+
+        if background:
+            if self._sync_worker and self._sync_worker.isRunning():
+                self._sync_pending = True
+                return
+
+            self.status_bar.showMessage("☁️ Syncing collection with Turso cloud...", 0)
+            worker = SyncWorker(db_path=self.db_path, create_backup=create_backup, parent=self)
+            self._sync_worker = worker
+            worker.success.connect(self._on_sync_success)
+            worker.error.connect(self._on_sync_error)
+            worker.finished.connect(lambda: self._on_sync_finished(worker))
+            worker.start()
+        else:
+            try:
+                run_sync_cycle(self.db_path, force=False, create_backup=create_backup)
+            except Exception as e:
+                logger.error("Error during cloud sync: %s", e)
+
+    def _on_sync_success(self, res: SyncResult) -> None:
+        msg = f"☁️ Turso cloud sync complete ({res.stats.get('tracks', 0)} tracks, {res.stats.get('playlists', 0)} playlists synced)."
+        if res.applied_events > 0:
+            msg += f" Ingested {res.applied_events} change(s) from mobile."
+            self.load_database(self.db_path)
+        self.status_bar.showMessage(msg, 6000)
+
+    def _on_sync_error(self, err_msg: str) -> None:
+        self.status_bar.showMessage(f"☁️ Cloud sync notice: {err_msg}", 5000)
+
+    def _on_sync_finished(self, worker: SyncWorker) -> None:
+        if self._sync_worker is worker:
+            self._sync_worker = None
+        if self._sync_pending:
+            self._sync_pending = False
+            self.trigger_sync(background=True, create_backup=False)
+
     def closeEvent(self, event: QCloseEvent) -> None:
-        """Safely terminate or wait for active background workers before closing."""
+        """Safely terminate active background workers and perform final cloud sync before closing."""
         if self._db_loader and self._db_loader.isRunning():
             self._db_loader.quit()
             self._db_loader.wait(1000)
         if self._backup_worker and self._backup_worker.isRunning():
             self._backup_worker.wait(2000)
+
+        # Trigger Turso cloud sync upon closing custom manager
+        if is_turso_configured() and self.db_path and not is_rekordbox_running():
+            if self._sync_worker and self._sync_worker.isRunning():
+                self.status_bar.showMessage("Completing active cloud sync before exit...")
+                self._sync_worker.wait(10000)
+            else:
+                self.status_bar.showMessage("Syncing collection with Turso cloud before closing...")
+                try:
+                    run_sync_cycle(self.db_path, force=False, create_backup=True)
+                except Exception as e:
+                    logger.error("Error during closing cloud sync: %s", e)
+
         super().closeEvent(event)

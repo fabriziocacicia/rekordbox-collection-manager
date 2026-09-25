@@ -637,3 +637,37 @@ class TagTracksWorker(CategoryTracksWorker):
         )
         self.tag_id = tag_id
 
+
+class SyncWorker(QThread):
+    """Background worker to run Turso cloud sync without freezing the GUI."""
+
+    success = Signal(object)  # SyncResult
+    error = Signal(str)
+
+    def __init__(
+        self,
+        db_path: Optional[str] = None,
+        force: bool = False,
+        create_backup: bool = True,
+        parent: Optional[Any] = None,
+    ):
+        super().__init__(parent)
+        self.db_path = db_path
+        self.force = force
+        self.create_backup = create_backup
+
+    def run(self) -> None:
+        try:
+            from rekordbox_collection_manager.turso_sync import run_sync_cycle
+            res = run_sync_cycle(
+                db_path=self.db_path,
+                force=self.force,
+                create_backup=self.create_backup,
+            )
+            if res.success:
+                self.success.emit(res)
+            else:
+                self.error.emit(res.message)
+        except Exception as e:
+            self.error.emit(str(e))
+

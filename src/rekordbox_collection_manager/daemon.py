@@ -15,16 +15,12 @@ import sys
 import time
 from typing import Optional
 
-from rekordbox_collection_manager.backup_restore import create_database_backup
 from rekordbox_collection_manager.turso_sync import (
-    apply_changelog_events,
     create_turso_client,
-    export_collection_to_turso,
+    run_sync_cycle,
 )
 from rekordbox_collection_manager.utils import (
-    get_default_master_db_path,
     is_rekordbox_running,
-    open_database,
 )
 
 logging.basicConfig(
@@ -36,65 +32,6 @@ logger = logging.getLogger("rekordbox-daemon")
 
 LAUNCHD_PLIST_LABEL = "com.fabriziocacicia.rekordbox-sync"
 LAUNCHD_PLIST_PATH = os.path.expanduser(f"~/Library/LaunchAgents/{LAUNCHD_PLIST_LABEL}.plist")
-
-
-def run_sync_cycle(force: bool = False) -> bool:
-    """Execute a single sync cycle.
-
-    If Rekordbox is running and force=False, skips to avoid database lock/conflict.
-    """
-    if is_rekordbox_running() and not force:
-        logger.info("Rekordbox is currently running. Sync deferred until Rekordbox closes.")
-        return False
-
-    db_path = get_default_master_db_path()
-    if not db_path or not os.path.exists(db_path):
-        logger.error("Could not locate Rekordbox master.db")
-        return False
-
-    logger.info("Starting sync cycle for database: %s", db_path)
-
-    # 1. Connect to Turso
-    try:
-        client = create_turso_client()
-    except Exception as e:
-        logger.error("Failed to connect to Turso: %s", e)
-        return False
-
-    # 2. Open master.db
-    engine, fmt = open_database(db_path)
-
-    # 3. Create safety backup before touching anything
-    try:
-        backup_res = create_database_backup(db_path, force=True)
-        logger.info("Created safety backup at: %s", backup_res.get("backup_path"))
-    except Exception as e:
-        logger.warning("Backup warning (proceeding with caution): %s", e)
-
-    # 4. Ingest pending changelog events from iOS
-    try:
-        processed = apply_changelog_events(engine, client)
-        if processed > 0:
-            logger.info("Successfully applied %d change events to master.db", processed)
-        else:
-            logger.info("No pending changelog events to apply.")
-    except Exception as e:
-        logger.error("Error applying changelog events: %s", e)
-
-    # 5. Export fresh snapshot to Turso
-    try:
-        stats = export_collection_to_turso(engine, client)
-        logger.info(
-            "Export to Turso complete: %d tracks, %d playlists, %d tags synced.",
-            stats["tracks"],
-            stats["playlists"],
-            stats["tags"],
-        )
-    except Exception as e:
-        logger.error("Error exporting to Turso: %s", e)
-        return False
-
-    return True
 
 
 try:

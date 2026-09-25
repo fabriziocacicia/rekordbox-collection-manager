@@ -102,6 +102,7 @@ class PlayCountView(QWidget):
     open_playlist_requested = Signal(str)
     open_tag_requested = Signal(str)
     replace_file_requested = Signal(dict)
+    db_saved = Signal()
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -269,6 +270,7 @@ class PlayCountView(QWidget):
         self.track_detail_view.status_message.connect(self.notify_status.emit)
         self.track_detail_view.track_changed.connect(self._on_detail_track_changed)
         self.track_detail_view.replace_file_requested.connect(self.replace_file_requested.emit)
+        self.track_detail_view.db_saved.connect(self.db_saved.emit)
         self.stack.addWidget(self.track_detail_view)
 
     def reset_to_list(self) -> None:
@@ -633,6 +635,7 @@ class PlayCountView(QWidget):
             self.records.sort(key=self._record_sort_key, reverse=reverse)
         self._populate_table()
         self._update_status_bar()
+        self.db_saved.emit()
         self.notify_status.emit(f"✅ Successfully saved play count updates for {updated_count} tracks.")
         QMessageBox.information(
             self,

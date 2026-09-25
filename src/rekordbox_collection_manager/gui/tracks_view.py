@@ -44,6 +44,7 @@ class TracksView(QWidget):
     open_playlist_requested = Signal(str)
     open_tag_requested = Signal(str)
     replace_file_requested = Signal(dict)
+    db_saved = Signal()
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -151,6 +152,7 @@ class TracksView(QWidget):
         self.detail_view.status_message.connect(self._on_table_status_message)
         self.detail_view.track_changed.connect(self._on_detail_track_changed)
         self.detail_view.replace_file_requested.connect(self.replace_file_requested.emit)
+        self.detail_view.db_saved.connect(self.db_saved.emit)
         self.stack.addWidget(self.detail_view)
 
     def reset_to_list(self) -> None:

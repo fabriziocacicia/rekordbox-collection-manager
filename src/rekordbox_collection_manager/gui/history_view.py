@@ -239,6 +239,7 @@ class HistoryView(QWidget):
     replace_file_requested = Signal(dict)
     open_playlist_requested = Signal(str)
     open_tag_requested = Signal(str)
+    db_saved = Signal()
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -436,6 +437,7 @@ class HistoryView(QWidget):
         self.track_detail_view.status_message.connect(self.notify_status.emit)
         self.track_detail_view.track_changed.connect(self._on_track_detail_changed)
         self.track_detail_view.replace_file_requested.connect(self.replace_file_requested.emit)
+        self.track_detail_view.db_saved.connect(self.db_saved.emit)
         self.stack.addWidget(self.track_detail_view)
 
     def set_data(
@@ -1303,6 +1305,7 @@ class HistoryView(QWidget):
             f"Successfully updated {updated_count} sessions and realigned chronological tree order.",
         )
         self.request_reload.emit()
+        self.db_saved.emit()
 
     def _on_save_error(self, err_msg: str) -> None:
         self.save_btn.setEnabled(True)
@@ -1477,6 +1480,7 @@ class HistoryView(QWidget):
         if self.current_detail_id == history_id:
             self._open_session_detail(history_id)
         self.request_reload.emit()
+        self.db_saved.emit()
 
     def _on_restore_success(self, history_id: str) -> None:
         self.notify_status.emit(f"✅ Session {history_id} restored.")
@@ -1488,6 +1492,7 @@ class HistoryView(QWidget):
         if self.current_detail_id == history_id:
             self._open_session_detail(history_id)
         self.request_reload.emit()
+        self.db_saved.emit()
 
     def _on_action_error(self, history_id: str, err_msg: str) -> None:
         self.notify_status.emit(f"❌ Error for session {history_id}: {err_msg}")
@@ -1669,6 +1674,7 @@ class HistoryView(QWidget):
                 f"Session '{b}' updated successfully.",
             )
             self.request_reload.emit()
+            self.db_saved.emit()
 
         def on_error(err_msg: str) -> None:
             self.notify_status.emit(f"❌ Save failed: {err_msg}")
