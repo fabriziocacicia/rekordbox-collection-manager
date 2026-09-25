@@ -53,7 +53,7 @@ from rekordbox_collection_manager.gui.track_table import (
     TracksTableWidget,
 )
 from rekordbox_collection_manager.gui.chip import BadgeChip, DJChip, DJChipsContainer
-from rekordbox_collection_manager.gui.workers import HistorySessionDetailWorker
+from rekordbox_collection_manager.gui.workers import HistorySessionDetailWorker, stop_worker
 from rekordbox_collection_manager.utils import (
     MONTH_INT_TO_NAME,
     compose_history_name,
@@ -968,8 +968,7 @@ class HistoryDetailView(QWidget):
             self.breadcrumb_label.setText("HISTORY  ›  SESSIONS")
 
         # Run background worker
-        if self.active_worker and self.active_worker.isRunning():
-            self.active_worker.terminate()
+        stop_worker(self.active_worker)
 
         self.active_worker = HistorySessionDetailWorker(engine, history_id, parent=self)
         self.active_worker.success.connect(self._on_data_loaded)

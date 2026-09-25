@@ -36,6 +36,7 @@ from rekordbox_collection_manager.gui.track_detail_view import TrackDetailView
 from rekordbox_collection_manager.gui.workers import (
     PlayCountBatchSaveWorker,
     TrackSearchWorker,
+    stop_worker,
 )
 from rekordbox_collection_manager.utils import (
     is_rekordbox_running,
@@ -301,9 +302,7 @@ class PlayCountView(QWidget):
         }
         sort_by = col_map.get(self.current_sort_col, "title")
         sort_order = "desc" if self.current_sort_order == Qt.SortOrder.DescendingOrder else "asc"
-
-        if self.active_search_worker and self.active_search_worker.isRunning():
-            self.active_search_worker.terminate()
+        stop_worker(self.active_search_worker)
 
         self.status_label.setText("Searching tracks in database...")
         self.active_search_worker = TrackSearchWorker(

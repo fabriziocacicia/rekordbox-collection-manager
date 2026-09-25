@@ -32,7 +32,7 @@ from rekordbox_collection_manager.gui.track_table import (
     TrackTableConfig,
     TracksTableWidget,
 )
-from rekordbox_collection_manager.gui.workers import TrackSearchWorker
+from rekordbox_collection_manager.gui.workers import TrackSearchWorker, stop_worker
 from rekordbox_collection_manager.utils import open_in_folder, reveal_in_file_manager
 
 
@@ -275,9 +275,7 @@ class TracksView(QWidget):
             play_filter = "all"
 
         sort_order_str = "desc" if self.current_sort_order == Qt.SortOrder.DescendingOrder else "asc"
-
-        if self.active_search_worker and self.active_search_worker.isRunning():
-            self.active_search_worker.terminate()
+        stop_worker(self.active_search_worker)
 
         self.status_label.setText("Searching tracks in database...")
         self.active_search_worker = TrackSearchWorker(

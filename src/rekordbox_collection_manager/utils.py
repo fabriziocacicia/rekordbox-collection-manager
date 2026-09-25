@@ -145,6 +145,7 @@ def open_database(db_path: str):
     from pyrekordbox.db6.database import BLOB
     from pyrekordbox.utils import deobfuscate
     from sqlalchemy import create_engine
+    from sqlalchemy.pool import NullPool
     from sqlcipher3 import dbapi2 as sqlcipher_driver
 
     master_key = deobfuscate(BLOB)
@@ -156,13 +157,18 @@ def open_database(db_path: str):
     else:
         candidate_keys = [master_key, DEVICE_LIBRARY_PLUS_KEY, None]
 
+    engine_kwargs = {
+        "poolclass": NullPool,
+        "connect_args": {"check_same_thread": False, "timeout": 30.0},
+    }
+
     for key in candidate_keys:
         try:
             if key:
                 url = f"sqlite+pysqlcipher://:{key}@/{db_path}?"
-                engine = create_engine(url, module=sqlcipher_driver)
+                engine = create_engine(url, module=sqlcipher_driver, **engine_kwargs)
             else:
-                engine = create_engine(f"sqlite:///{db_path}")
+                engine = create_engine(f"sqlite:///{db_path}", **engine_kwargs)
 
             with engine.connect() as conn:
                 res = conn.exec_driver_sql(

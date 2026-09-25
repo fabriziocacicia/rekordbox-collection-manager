@@ -38,7 +38,7 @@ from rekordbox_collection_manager.gui.track_detail_view import (
     TrackDetailView,
 )
 from rekordbox_collection_manager.gui.tracks_view import TracksView
-from rekordbox_collection_manager.gui.workers import TrackDetailWorker
+from rekordbox_collection_manager.gui.workers import TrackDetailWorker, stop_worker
 from rekordbox_collection_manager.rename_history import fetch_track_history_plays
 from rekordbox_collection_manager.utils import resolve_artwork_path
 
@@ -384,6 +384,20 @@ class TestTrackDetailWorker(unittest.TestCase):
         self.assertEqual(len(received), 1)
         self.assertEqual(received[0]["id"], "42")
         self.assertEqual(received[0]["title"], "Solaris")
+
+    def test_stop_worker_graceful(self):
+        """Verify stop_worker safely disconnects signals and handles edge cases."""
+        worker = TrackDetailWorker(self.engine, "42")
+        received = []
+        worker.success.connect(lambda data: received.append(data))
+
+        # Test safe disconnect
+        stop_worker(worker)
+        worker.run()
+        self.assertEqual(len(received), 0)
+
+        # None or non-running worker should not raise
+        stop_worker(None)
 
 
 class TestTrackDetailDialogUI(unittest.TestCase):

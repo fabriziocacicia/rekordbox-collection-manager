@@ -37,6 +37,29 @@ from rekordbox_collection_manager.utils import (
 )
 
 
+def stop_worker(worker: Optional[QThread], wait_ms: int = 50) -> None:
+    """Safely stop a background QThread worker without terminating it mid-operation.
+
+    Disconnects common completion signals so subsequent emissions are ignored,
+    requests thread exit, and waits briefly for clean termination.
+    """
+    if not worker:
+        return
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        for sig_name in ("success", "error", "progress"):
+            sig = getattr(worker, sig_name, None)
+            if sig is not None:
+                try:
+                    sig.disconnect()
+                except Exception:
+                    pass
+    if worker.isRunning():
+        worker.quit()
+        worker.wait(wait_ms)
+
+
 class DatabaseLoaderWorker(QThread):
     """Worker to resolve, open, and load initial database records."""
 

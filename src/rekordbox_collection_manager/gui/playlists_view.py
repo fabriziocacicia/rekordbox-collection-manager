@@ -45,6 +45,7 @@ from rekordbox_collection_manager.gui.track_table import (
 from rekordbox_collection_manager.gui.workers import (
     PlaylistLoaderWorker,
     PlaylistTracksWorker,
+    stop_worker,
 )
 
 
@@ -300,8 +301,7 @@ class PlaylistsView(QWidget):
         if not self.engine:
             return
 
-        if self.active_loader_worker and self.active_loader_worker.isRunning():
-            self.active_loader_worker.terminate()
+        stop_worker(self.active_loader_worker)
 
         self.tree_header_label.setText("PLAYLISTS (Loading...)")
         self.active_loader_worker = PlaylistLoaderWorker(
@@ -549,14 +549,7 @@ class PlaylistsView(QWidget):
             limit = int(limit_data) if (limit_data is not None and limit_data > 0) else None
 
         sort_order_str = "desc" if self.current_sort_order == Qt.SortOrder.DescendingOrder else "asc"
-
-        if self.active_tracks_worker and self.active_tracks_worker.isRunning():
-            try:
-                self.active_tracks_worker.success.disconnect()
-                self.active_tracks_worker.error.disconnect()
-            except Exception:
-                pass
-            self.active_tracks_worker.wait(50)
+        stop_worker(self.active_tracks_worker)
 
         self.status_label.setText("Loading playlist tracks...")
         self.active_tracks_worker = PlaylistTracksWorker(

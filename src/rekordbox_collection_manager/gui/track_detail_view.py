@@ -86,7 +86,7 @@ from rekordbox_collection_manager.gui.theme import (
     COLOR_TEXT_PRIMARY,
     COLOR_TEXT_SECONDARY,
 )
-from rekordbox_collection_manager.gui.workers import TrackDetailWorker
+from rekordbox_collection_manager.gui.workers import TrackDetailWorker, stop_worker
 from rekordbox_collection_manager.utils import (
     format_file_size,
     format_rating_stars,
@@ -869,10 +869,8 @@ class TrackDetailView(QWidget):
 
     def _terminate_worker(self) -> None:
         """Safely terminate any running detail worker thread."""
-        if self.active_worker and self.active_worker.isRunning():
-            self.active_worker.quit()
-            self.active_worker.wait(500)
-            self.active_worker = None
+        stop_worker(self.active_worker, wait_ms=500)
+        self.active_worker = None
 
     def _load_full_details_async(self) -> None:
         """Fetch complete metadata and history plays in background thread."""
