@@ -167,6 +167,42 @@ Features & Safeguards:
 
 ---
 
+### 5. Rekordbox Sync Daemon (`rekordbox-daemon`)
+
+An event-driven macOS background service that synchronizes your Rekordbox collection with a private **Turso (libSQL)** cloud database. It enables building mobile companion apps (iOS/SwiftUI) to browse, rename, tag, and organize playlists on the go **without risking database corruption or file lock conflicts**.
+
+#### Architecture & Safety
+- **Zero-Polling macOS Event Detection**: Hooks natively into macOS Cocoa `NSWorkspace` notifications (`NSWorkspaceDidTerminateApplicationNotification` and `NSWorkspaceDidLaunchApplicationNotification`). Uses `0.0%` CPU and sleeps inside the Mach kernel runloop until Rekordbox is launched or closed.
+- **Offline-First Event Sourcing**: Mobile edits are never written directly to the SQLite file over network shares. Instead, the mobile app inserts change events into a `changelog_events` queue in Turso.
+- **Safe Ingestion on Rekordbox Quit**: When you finish a DJ session and close Rekordbox, the daemon immediately wakes up, creates an automatic collection safety backup in `~/Music/rekordbox/Backups/`, applies pending changes to `master.db`, and uploads a fresh snapshot to Turso.
+
+#### Configuration (`.env`)
+Create a `.env` file in the root of the repository (automatically ignored by git):
+```env
+TURSO_DATABASE_URL="https://your-database-name.turso.io"
+TURSO_AUTH_TOKEN="your-turso-jwt-token"
+```
+
+#### CLI Commands
+```bash
+# Check current daemon & cloud sync status:
+uv run rekordbox-daemon status
+
+# Run a one-time sync right now:
+uv run rekordbox-daemon sync
+
+# Run daemon in foreground (watches Rekordbox events in real-time):
+uv run rekordbox-daemon run
+
+# Install as a persistent macOS background service (auto-starts on login):
+uv run rekordbox-daemon install
+
+# Remove the background service:
+uv run rekordbox-daemon uninstall
+```
+
+---
+
 ## Adding New Tools to this Repo
 
 Each tool is self-contained in a single file under `src/rekordbox_collection_manager/`:
