@@ -162,10 +162,21 @@ def run_daemon_loop(poll_interval: int = 2) -> None:
         last_turso_check = time.time()
         turso_check_interval = 30  # Check Turso for mobile events every 30s
 
-        while True:
-            try:
+        import signal
+
+        stop_requested = False
+
+        def handle_sigint(signum, frame):
+            nonlocal stop_requested
+            stop_requested = True
+
+        prev_handler = signal.signal(signal.SIGINT, handle_sigint)
+        try:
+            while not stop_requested:
                 # Sleep in macOS Mach runloop, dispatching Cocoa events instantly
                 run_loop.runUntilDate_(NSDate.dateWithTimeIntervalSinceNow_(1.0))
+                if stop_requested:
+                    break
 
                 # Periodically check for mobile events when Rekordbox is closed
                 if not is_rekordbox_running() and (time.time() - last_turso_check) >= turso_check_interval:
@@ -181,12 +192,11 @@ def run_daemon_loop(poll_interval: int = 2) -> None:
                     except Exception as e:
                         logger.debug("Check pending events error: %s", e)
 
-            except KeyboardInterrupt:
-                logger.info("Daemon stopped by user.")
-                break
-            except Exception as e:
-                logger.error("Unexpected error in event loop: %s", e)
-                time.sleep(2)
+        except Exception as e:
+            logger.error("Unexpected error in event loop: %s", e)
+        finally:
+            signal.signal(signal.SIGINT, prev_handler)
+            logger.info("Daemon stopped by user.")
         return
 
     # 2. Polling fallback (if PyObjC is not available)
