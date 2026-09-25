@@ -12,6 +12,14 @@ wheels/
 # macOS metadata
 .DS_Store
 
+# Xcode & iOS
+xcuserdata/
+*.xcworkspace
+*.xcuserdatad
+*.xcuserstate
+DerivedData/
+.build/
+
 # Secrets / Config
 .env
 turso_secrets.json

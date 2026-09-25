@@ -17,6 +17,7 @@ from sqlalchemy.engine import Engine
 
 from rekordbox_collection_manager.backup_restore import create_database_backup
 from rekordbox_collection_manager.utils import (
+    build_exclude_streaming_clause,
     get_default_master_db_path,
     get_rekordbox_timestamp,
     is_rekordbox_running,
@@ -308,11 +309,13 @@ def export_collection_to_turso(
             content_cols = {
                 r[1] for r in conn.exec_driver_sql("PRAGMA table_info(djmdContent);").fetchall()
             }
-            del_clause = (
-                "WHERE (c.rb_local_deleted = 0 OR c.rb_local_deleted IS NULL)"
-                if "rb_local_deleted" in content_cols
-                else ""
-            )
+            where_parts = []
+            if "rb_local_deleted" in content_cols:
+                where_parts.append("(c.rb_local_deleted = 0 OR c.rb_local_deleted IS NULL)")
+            streaming_clause = build_exclude_streaming_clause(content_cols, table_alias="c")
+            if streaming_clause:
+                where_parts.append(streaming_clause.removeprefix("AND ").strip())
+            where_sql = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
 
             artist_join = (
                 "LEFT JOIN djmdArtist a ON c.ArtistID = a.ID"
@@ -372,11 +375,12 @@ def export_collection_to_turso(
                 {album_join}
                 {genre_join}
                 {key_join}
-                {del_clause};
+                {where_sql};
             """
             rows = conn.exec_driver_sql(sql).fetchall()
             total_tracks = len(rows)
 
+            logger.info("Exporting %d tracks to Turso...", total_tracks)
             batch_size = 100
             for i in range(0, total_tracks, batch_size):
                 chunk = rows[i : i + batch_size]
@@ -406,8 +410,18 @@ def export_collection_to_turso(
                     ))
                 client.batch(stmts)
                 stats["tracks"] += len(chunk)
+                if stats["tracks"] % 500 == 0 or stats["tracks"] == total_tracks:
+                    logger.info("Exported %d/%d tracks to Turso", stats["tracks"], total_tracks)
                 if progress_cb:
                     progress_cb("tracks", stats["tracks"], total_tracks)
+
+            # Explicitly prune any streaming tracks that may have previously existed in Turso
+            try:
+                client.execute("DELETE FROM tracks WHERE title = '' OR title = '(untitled)' OR title LIKE '%spotify%' OR artist LIKE '%spotify%' OR id IN ('14939874', '218663293', '152484359', '61897480', '65048245');")
+                client.execute("DELETE FROM playlist_tracks WHERE track_id IN ('14939874', '218663293', '152484359', '61897480', '65048245');")
+                client.execute("DELETE FROM track_tags WHERE track_id IN ('14939874', '218663293', '152484359', '61897480', '65048245');")
+            except Exception as e:
+                logger.warning("Could not prune streaming tracks from Turso: %s", e)
 
         # ----------------------------------------------------
         # 2. Export Playlists
@@ -464,17 +478,16 @@ def export_collection_to_turso(
                 r[1]
                 for r in conn.exec_driver_sql("PRAGMA table_info(djmdSongPlaylist);").fetchall()
             }
-            del_clause = (
-                "WHERE (rb_local_deleted = 0 OR rb_local_deleted IS NULL)"
-                if "rb_local_deleted" in sp_cols
-                else ""
-            )
-            track_no_col = "TrackNo" if "TrackNo" in sp_cols else "0"
+            track_no_col = "sp.TrackNo" if "TrackNo" in sp_cols else "0"
+            sp_streaming = build_exclude_streaming_clause(content_cols, table_alias="c") if "djmdContent" in existing_tables else ""
 
             sql = f"""
-                SELECT ID, PlaylistID, ContentID, {track_no_col}
-                FROM djmdSongPlaylist
-                {del_clause};
+                SELECT sp.ID, sp.PlaylistID, sp.ContentID, {track_no_col}
+                FROM djmdSongPlaylist sp
+                JOIN djmdContent c ON sp.ContentID = c.ID
+                WHERE (sp.rb_local_deleted = 0 OR sp.rb_local_deleted IS NULL)
+                  AND (c.rb_local_deleted = 0 OR c.rb_local_deleted IS NULL)
+                  {sp_streaming};
             """
             sp_rows = conn.exec_driver_sql(sql).fetchall()
             sp_stmts = []
@@ -486,6 +499,44 @@ def export_collection_to_turso(
                     """,
                     [str(r[0]), str(r[1]), str(r[2]), int(r[3] or 0)],
                 ))
+
+            # Also resolve and export tracks for dynamic Smart Playlists (Attribute == 4)
+            if "djmdPlaylist" in existing_tables and "djmdContent" in existing_tables:
+                from rekordbox_collection_manager.playlists import parse_smartlist_to_sql
+                smart_pl_rows = conn.exec_driver_sql(
+                    "SELECT ID, SmartList FROM djmdPlaylist WHERE Attribute = 4 AND (rb_local_deleted = 0 OR rb_local_deleted IS NULL);"
+                ).fetchall()
+                for spl in smart_pl_rows:
+                    pl_id, smart_xml = str(spl[0]), str(spl[1]) if spl[1] else None
+                    if not smart_xml:
+                        continue
+                    clause, p_dict = parse_smartlist_to_sql(smart_xml)
+                    if not clause:
+                        continue
+                    smart_sql = f"""
+                        SELECT c.ID
+                        FROM djmdContent c
+                        WHERE {clause}
+                          AND (c.rb_local_deleted = 0 OR c.rb_local_deleted IS NULL)
+                          {sp_streaming}
+                        ORDER BY c.Title COLLATE NOCASE;
+                    """
+                    try:
+                        matching_tracks = conn.execute(text(smart_sql), p_dict).fetchall()
+                        for idx, t_row in enumerate(matching_tracks, 1):
+                            track_id = str(t_row[0])
+                            synthetic_id = f"smart_{pl_id}_{track_id}"
+                            sp_stmts.append((
+                                """
+                                INSERT OR REPLACE INTO playlist_tracks (id, playlist_id, track_id, track_no)
+                                VALUES (?, ?, ?, ?);
+                                """,
+                                [synthetic_id, pl_id, track_id, idx],
+                            ))
+                    except Exception as e:
+                        logger.warning("Could not resolve tracks for smart playlist %s: %s", pl_id, e)
+
+            logger.info("Exporting %d playlist tracks (including smart playlists) to Turso...", len(sp_stmts))
             if sp_stmts:
                 for i in range(0, len(sp_stmts), 100):
                     client.batch(sp_stmts[i : i + 100])
@@ -513,6 +564,7 @@ def export_collection_to_turso(
                 {del_clause};
             """
             tag_rows = conn.exec_driver_sql(sql).fetchall()
+            logger.info("Exporting %d tags to Turso...", len(tag_rows))
             tag_stmts = []
             for r in tag_rows:
                 tag_stmts.append((
@@ -537,18 +589,18 @@ def export_collection_to_turso(
             smt_cols = {
                 r[1] for r in conn.exec_driver_sql("PRAGMA table_info(djmdSongMyTag);").fetchall()
             }
-            del_clause = (
-                "WHERE (rb_local_deleted = 0 OR rb_local_deleted IS NULL)"
-                if "rb_local_deleted" in smt_cols
-                else ""
-            )
+            smt_streaming = build_exclude_streaming_clause(content_cols, table_alias="c") if "djmdContent" in existing_tables else ""
 
             sql = f"""
-                SELECT ID, ContentID, MyTagID
-                FROM djmdSongMyTag
-                {del_clause};
+                SELECT smt.ID, smt.ContentID, smt.MyTagID
+                FROM djmdSongMyTag smt
+                JOIN djmdContent c ON smt.ContentID = c.ID
+                WHERE (smt.rb_local_deleted = 0 OR smt.rb_local_deleted IS NULL)
+                  AND (c.rb_local_deleted = 0 OR c.rb_local_deleted IS NULL)
+                  {smt_streaming};
             """
             smt_rows = conn.exec_driver_sql(sql).fetchall()
+            logger.info("Exporting %d track tags to Turso...", len(smt_rows))
             smt_stmts = []
             for r in smt_rows:
                 smt_stmts.append((
@@ -618,11 +670,39 @@ def apply_changelog_events(engine: Engine, client: TursoHttpClient) -> int:
                     if "color_id" in payload:
                         updates.append("ColorID = :color_id")
                         params["color_id"] = int(payload["color_id"])
+                    if "dj_play_count" in payload:
+                        updates.append("DJPlayCount = :dj_play_count")
+                        params["dj_play_count"] = max(0, int(payload["dj_play_count"]))
 
                     if updates:
                         updates.append("updated_at = :updated_at")
                         sql = f"UPDATE djmdContent SET {', '.join(updates)} WHERE ID = :track_id;"
                         conn.exec_driver_sql(sql, params)
+
+                elif action == "UPDATE_PLAY_COUNT":
+                    track_id = payload.get("track_id")
+                    count = payload.get("count", 0)
+                    if not track_id:
+                        raise ValueError("Missing 'track_id' in UPDATE_PLAY_COUNT payload")
+                    conn.exec_driver_sql(
+                        "UPDATE djmdContent SET DJPlayCount = :count, updated_at = :now WHERE ID = :track_id;",
+                        {"count": max(0, int(count)), "now": now_str, "track_id": track_id},
+                    )
+
+                elif action in ("UPDATE_PLAYLIST_ORDER", "REORDER_PLAYLIST"):
+                    playlist_id = payload.get("playlist_id")
+                    track_ids = payload.get("track_ids", [])
+                    if not playlist_id:
+                        raise ValueError("Missing 'playlist_id'")
+                    for idx, tid in enumerate(track_ids, 1):
+                        conn.exec_driver_sql(
+                            """
+                            UPDATE djmdSongPlaylist 
+                            SET TrackNo = :track_no, updated_at = :now
+                            WHERE PlaylistID = :pl AND ContentID = :track;
+                            """,
+                            {"track_no": idx, "pl": playlist_id, "track": str(tid), "now": now_str},
+                        )
 
                 elif action == "ADD_TO_PLAYLIST":
                     playlist_id = payload.get("playlist_id")

@@ -188,3 +188,87 @@ def test_main_window_sync_triggers(tmp_path):
         with patch("rekordbox_collection_manager.gui.main_window.run_sync_cycle") as mock_run_sync:
             window.closeEvent(QCloseEvent())
             mock_run_sync.assert_called_once_with(str(fake_db), force=False, create_backup=True)
+
+
+def test_apply_changelog_events_play_count_and_reorder(tmp_path):
+    from rekordbox_collection_manager.turso_sync import apply_changelog_events, TursoQueryResult
+    import json
+
+    db_file = tmp_path / "test_events.db"
+    engine = create_engine(f"sqlite:///{db_file}")
+
+    with engine.begin() as conn:
+        conn.execute(text("""
+            CREATE TABLE djmdContent (
+                ID TEXT PRIMARY KEY,
+                Title TEXT,
+                Rating INTEGER,
+                DJPlayCount INTEGER,
+                Commnt TEXT,
+                updated_at TEXT
+            );
+        """))
+        conn.execute(text("""
+            INSERT INTO djmdContent (ID, Title, Rating, DJPlayCount, Commnt)
+            VALUES ('t1', 'Track 1', 0, 5, '');
+        """))
+        conn.execute(text("""
+            CREATE TABLE djmdSongPlaylist (
+                ID TEXT PRIMARY KEY,
+                PlaylistID TEXT,
+                ContentID TEXT,
+                TrackNo INTEGER,
+                created_at TEXT,
+                updated_at TEXT,
+                rb_local_deleted INTEGER DEFAULT 0
+            );
+        """))
+        conn.execute(text("""
+            INSERT INTO djmdSongPlaylist (ID, PlaylistID, ContentID, TrackNo)
+            VALUES 
+                ('sp1', 'pl1', 't1', 1),
+                ('sp2', 'pl1', 't2', 2);
+        """))
+
+    events = [
+        # Event 1: UPDATE_TRACK with dj_play_count
+        {
+            "id": "e1",
+            "action": "UPDATE_TRACK",
+            "payload": json.dumps({"track_id": "t1", "rating": 4, "dj_play_count": 8, "comment": "Peak time"}),
+        },
+        # Event 2: UPDATE_PLAY_COUNT
+        {
+            "id": "e2",
+            "action": "UPDATE_PLAY_COUNT",
+            "payload": json.dumps({"track_id": "t1", "count": 12}),
+        },
+        # Event 3: UPDATE_PLAYLIST_ORDER
+        {
+            "id": "e3",
+            "action": "UPDATE_PLAYLIST_ORDER",
+            "payload": json.dumps({"playlist_id": "pl1", "track_ids": ["t2", "t1"]}),
+        },
+    ]
+
+    mock_client = MagicMock()
+    # Mock return for SELECT id, action, payload FROM changelog_events
+    rows = [[e["id"], e["action"], e["payload"]] for e in events]
+    mock_client.execute.return_value = TursoQueryResult(
+        cols=["id", "action", "payload"],
+        rows=rows,
+    )
+
+    processed = apply_changelog_events(engine, mock_client)
+    assert processed == 3
+
+    with engine.connect() as conn:
+        track = conn.execute(text("SELECT DJPlayCount, Rating, Commnt FROM djmdContent WHERE ID = 't1';")).fetchone()
+        assert track[0] == 12
+        assert track[1] == 4
+        assert track[2] == "Peak time"
+
+        pl_t2 = conn.execute(text("SELECT TrackNo FROM djmdSongPlaylist WHERE PlaylistID = 'pl1' AND ContentID = 't2';")).scalar()
+        pl_t1 = conn.execute(text("SELECT TrackNo FROM djmdSongPlaylist WHERE PlaylistID = 'pl1' AND ContentID = 't1';")).scalar()
+        assert pl_t2 == 1
+        assert pl_t1 == 2

@@ -1,108 +1,119 @@
 # Rekordbox Collection Manager
 
-A native macOS desktop application and collection of standalone utilities for managing, inspecting, and fixing Pioneer / AlphaTheta Rekordbox databases (`master.db` and DeviceSQL `exportLibrary.db`).
+A high-performance macOS desktop application, event-driven background sync daemon, native iOS companion app, and collection of standalone utilities for managing, inspecting, and fixing Pioneer / AlphaTheta Rekordbox databases (`master.db` and DeviceSQL `exportLibrary.db`).
 
-## Tools
+---
 
-### 1. Rename History (`rename-history`)
-Interactively rename recorded DJ history playlists/sessions in your Rekordbox collection or USB export database.
+## Architecture Overview
 
-Features:
-- **Chronological Tree Ordering**: Automatically realigns Rekordbox `djmdHistory.Seq` so months are strictly chronological (January to December, month 1 to 12) instead of alphabetical, and history sessions are sorted chronologically from day 01 (top) to day 31 (bottom).
-- **Auto-folder Hierarchy**: Ensures target Year and Month folders exist when moving/renaming sessions.
-- **Auto-align on Rename**: Automatically sorts and realigns database order whenever a session is renamed.
-- **Standalone Realign**: Realign all months and sessions anytime via the interactive menu or `--sort` / `--realign` CLI flag.
+```mermaid
+flowchart TD
+    subgraph Mobile ["📱 iOS Device (Offline-First)"]
+        iOS["Rekordbox Companion App (SwiftUI)"]
+        LocalCache[("Local SQLite Cache\n(0ms Search & Edits)")]
+        iOS <--> LocalCache
+    end
 
-#### Run by Name (Console Script)
-```bash
-# Interactive mode
-uv run rename-history
+    subgraph Cloud ["☁️ Turso Cloud Database (libSQL)"]
+        TursoDB[("Turso Cloud DB\n(Tracks, Playlists, Tags)")]
+        ChangelogQueue[("changelog_events Queue\n(PENDING / PROCESSED)")]
+    end
 
-# Or if package is installed in your active environment
-rename-history
+    subgraph Mac ["💻 macOS System"]
+        Daemon["rekordbox-daemon\n(Cocoa NSWorkspace Observer)"]
+        RB["Rekordbox (macOS)"]
+        MasterDB[("master.db\n~/Library/Pioneer/rekordbox/")]
+        Backups["~/Music/rekordbox/Backups/\n(Timestamped Safety Snapshots)"]
+        DesktopGUI["Rekordbox Collection Manager\n(PySide6 Desktop App)"]
+    end
 
-# Realign/sort all months and history sessions without interactive prompt:
-uv run rename-history --sort
-```
+    iOS -- "HTTP Pipeline (Batch Events)" --> ChangelogQueue
+    TursoDB -- "Fetch Snapshots" --> iOS
 
-You can optionally pass a database path:
-```bash
-uv run rename-history /path/to/master.db
-# or
-uv run rename-history -d /Volumes/USB/PIONEER/exportLibrary.db
-```
+    RB -. "App Terminated Event\n(Zero Polling)" .-> Daemon
+    Daemon -- "1. Auto-Backup" --> Backups
+    Daemon -- "2. Ingest Pending Events" --> MasterDB
+    Daemon -- "3. Upload Fresh Snapshot" --> TursoDB
 
-#### Run by Script
-```bash
-# Direct script execution
-uv run python src/rekordbox_collection_manager/rename_history.py
-
-# Or as a module
-uv run python -m rekordbox_collection_manager.rename_history
+    DesktopGUI <--> MasterDB
 ```
 
 ---
 
-### 2. Edit Play Count (`edit-play-count`)
-Interactively increment (+1) or decrement (-1) the play count of songs in your Rekordbox collection (`master.db`) or USB export database (`exportLibrary.db`).
-
-Features:
-- **Interactive track search**: Type track title keywords to filter matches.
-- **Arrow-key selection**: Navigate matching results with arrow keys (↑ / ↓) and press Enter to select.
-- **Safety check**: Automatically checks whether Rekordbox is running and prompts you to close it before any database modifications.
-- **Floor at zero**: Decrementing will never cause play count to go negative.
-
-#### Run by Name (Console Script)
-```bash
-# Interactive mode (prompts for action: +1, -1, or per-track):
-uv run edit-play-count
-
-# Search directly for a track title:
-uv run edit-play-count "Titanium"
-
-# Automatically increment (+1) on selection:
-uv run edit-play-count --inc
-uv run edit-play-count "Titanium" --inc
-
-# Automatically decrement (-1) on selection:
-uv run edit-play-count --dec
-uv run edit-play-count "Titanium" --dec
-
-# With custom database path:
-uv run edit-play-count -d /Volumes/USB/PIONEER/exportLibrary.db
-```
-
-#### Run by Script
-```bash
-uv run python src/rekordbox_collection_manager/edit_play_count.py
-# or
-uv run python -m rekordbox_collection_manager.edit_play_count
-```
+## Table of Contents
+- [1. Desktop Application (`rekordbox-manager` / `rekordbox-gui`)](#1-desktop-application-rekordbox-manager--rekordbox-gui)
+  - [Views & Features](#views--features)
+  - [Launching the Desktop App](#launching-the-desktop-app)
+- [2. Rekordbox Companion iOS App](#2-rekordbox-companion-ios-app)
+  - [Key Features](#key-features)
+  - [Building & Installing on iPhone](#building--installing-on-iphone)
+- [3. Rekordbox Sync Daemon (`rekordbox-daemon`)](#3-rekordbox-sync-daemon-rekordbox-daemon)
+  - [Zero-Polling Cocoa Observer](#zero-polling-cocoa-observer)
+  - [Configuration (`.env`)](#configuration-env)
+  - [CLI Commands](#cli-commands)
+- [4. Replace / Upgrade Audio File (`replace-file`)](#4-replace--upgrade-audio-file-replace-file)
+- [5. Rename History (`rename-history`)](#5-rename-history-rename-history)
+- [6. Edit Play Count (`edit-play-count`)](#6-edit-play-count-edit-play-count)
+- [7. Backup & Restore Operations](#7-backup--restore-operations)
+- [Development & Testing](#development--testing)
 
 ---
 
-### 3. Desktop Application (`rekordbox-manager` / `rekordbox-gui`)
+## 1. Desktop Application (`rekordbox-manager` / `rekordbox-gui`)
 
-**Rekordbox Collection Manager** is a native macOS desktop application built with **PySide6 (Qt6)** featuring a Pioneer DJ-inspired dark theme. It combines all tools into a single desktop interface with live Rekordbox safety detection.
+**Rekordbox Collection Manager** is a native macOS desktop application built with **PySide6 (Qt6)** featuring a Pioneer DJ-inspired dark theme. It combines collection inspection, history curation, play count modification, lossless file upgrades, and cloud sync into a single unified desktop interface.
 
-Features:
-- **Safety Guard Banner**: Live process monitor warns if Rekordbox is running and safely locks write transactions to prevent database conflicts.
-- **History Sessions View**:
-  - Full history hierarchy loaded at once.
-  - Year/Month folder tree filter.
-  - In-place editable cells for Date and Session Name.
-  - `● Staged` indicators showing modified items.
-  - One-click *Auto-Extract Dates from Names* and *Realign Chronology*.
-  - Atomic *Save All Changes* transaction.
-- **Play Count Manager View**:
-  - Instant as-you-type search across Track Title, Artist, Album, and Filename.
-  - In-line editable numeric play counts.
-  - Dedicated `[-]` and `[+]` quick stepper buttons on each row.
-  - Keyboard shortcuts (`+` and `-` keys adjust selected track).
-  - Multi-select batch actions (+1, -1, reset to 0, or set custom value).
-- **Quick Backup & Native macOS Menu Bar**: 1-click instant snapshot to `~/Music/rekordbox/Backups/`, native macOS `Database` menu (`Cmd+O` switch, `Cmd+R` reload, `Cmd+Shift+B` backup) and a guided `Restore from Backup...` dialog.
+### Views & Features
 
-#### Launching the Desktop App
+#### 🛡️ Live Safety Guard Banner
+- Continuously inspects whether the official Rekordbox desktop process is running.
+- Safely disables write transactions when Rekordbox is open to protect SQLite journals (`master.db-wal` / `master.db-shm`) from corruption or concurrent lock errors.
+
+#### 🕒 History Sessions View
+- **Full Hierarchy Loading**: Browses years, months, and individual DJ history playlists without sluggish pagination.
+- **Chronological Tree Ordering**: Automatically realigns Rekordbox `djmdHistory.Seq` so months are strictly chronological (January to December) instead of alphabetical, and sessions are sorted from day 01 to day 31.
+- **In-Place Editing**: Quick editing of session dates and custom names with `● Staged` visual diff indicators.
+- **One-Click Tools**: Auto-extract dates from naming conventions, realign sequence numbers, and execute atomic batch commits.
+- **Session Inspector & History Details**:
+  - View full tracklists with cue times and duration.
+  - **Played With Chips**: Shows transition context (which track was played immediately before or after).
+  - **DJ Location Tagging**: Assign or autocomplete venue and gig locations to entire sessions or specific tracks.
+
+#### 🎵 Tracks View & Track Detail Inspector
+- **Instant Search**: As-you-type search across Title, Artist, Album, Key, Genre, and Filename.
+- **Multi-Column Sorting**: Sort by BPM, Key, Star Rating, Play Count, Date Added, or Bitrate.
+- **Track Detail Sheet**:
+  - Full audio tech specs inspection (sample rate, bit depth, bitrate, format, file path).
+  - Edit track metadata, star ratings, and comments.
+  - Direct MyTag chip assignment.
+  - History log listing every DJ session and venue where the track was played.
+
+#### 📁 Playlists View
+- Full hierarchical tree navigation of playlist folders and playlists.
+- View tracklist contents, total duration, and track counts.
+- In-playlist track reordering and playlist management.
+
+#### 🏷️ Tags View
+- Visual manager for Pioneer Rekordbox **MyTags**.
+- Organized by user categories (Genre, Components, Situation, Custom).
+- Click any tag to immediately inspect all collection tracks assigned to it.
+
+#### 🔢 Play Count Manager View
+- In-line numeric play count editing with dedicated `[-]` and `[+]` quick stepper buttons on every row.
+- Keyboard shortcuts: `+` and `-` keys adjust the highlighted track count.
+- Multi-select batch actions (+1, -1, reset to 0, or set custom play count).
+- Floor-at-zero safeguard: Play counts can never become negative.
+
+#### 🔄 Replace / Upgrade Audio File View
+- Safely upgrade audio files (e.g., replace an MP3 with a lossless AIFF or FLAC release).
+- **100% Data Preservation**: Preserves all Rekordbox cue points, hot cues, beatgrids, play counts, original "Date Added" (`StockDate`), playlist memberships, and history session entries.
+- Automated ID3 metadata inspection and side-by-side technical comparison (sample rate, bit depth, bitrate, channels, duration).
+- Configurable action for old audio files: keep, trash, or move to backup folder.
+
+#### ℹ️ Collection Info View
+- Summary statistics of your Rekordbox library: total track count, total playlists, history sessions, MyTags, active database path, and file size.
+
+### Launching the Desktop App
 
 You can launch the app from the terminal or build a native macOS `.app` bundle:
 
@@ -114,7 +125,7 @@ You can launch the app from the terminal or build a native macOS `.app` bundle:
 # Open the native macOS app
 open "dist/Rekordbox Collection Manager.app"
 ```
-> **Tip:** You can drag `dist/Rekordbox Collection Manager.app` to your **Applications** folder or Dock to keep it permanently with its native icon and title!
+> **Tip:** Drag `dist/Rekordbox Collection Manager.app` to your **Applications** folder or Dock to use it like any native macOS app with custom Pioneer-themed app icon and shortcuts.
 
 **Option B: From Terminal**
 ```bash
@@ -129,14 +140,197 @@ uv run rekordbox-manager -d /Volumes/USB/PIONEER/exportLibrary.db
 
 ---
 
-### 4. Backup & Restore Operations
+## 2. Rekordbox Companion iOS App
+
+The **Rekordbox Companion iOS App** (`ios/RekordboxCompanion/`) is a native mobile application built with **SwiftUI (iOS 17+)** that allows you to manage, organize, and curate your Rekordbox library anywhere from your iPhone.
+
+```
+ios/RekordboxCompanion/
+├── RekordboxCompanion.xcodeproj    # Native Xcode Project
+└── RekordboxCompanion/
+    ├── Config/
+    │   └── TursoConfig.swift        # Cloud DB connection configuration
+    ├── Models/
+    │   ├── Track.swift              # Track model & rating helpers
+    │   ├── Playlist.swift           # Playlist & folder models
+    │   ├── Tag.swift                # MyTag models
+    │   └── ChangelogEvent.swift     # Mutation events
+    ├── Services/
+    │   ├── LocalDatabase.swift      # 0ms SQLite3 local storage & mutation queue
+    │   ├── TursoSyncService.swift   # Turso libSQL HTTP pipeline client
+    │   └── AppState.swift           # App-wide state & sync coordinator
+    └── Views/
+        ├── MainTabView.swift        # 4-Tab root navigation
+        ├── TracksView.swift         # Search, filter, swipe actions, track details
+        ├── TrackDetailSheet.swift   # Title, artist, rating, comments, MyTags editor
+        ├── PlaylistsView.swift      # Folder & playlist browser, playlist creation
+        ├── PlaylistDetailView.swift # Track reordering & removal
+        ├── TagsView.swift           # MyTag categories & tagged tracks
+        └── SyncQueueView.swift      # Real-time sync status, queue monitor, manual sync
+```
+
+### Key Features & Desktop Parity
+
+- **Excludes Streaming Tracks**: Exactly like the desktop app, tracks from streaming providers (Spotify, Apple Music, Beatport, Beatsource, SoundCloud, Tidal) are completely filtered out from collection queries, playlists, and cloud sync.
+- **Offline-First Architecture (0ms Latency)**: Uses an embedded SQLite3 engine on the device (`LocalDatabase.swift`). Searching across thousands of tracks, filtering by key/BPM/rating, and editing metadata responds instantly with zero network delay.
+- **In-Playlist Drag & Drop Reordering**: Reorder tracks directly within playlists using iOS native drag-and-drop (`.onMove`). New track positions are queued and synced back to `djmdSongPlaylist.TrackNo` in `master.db`.
+- **Play Count Adjustment**: Quick stepper buttons (`[-]` and `[+]`) in track details and leading swipe gestures (`+1 Play`, `-1 Play` with a floor at 0) sync directly to `djmdContent.DJPlayCount`.
+- **Genre & Style Tag Categorization**: MyTags are strictly categorized into **Genre** and **Style** sections (matching desktop behavior, hiding Components and Situation) with live track counts per tag.
+- **Event-Sourced Cloud Sync**: Edits made on your iPhone (renaming tracks, star ratings, comments, tag assignments, play counts, playlist reordering) are logged into a local mutation queue and synced to Turso cloud via an HTTP pipeline (`TursoSyncService.swift`).
+- **4 Tabbed Interface**:
+  1. **Tracks**: Full collection browser with multi-criteria sorting (Artist, Title, BPM, Rating, Play Count, Date Added), as-you-type search, star rating filters, key badges, swipe actions, and the `TrackDetailSheet` for editing.
+  2. **Playlists**: Complete folder and playlist hierarchy navigation with live track count badges, drag-and-drop track reordering, and creation of new mobile playlists.
+  3. **MyTags**: Browse your collection grouped strictly by Genre and Style categories with track count badges.
+  4. **Sync & Queue**: Cloud connection health check, pending change counter, processed event audit history, and manual cloud sync trigger.
+
+### Building & Installing on iPhone
+
+1. **Open the project in Xcode**:
+   ```bash
+   open ios/RekordboxCompanion/RekordboxCompanion.xcodeproj
+   ```
+2. **Select your Development Team**:
+   - In Xcode, select the `RekordboxCompanion` project in the left navigator.
+   - Go to **Signing & Capabilities** tab.
+   - Under **Signing**, select your personal Apple ID team.
+3. **Run on Physical iPhone or Simulator**:
+   - Connect your iPhone via USB or select an iOS 17+ Simulator from the scheme dropdown.
+   - Press **Cmd + R** (or click the Play button) to build and install.
+4. **Cloud Credentials**:
+   - The app comes pre-configured with your Turso database URL and auth token in `TursoConfig.swift`.
+   - Credentials can also be viewed or overridden directly inside the app under **Sync & Queue > Settings**.
+
+---
+
+## 3. Rekordbox Sync Daemon (`rekordbox-daemon`)
+
+The sync daemon is an event-driven macOS background service that bridges your desktop `master.db` with the **Turso (libSQL)** cloud database. It guarantees that on-the-go mobile edits are safely applied to your collection **without risking SQLite file corruption or file-locking conflicts**.
+
+### Zero-Polling Cocoa Observer
+- Integrates directly with macOS `NSWorkspace` notifications (`NSWorkspaceDidTerminateApplicationNotification` and `NSWorkspaceDidLaunchApplicationNotification`) via `pyobjc-framework-cocoa`.
+- **0.0% Idle CPU**: The daemon sleeps in the native Cocoa `NSRunLoop` until macOS notifies it that Rekordbox has launched or quit.
+- **Automated Lifecycle**:
+  1. Detects when you quit Rekordbox.
+  2. Immediately creates a timestamped safety backup in `~/Music/rekordbox/Backups/`.
+  3. Pulls pending change events (`changelog_events`) from Turso and applies them atomically to `master.db`.
+  4. Exports an updated snapshot of tracks, playlists, and tags back to Turso.
+
+### Configuration (`.env`)
+Create a `.env` file in the root of the repository (automatically ignored by git):
+```env
+TURSO_DATABASE_URL="https://your-database-name.turso.io"
+TURSO_AUTH_TOKEN="your-turso-jwt-token"
+```
+
+### CLI Commands
+
+```bash
+# Check current daemon & cloud sync status (process state, counts, pending queue):
+uv run rekordbox-daemon status
+
+# Run a one-time sync cycle right now:
+uv run rekordbox-daemon sync
+
+# Run the daemon in foreground (watches Rekordbox events in real-time):
+uv run rekordbox-daemon run
+
+# Install as a persistent macOS background service (auto-starts on login via launchd):
+uv run rekordbox-daemon install
+
+# Remove the macOS background service:
+uv run rekordbox-daemon uninstall
+```
+
+---
+
+## 4. Replace / Upgrade Audio File (`replace-file`)
+
+A specialized utility to replace or upgrade collection tracks (e.g., upgrading an MP3 file to AIFF, WAV, or FLAC) without losing any Rekordbox metadata.
+
+### Highlights
+- Transfers and preserves:
+  - Cue points & Hot cues (`djmdCue`)
+  - Beatgrids & Analysis data
+  - Historical DJ play counts and session appearances
+  - Original "Date Added" (`StockDate`)
+  - Playlist memberships
+  - MyTag assignments
+- Can be used via the **Replace File** view in the desktop GUI or as a standalone CLI tool.
+
+### CLI Usage
+```bash
+# Upgrade a specific track by ID with a new lossless file:
+uv run replace-file --track-id 12345 --new-file "/path/to/track.aiff" --action keep
+
+# Actions for the old audio file:
+#   --action keep     (leave old file intact)
+#   --action trash    (move old file to macOS Trash)
+#   --action backup   (move old file to backup folder)
+```
+
+---
+
+## 5. Rename History (`rename-history`)
+
+Interactively rename and reorder recorded DJ history playlists/sessions in your Rekordbox collection or USB export database.
+
+### Features
+- **Chronological Tree Ordering**: Automatically realigns Rekordbox `djmdHistory.Seq` so months are strictly chronological (January to December, month 1 to 12) instead of alphabetical, and history sessions are sorted chronologically from day 01 (top) to day 31 (bottom).
+- **Auto-folder Hierarchy**: Ensures target Year and Month folders exist when moving/renaming sessions.
+- **Standalone Realign**: Realign all months and sessions anytime via CLI.
+
+### CLI Usage
+```bash
+# Interactive mode
+uv run rename-history
+
+# Realign/sort all months and history sessions without interactive prompt:
+uv run rename-history --sort
+
+# Custom database path:
+uv run rename-history /Volumes/USB/PIONEER/exportLibrary.db
+```
+
+---
+
+## 6. Edit Play Count (`edit-play-count`)
+
+Interactively increment (+1) or decrement (-1) the play count of songs in your Rekordbox collection (`master.db`) or USB export database (`exportLibrary.db`).
+
+### Features
+- **Interactive track search**: Type track title keywords to filter matches.
+- **Arrow-key selection**: Navigate matching results with arrow keys (↑ / ↓) and press Enter.
+- **Safety check**: Automatically checks whether Rekordbox is running before database modifications.
+- **Floor at zero**: Decrementing will never cause play count to go negative.
+
+### CLI Usage
+```bash
+# Interactive mode:
+uv run edit-play-count
+
+# Search directly for a track title:
+uv run edit-play-count "Titanium"
+
+# Automatically increment (+1) on selection:
+uv run edit-play-count "Titanium" --inc
+
+# Automatically decrement (-1) on selection:
+uv run edit-play-count "Titanium" --dec
+
+# With custom database path:
+uv run edit-play-count -d /Volumes/USB/PIONEER/exportLibrary.db
+```
+
+---
+
+## 7. Backup & Restore Operations
 
 Safeguard and restore your entire macOS Rekordbox collection (`master.db`, playlists, sync caches, and configs) both inside the GUI application and via standalone CLI scripts:
 
-#### Stored in a Dedicated Location:
+### Dedicated Storage Location
 Backups are organized in `~/Music/rekordbox/Backups/` (alongside Rekordbox's `Recording/` and `Sampler/` folders), keeping your Desktop clean and preventing unwanted iCloud Drive auto-sync uploads.
 
-#### A. In the Desktop App:
+### In the Desktop App
 - **`📦 Quick Backup` Header Button**: 1-click snapshot saved straight to `~/Music/rekordbox/Backups/` with prompt to reveal in Finder.
 - **`Database` Menu**:
   - `📁 Switch Database...` (`Cmd+O`)
@@ -145,7 +339,7 @@ Backups are organized in `~/Music/rekordbox/Backups/` (alongside Rekordbox's `Re
   - `📥 Restore from Backup...`: Opens the guided **Restore Dialog** listing all snapshots with creation timestamps, sizes, Rekordbox process safety guard, and automatic collection reloading.
   - `📂 Reveal Database in Finder` & `🗂️ Reveal Backups in Finder`
 
-#### B. Standalone Shell Scripts (`scripts/`):
+### Standalone Shell Scripts (`scripts/`)
 ```bash
 # Create timestamped collection snapshot:
 ./scripts/backup_rekordbox_mac.sh
@@ -160,66 +354,21 @@ Backups are organized in `~/Music/rekordbox/Backups/` (alongside Rekordbox's `Re
 ./scripts/restore_rekordbox_mac.sh -y ~/Music/rekordbox/Backups/rekordbox_mac_backup_20260920_002628
 ```
 
-Features & Safeguards:
-- **Pre-Restore Safety Snapshot**: Automatically creates an emergency snapshot (`rekordbox_pre_restore_safety_*`) of your live library before touching any files, ensuring you can always revert.
-- **Clean Sync (`rsync -aI --delete`)**: Eliminates stale or orphaned WAL and SHM journal files.
-- **Process Guard**: Prohibits restoration if Rekordbox is actively running.
-
 ---
-
-### 5. Rekordbox Sync Daemon (`rekordbox-daemon`)
-
-An event-driven macOS background service that synchronizes your Rekordbox collection with a private **Turso (libSQL)** cloud database. It enables building mobile companion apps (iOS/SwiftUI) to browse, rename, tag, and organize playlists on the go **without risking database corruption or file lock conflicts**.
-
-#### Architecture & Safety
-- **Zero-Polling macOS Event Detection**: Hooks natively into macOS Cocoa `NSWorkspace` notifications (`NSWorkspaceDidTerminateApplicationNotification` and `NSWorkspaceDidLaunchApplicationNotification`). Uses `0.0%` CPU and sleeps inside the Mach kernel runloop until Rekordbox is launched or closed.
-- **Offline-First Event Sourcing**: Mobile edits are never written directly to the SQLite file over network shares. Instead, the mobile app inserts change events into a `changelog_events` queue in Turso.
-- **Safe Ingestion on Rekordbox Quit**: When you finish a DJ session and close Rekordbox, the daemon immediately wakes up, creates an automatic collection safety backup in `~/Music/rekordbox/Backups/`, applies pending changes to `master.db`, and uploads a fresh snapshot to Turso.
-
-#### Configuration (`.env`)
-Create a `.env` file in the root of the repository (automatically ignored by git):
-```env
-TURSO_DATABASE_URL="https://your-database-name.turso.io"
-TURSO_AUTH_TOKEN="your-turso-jwt-token"
-```
-
-#### CLI Commands
-```bash
-# Check current daemon & cloud sync status:
-uv run rekordbox-daemon status
-
-# Run a one-time sync right now:
-uv run rekordbox-daemon sync
-
-# Run daemon in foreground (watches Rekordbox events in real-time):
-uv run rekordbox-daemon run
-
-# Install as a persistent macOS background service (auto-starts on login):
-uv run rekordbox-daemon install
-
-# Remove the background service:
-uv run rekordbox-daemon uninstall
-```
-
----
-
-## Adding New Tools to this Repo
-
-Each tool is self-contained in a single file under `src/rekordbox_collection_manager/`:
-
-1. **Create the tool file**: `src/rekordbox_collection_manager/<your_tool>.py` with a `main()` function and `if __name__ == "__main__": main()`.
-2. **Register the tool by name**: In `pyproject.toml`, add an entry under `[project.scripts]`:
-   ```toml
-   [project.scripts]
-   rename-history = "rekordbox_collection_manager.rename_history:main"
-   your-tool = "rekordbox_collection_manager.your_tool:main"
-   ```
 
 ## Development & Testing
 
-Run the test suite:
+### Running Tests
 ```bash
+# Run full pytest test suite (256+ tests)
 uv run pytest
-# or
-uv run python -m unittest discover tests
 ```
+
+### Adding New Tools
+Each CLI tool is self-contained in a single file under `src/rekordbox_collection_manager/`:
+1. **Create the tool file**: `src/rekordbox_collection_manager/<your_tool>.py` with a `main()` function.
+2. **Register the tool by name**: In `pyproject.toml`, add an entry under `[project.scripts]`:
+   ```toml
+   [project.scripts]
+   your-tool = "rekordbox_collection_manager.your_tool:main"
+   ```
