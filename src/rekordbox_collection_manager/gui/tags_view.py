@@ -249,6 +249,7 @@ class TagsView(QWidget):
         self.table.replace_file_requested.connect(self.replace_file_requested.emit)
         self.table.open_playlist_requested.connect(self.open_playlist_requested.emit)
         self.table.open_tag_requested.connect(self.open_tag_by_id_or_name)
+        self.table.track_tags_changed.connect(self._on_table_tags_changed)
         right_layout.addWidget(self.table, stretch=1)
 
         # Status Bar
@@ -287,6 +288,11 @@ class TagsView(QWidget):
         """Assign active database engine and initiate asynchronous tags tree load."""
         self.engine = engine
         self.db_path = db_path
+        self.table.set_engine(engine)
+        self._load_tags_tree()
+
+    def _on_table_tags_changed(self, row: int, tags: List[str]) -> None:
+        """Refresh sidebar tag tree when tag chips are added or removed."""
         self._load_tags_tree()
 
     def _load_tags_tree(self) -> None:
@@ -631,6 +637,8 @@ class TagsView(QWidget):
             self.records[idx].update(track)
             if "playlists" in track:
                 self.table.update_track_playlists(idx, track["playlists"])
+            if "tags" in track:
+                self.table.update_track_tags(idx, track["tags"])
         if 0 <= idx < self.table.rowCount():
             self.table.selectRow(idx)
             self.table.scrollToRow(idx)

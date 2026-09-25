@@ -920,6 +920,7 @@ class HistoryDetailView(QWidget):
         """Load session details and tracklist asynchronously."""
         self.engine = engine
         self.db_path = db_path
+        self.table.set_engine(engine)
         self.history_id = str(history_id)
         self.is_staged = is_staged
         self.is_deleted = is_deleted

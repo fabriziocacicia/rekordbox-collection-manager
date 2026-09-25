@@ -16,8 +16,11 @@ from PySide6.QtCore import (
     QModelIndex,
     QObject,
     QPoint,
+    QPointF,
+    QRect,
     QRectF,
     QSize,
+    QStringListModel,
     Qt,
     Signal,
 )
@@ -27,6 +30,7 @@ from PySide6.QtGui import (
     QCursor,
     QFont,
     QFontMetrics,
+    QHelpEvent,
     QKeyEvent,
     QMouseEvent,
     QPainter,
@@ -34,28 +38,53 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QApplication,
+    QCompleter,
+    QHBoxLayout,
     QHeaderView,
     QMenu,
+    QMessageBox,
     QStyle,
     QStyledItemDelegate,
     QStyleOptionViewItem,
     QTableView,
     QTableWidget,
     QTableWidgetItem,
+    QToolTip,
     QWidget,
 )
+from sqlalchemy.engine import Engine
 
+from rekordbox_collection_manager.edit_play_count import (
+    add_track_to_playlist,
+    add_track_to_tag,
+    fetch_all_playlists,
+    fetch_all_tags,
+    remove_track_from_playlist,
+    remove_track_from_tag,
+)
+from rekordbox_collection_manager.gui.chip import (
+    CHIP_SCHEMES,
+    ChipSearchLineEdit,
+)
 from rekordbox_collection_manager.gui.theme import (
+    COLOR_BG_HOVER,
+    COLOR_BG_INPUT,
+    COLOR_BG_PANEL,
     COLOR_BLUE,
+    COLOR_BLUE_BG,
+    COLOR_BORDER,
+    COLOR_BORDER_FOCUS,
     COLOR_GREEN,
     COLOR_TEXT_MUTED,
     COLOR_TEXT_PRIMARY,
     COLOR_TEXT_SECONDARY,
 )
 from rekordbox_collection_manager.utils import (
+    is_rekordbox_running,
     open_in_folder,
     reveal_in_file_manager,
 )
+
 
 
 class TrackColumn:
@@ -215,19 +244,48 @@ class PathLinkDelegate(QStyledItemDelegate):
 
 
 class ChipBadgeDelegate(QStyledItemDelegate):
-    """Renders a list of strings as sleek, rounded pill/chip badges."""
+    """Renders a list of strings as sleek, rounded pill/chip badges with hover-to-delete support."""
 
     def __init__(
         self,
         bg_color: QColor,
         border_color: QColor,
         text_color: QColor,
+        bg_hover: Optional[QColor] = None,
+        border_hover: Optional[QColor] = None,
+        removable: bool = True,
         parent: Optional[QWidget] = None,
     ):
         super().__init__(parent)
         self.bg_color = bg_color
         self.border_color = border_color
         self.text_color = text_color
+        self.bg_hover = (
+            bg_hover
+            if bg_hover is not None
+            else QColor(
+                bg_color.red(),
+                bg_color.green(),
+                bg_color.blue(),
+                min(255, max(45, int(bg_color.alpha() * 1.8))),
+            )
+        )
+        self.border_hover = (
+            border_hover
+            if border_hover is not None
+            else QColor(
+                border_color.red(),
+                border_color.green(),
+                border_color.blue(),
+                min(255, max(120, int(border_color.alpha() * 1.8))),
+            )
+        )
+        self.removable = removable
+
+        self.hovered_cell: Optional[Tuple[int, int]] = None
+        self.hovered_chip_idx: Optional[int] = None
+        self.hovered_delete_btn: bool = False
+
         self.badge_font = QFont()
         self.badge_font.setPointSize(9)
         self.badge_font.setWeight(QFont.Weight.DemiBold)
@@ -260,7 +318,7 @@ class ChipBadgeDelegate(QStyledItemDelegate):
         if isinstance(items, str):
             items = [items]
 
-        chip_h = 18
+        chip_h = 20
         y = option.rect.y() + (option.rect.height() - chip_h) // 2
         x = option.rect.x() + 5
         max_x = option.rect.right() - 5
@@ -269,18 +327,21 @@ class ChipBadgeDelegate(QStyledItemDelegate):
         fm = self.fm
 
         max_chip_w = 140
+        btn_size = 14.0
+
+        is_cell_hovered = self.hovered_cell == (index.row(), index.column())
 
         for i, text_val in enumerate(items):
             text_str = str(text_val)
             raw_w = fm.horizontalAdvance(text_str)
-            if raw_w + 10 > max_chip_w:
+            if raw_w + 14 > max_chip_w:
                 display_str = fm.elidedText(
-                    text_str, Qt.TextElideMode.ElideRight, max_chip_w - 10
+                    text_str, Qt.TextElideMode.ElideRight, max_chip_w - 14
                 )
-                chip_w = fm.horizontalAdvance(display_str) + 10
+                chip_w = fm.horizontalAdvance(display_str) + 14
             else:
                 display_str = text_str
-                chip_w = raw_w + 10
+                chip_w = raw_w + 14
 
             if x + chip_w > max_x:
                 remaining = len(items) - i
@@ -297,13 +358,50 @@ class ChipBadgeDelegate(QStyledItemDelegate):
                 break
 
             chip_rect = QRectF(x, y, chip_w, chip_h)
-            painter.setBrush(QBrush(self.bg_color))
-            painter.setPen(QPen(self.border_color, 1))
-            painter.drawRoundedRect(chip_rect, 4, 4)
+            is_chip_hovered = is_cell_hovered and (self.hovered_chip_idx == i)
+            is_btn_hovered = is_chip_hovered and self.hovered_delete_btn
 
+            # Pill background & border
+            cur_bg = self.bg_hover if is_chip_hovered else self.bg_color
+            cur_border = self.border_hover if is_chip_hovered else self.border_color
+            painter.setBrush(QBrush(cur_bg))
+            painter.setPen(QPen(cur_border, 1.0))
+            painter.drawRoundedRect(chip_rect, 4.0, 4.0)
+
+            # Text
             painter.setPen(self.text_color)
             painter.drawText(chip_rect, Qt.AlignmentFlag.AlignCenter, display_str)
-            x += chip_w + 4
+
+            # Vector delete button on hover
+            if is_chip_hovered and self.removable:
+                btn_cx = chip_rect.right() - 2.0
+                btn_cy = chip_rect.top() + 2.0
+                btn_rect = QRectF(btn_cx - btn_size / 2.0, btn_cy - btn_size / 2.0, btn_size, btn_size)
+
+                painter.save()
+                if is_btn_hovered:
+                    painter.setBrush(QBrush(QColor("#ef4444")))
+                    painter.setPen(Qt.PenStyle.NoPen)
+                    painter.drawEllipse(btn_rect)
+                    pen = QPen(QColor("#ffffff"), 1.5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
+                else:
+                    painter.setBrush(QBrush(QColor(22, 24, 32, 240)))
+                    painter.setPen(QPen(self.border_color, 1.0))
+                    painter.drawEllipse(btn_rect.adjusted(0.5, 0.5, -0.5, -0.5))
+                    pen = QPen(self.text_color, 1.3, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
+                painter.setPen(pen)
+                pad = 4.0
+                painter.drawLine(
+                    QPointF(btn_rect.left() + pad, btn_rect.top() + pad),
+                    QPointF(btn_rect.right() - pad, btn_rect.bottom() - pad),
+                )
+                painter.drawLine(
+                    QPointF(btn_rect.left() + pad, btn_rect.bottom() - pad),
+                    QPointF(btn_rect.right() - pad, btn_rect.top() + pad),
+                )
+                painter.restore()
+
+            x += chip_w + 8
 
         painter.restore()
 
@@ -316,8 +414,45 @@ class ChipBadgeDelegate(QStyledItemDelegate):
         fm = self.fm
         total_w = 10
         for t in items:
-            total_w += min(fm.horizontalAdvance(str(t)) + 10, 140) + 4
+            total_w += min(fm.horizontalAdvance(str(t)) + 14, 140) + 8
         return QSize(min(total_w, 400), 36)
+
+    def delete_button_at_point(
+        self, rect: QRectF, point: QPoint, items: List[Any]
+    ) -> Optional[str]:
+        """Detect which badge chip's delete button is located under the given point."""
+        if not items or not self.removable:
+            return None
+        chip_h = 20
+        y = rect.y() + (rect.height() - chip_h) // 2
+        x = rect.x() + 5
+        max_x = rect.right() - 5
+        max_chip_w = 140
+        btn_size = 14.0
+
+        for i, text_val in enumerate(items):
+            text_str = str(text_val)
+            raw_w = self.fm.horizontalAdvance(text_str)
+            if raw_w + 14 > max_chip_w:
+                display_str = self.fm.elidedText(
+                    text_str, Qt.TextElideMode.ElideRight, max_chip_w - 14
+                )
+                chip_w = self.fm.horizontalAdvance(display_str) + 14
+            else:
+                chip_w = raw_w + 14
+
+            if x + chip_w > max_x:
+                break
+
+            chip_rect = QRectF(x, y, chip_w, chip_h)
+            btn_cx = chip_rect.right() - 2.0
+            btn_cy = chip_rect.top() + 2.0
+            btn_rect = QRectF(btn_cx - btn_size / 2.0, btn_cy - btn_size / 2.0, btn_size, btn_size)
+
+            if btn_rect.contains(point):
+                return text_str
+            x += chip_w + 8
+        return None
 
     def item_at_point(
         self, rect: QRectF, point: QPoint, items: List[Any]
@@ -325,30 +460,311 @@ class ChipBadgeDelegate(QStyledItemDelegate):
         """Detect which badge chip text is located under the given point inside the cell rect."""
         if not items:
             return None
-        chip_h = 18
+        chip_h = 20
         y = rect.y() + (rect.height() - chip_h) // 2
         x = rect.x() + 5
         max_x = rect.right() - 5
         max_chip_w = 140
+        btn_size = 14.0
+
         for i, text_val in enumerate(items):
             text_str = str(text_val)
             raw_w = self.fm.horizontalAdvance(text_str)
-            if raw_w + 10 > max_chip_w:
+            if raw_w + 14 > max_chip_w:
                 display_str = self.fm.elidedText(
-                    text_str, Qt.TextElideMode.ElideRight, max_chip_w - 10
+                    text_str, Qt.TextElideMode.ElideRight, max_chip_w - 14
                 )
-                chip_w = self.fm.horizontalAdvance(display_str) + 10
+                chip_w = self.fm.horizontalAdvance(display_str) + 14
             else:
-                chip_w = raw_w + 10
+                chip_w = raw_w + 14
 
             if x + chip_w > max_x:
                 break
 
             chip_rect = QRectF(x, y, chip_w, chip_h)
-            if chip_rect.contains(point):
+            btn_cx = chip_rect.right() - 2.0
+            btn_cy = chip_rect.top() + 2.0
+            btn_rect = QRectF(btn_cx - btn_size / 2.0, btn_cy - btn_size / 2.0, btn_size, btn_size)
+
+            if chip_rect.contains(point) or (self.removable and btn_rect.contains(point)):
                 return text_str
-            x += chip_w + 4
+            x += chip_w + 8
         return None
+
+    def get_chips_end_x(self, rect: QRectF, items: List[Any]) -> int:
+        """Return the rightmost x coordinate occupied by chips in the cell."""
+        if not items:
+            return int(rect.x() + 5)
+        chip_h = 20
+        x = rect.x() + 5
+        max_x = rect.right() - 5
+        max_chip_w = 140
+        end_x = int(x)
+
+        for i, text_val in enumerate(items):
+            text_str = str(text_val)
+            raw_w = self.fm.horizontalAdvance(text_str)
+            if raw_w + 14 > max_chip_w:
+                display_str = self.fm.elidedText(
+                    text_str, Qt.TextElideMode.ElideRight, max_chip_w - 14
+                )
+                chip_w = self.fm.horizontalAdvance(display_str) + 14
+            else:
+                chip_w = raw_w + 14
+
+            if x + chip_w > max_x:
+                remaining = len(items) - i
+                if remaining > 0:
+                    rem_str = f"+{remaining}"
+                    rem_w = self.fm.horizontalAdvance(rem_str) + 8
+                    end_x = int(min(x + rem_w, max_x))
+                else:
+                    end_x = int(max_x)
+                break
+
+            end_x = int(x + chip_w)
+            x += chip_w + 8
+
+        return end_x
+
+    def update_hover(
+        self, cell: Tuple[int, int], rect: QRectF, point: QPoint, items: List[Any]
+    ) -> Tuple[Optional[str], bool, bool]:
+        """Update hover state from mouse position.
+
+        Returns (item_name, is_chip, is_delete_btn).
+        """
+        if not items:
+            self.set_hover(None, None, False)
+            return (None, False, False)
+
+        chip_h = 20
+        y = rect.y() + (rect.height() - chip_h) // 2
+        x = rect.x() + 5
+        max_x = rect.right() - 5
+        max_chip_w = 140
+        btn_size = 14.0
+
+        for i, text_val in enumerate(items):
+            text_str = str(text_val)
+            raw_w = self.fm.horizontalAdvance(text_str)
+            if raw_w + 14 > max_chip_w:
+                display_str = self.fm.elidedText(
+                    text_str, Qt.TextElideMode.ElideRight, max_chip_w - 14
+                )
+                chip_w = self.fm.horizontalAdvance(display_str) + 14
+            else:
+                chip_w = raw_w + 14
+
+            if x + chip_w > max_x:
+                break
+
+            chip_rect = QRectF(x, y, chip_w, chip_h)
+            btn_cx = chip_rect.right() - 2.0
+            btn_cy = chip_rect.top() + 2.0
+            btn_rect = QRectF(btn_cx - btn_size / 2.0, btn_cy - btn_size / 2.0, btn_size, btn_size)
+
+            if self.removable and btn_rect.contains(point):
+                self.set_hover(cell, i, True)
+                return (text_str, True, True)
+            elif chip_rect.contains(point):
+                self.set_hover(cell, i, False)
+                return (text_str, True, False)
+
+            x += chip_w + 8
+
+        self.set_hover(None, None, False)
+        return (None, False, False)
+
+    def set_hover(
+        self,
+        cell: Optional[Tuple[int, int]],
+        chip_idx: Optional[int],
+        is_delete_btn: bool,
+    ) -> bool:
+        """Assign current hover location; returns True if state changed."""
+        changed = (
+            self.hovered_cell != cell
+            or self.hovered_chip_idx != chip_idx
+            or self.hovered_delete_btn != is_delete_btn
+        )
+        if changed:
+            self.hovered_cell = cell
+            self.hovered_chip_idx = chip_idx
+            self.hovered_delete_btn = is_delete_btn
+        return changed
+
+    def clear_hover(self) -> bool:
+        """Reset hover state; returns True if state was active."""
+        if self.hovered_cell is not None:
+            self.hovered_cell = None
+            self.hovered_chip_idx = None
+            self.hovered_delete_btn = False
+            return True
+        return False
+
+
+class TableChipAddEditor(QWidget):
+    """Floating inline search/add editor for adding tags or playlists directly inside table cells."""
+
+    item_added = Signal(int, str, str)  # (row, category, item_name)
+    editing_closed = Signal()
+
+    def __init__(self, parent: QWidget):
+        super().__init__(parent)
+        self.setObjectName("tableChipAddEditor")
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setVisible(False)
+
+        self.current_row: int = -1
+        self.current_col: int = -1
+        self.category: str = ""  # "tags" or "playlists"
+        self.all_available_items: List[str] = []
+        self.existing_items: List[str] = []
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        self.input_edit = ChipSearchLineEdit(self)
+        self.input_edit.setFixedHeight(24)
+        self.input_edit.setStyleSheet(
+            f"QLineEdit {{ "
+            f"  background-color: {COLOR_BG_INPUT}; "
+            f"  color: {COLOR_TEXT_PRIMARY}; "
+            f"  border: 1px solid {COLOR_BORDER_FOCUS}; "
+            f"  border-radius: 5px; "
+            f"  padding: 1px 7px; "
+            f"  font-size: 11px; "
+            f"}}"
+        )
+        layout.addWidget(self.input_edit)
+
+        # Autocompleter
+        self.completer_model = QStringListModel(self)
+        self.completer = QCompleter(self.completer_model, self.input_edit)
+        self.completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self.completer.setFilterMode(Qt.MatchFlag.MatchContains)
+        self.completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+
+        popup = self.completer.popup()
+        if popup:
+            popup.setMinimumWidth(220)
+            popup.setStyleSheet(
+                f"QAbstractItemView {{ "
+                f"  background-color: {COLOR_BG_PANEL}; "
+                f"  color: {COLOR_TEXT_PRIMARY}; "
+                f"  border: 1px solid {COLOR_BORDER}; "
+                f"  border-radius: 6px; "
+                f"  padding: 4px; "
+                f"  selection-background-color: {COLOR_BLUE_BG}; "
+                f"  selection-color: {COLOR_BLUE}; "
+                f"  font-size: 11px; "
+                f"  outline: none; "
+                f"}} "
+                f"QAbstractItemView::item {{ "
+                f"  padding: 5px 8px; "
+                f"  border-radius: 4px; "
+                f"}} "
+                f"QAbstractItemView::item:hover {{ "
+                f"  background-color: {COLOR_BG_HOVER}; "
+                f"}} "
+                f"QAbstractItemView::item:selected {{ "
+                f"  background-color: {COLOR_BLUE_BG}; "
+                f"  color: #38bdf8; "
+                f"}}"
+            )
+
+        self.completer.activated.connect(self._on_item_chosen)
+        self.input_edit.setCompleter(self.completer)
+        self.input_edit.returnPressed.connect(self._on_return_pressed)
+        self.input_edit.escape_pressed.connect(self.close_editor)
+
+    def show_at(
+        self,
+        rect: QRect,
+        category: str,
+        row: int,
+        col: int,
+        existing_items: List[str],
+        available_items: List[str],
+    ) -> None:
+        self.current_row = row
+        self.current_col = col
+        self.category = category
+        self.existing_items = list(existing_items)
+        self.all_available_items = list(available_items)
+
+        assigned_lower = {e.lower() for e in existing_items}
+        candidates = [item for item in available_items if item.lower() not in assigned_lower]
+        self.completer_model.setStringList(candidates)
+
+        popup = self.completer.popup()
+        if popup:
+            fm = popup.fontMetrics()
+            max_w = max((fm.horizontalAdvance(item) for item in candidates), default=0) + 40
+            popup.setMinimumWidth(max(220, min(max_w, 400)))
+
+        border_color = "#a78bfa" if category == "tags" else "#2dd4bf"
+        self.input_edit.setStyleSheet(
+            f"QLineEdit {{ "
+            f"  background-color: {COLOR_BG_INPUT}; "
+            f"  color: {COLOR_TEXT_PRIMARY}; "
+            f"  border: 1px solid {border_color}; "
+            f"  border-radius: 5px; "
+            f"  padding: 1px 7px; "
+            f"  font-size: 11px; "
+            f"}}"
+        )
+
+        placeholder = "+ Add tag..." if category == "tags" else "+ Add playlist..."
+        self.input_edit.setPlaceholderText(placeholder)
+        self.input_edit.clear()
+
+        self.setGeometry(rect)
+        self.setVisible(True)
+        self.raise_()
+        self.input_edit.setFocus()
+
+        # Show autocomplete options popup
+        if candidates:
+            self.completer.setCompletionPrefix("")
+            self.completer.complete()
+
+    def _on_item_chosen(self, text: str) -> None:
+        item = text.strip()
+        if item:
+            row = self.current_row
+            cat = self.category
+            self.close_editor()
+            self.item_added.emit(row, cat, item)
+
+    def _on_return_pressed(self) -> None:
+        text = self.input_edit.text().strip()
+        if not text:
+            self.close_editor()
+            return
+
+        matched = None
+        for cand in self.completer_model.stringList():
+            if cand.lower() == text.lower():
+                matched = cand
+                break
+        if not matched and self.completer.currentCompletion():
+            cur = self.completer.currentCompletion()
+            if cur.lower().startswith(text.lower()):
+                matched = cur
+
+        if matched:
+            self._on_item_chosen(matched)
+        else:
+            self.close_editor()
+
+    def close_editor(self) -> None:
+        if self.isVisible():
+            self.setVisible(False)
+            self.editing_closed.emit()
 
 
 class FileTypeBadgeDelegate(QStyledItemDelegate):
@@ -558,6 +974,22 @@ class TracksTableModel(QAbstractTableModel):
             self.records[row_idx]["playlists"] = list(playlists)
             if TrackColumn.PLAYLISTS in self.config.columns:
                 col_idx = self.config.columns.index(TrackColumn.PLAYLISTS)
+                idx = self.index(row_idx, col_idx)
+                self.dataChanged.emit(
+                    idx,
+                    idx,
+                    [
+                        Qt.ItemDataRole.DisplayRole,
+                        Qt.ItemDataRole.UserRole,
+                        Qt.ItemDataRole.ToolTipRole,
+                    ],
+                )
+
+    def update_track_tags(self, row_idx: int, tags: List[str]) -> None:
+        if 0 <= row_idx < len(self.records):
+            self.records[row_idx]["tags"] = list(tags)
+            if TrackColumn.TAGS in self.config.columns:
+                col_idx = self.config.columns.index(TrackColumn.TAGS)
                 idx = self.index(row_idx, col_idx)
                 self.dataChanged.emit(
                     idx,
@@ -868,6 +1300,9 @@ class TracksTableWidget(QTableView):
     replace_file_requested = Signal(dict)
     open_playlist_requested = Signal(str)
     open_tag_requested = Signal(str)
+    track_playlists_changed = Signal(int, list)
+    track_tags_changed = Signal(int, list)
+    track_modified = Signal(dict)
 
     def __init__(
         self,
@@ -881,10 +1316,17 @@ class TracksTableWidget(QTableView):
         self.current_sort_col: int = 1
         self.current_sort_order: Qt.SortOrder = Qt.SortOrder.AscendingOrder
 
+        self.engine: Optional[Engine] = None
+        self.cached_available_playlists: List[str] = []
+        self.cached_available_tags: List[str] = []
+
         self._folder_col_idx: int = -1
         self._file_col_idx: int = -1
         self._playlist_col_idx: int = -1
         self._tags_col_idx: int = -1
+
+        self._tags_delegate: Optional[ChipBadgeDelegate] = None
+        self._playlist_delegate: Optional[ChipBadgeDelegate] = None
 
         self.setMouseTracking(True)
         self.viewport().setMouseTracking(True)
@@ -901,7 +1343,60 @@ class TracksTableWidget(QTableView):
         self.customContextMenuRequested.connect(self._on_table_context_menu)
         self.horizontalHeader().sectionClicked.connect(self._on_header_section_clicked)
 
+        self._chip_editor = TableChipAddEditor(self.viewport())
+        self._chip_editor.item_added.connect(self._on_chip_item_added)
+        self.verticalScrollBar().valueChanged.connect(self._chip_editor.close_editor)
+        self.horizontalScrollBar().valueChanged.connect(self._chip_editor.close_editor)
+
         self._init_table_structure()
+
+    def set_engine(self, engine: Any) -> None:
+        """Assign active database engine and preload available tags and playlists."""
+        self.engine = engine
+        self._refresh_available_caches()
+
+    def _refresh_available_caches(self) -> None:
+        """Fetch and cache user playlists and tags from Rekordbox database."""
+        if not self.engine:
+            return
+        try:
+            pls = fetch_all_playlists(self.engine)
+            self.cached_available_playlists = [p["name"] for p in pls if p.get("name")]
+        except Exception:
+            pass
+        try:
+            tags = fetch_all_tags(self.engine)
+            self.cached_available_tags = [t["name"] for t in tags if t.get("name")]
+        except Exception:
+            pass
+
+    def get_available_items(self, category: str) -> List[str]:
+        """Return available playlists or tags, refreshing from database if engine is present."""
+        if category == "playlists":
+            if self.engine:
+                try:
+                    pls = fetch_all_playlists(self.engine)
+                    self.cached_available_playlists = [p["name"] for p in pls if p.get("name")]
+                except Exception:
+                    pass
+            return list(self.cached_available_playlists)
+        elif category == "tags":
+            if self.engine:
+                try:
+                    tags = fetch_all_tags(self.engine)
+                    self.cached_available_tags = [t["name"] for t in tags if t.get("name")]
+                except Exception:
+                    pass
+            return list(self.cached_available_tags)
+        return []
+
+    def set_available_playlists(self, playlists: List[str]) -> None:
+        """Explicitly assign available playlists list."""
+        self.cached_available_playlists = list(playlists)
+
+    def set_available_tags(self, tags: List[str]) -> None:
+        """Explicitly assign available tags list."""
+        self.cached_available_tags = list(tags)
 
     def configure(self, config: TrackTableConfig) -> None:
         """Reconfigure table columns and behavior."""
@@ -937,16 +1432,22 @@ class TracksTableWidget(QTableView):
 
         # Delegate singletons
         file_type_delegate = FileTypeBadgeDelegate(parent=self)
-        tags_delegate = ChipBadgeDelegate(
+        self._tags_delegate = ChipBadgeDelegate(
             bg_color=QColor(139, 92, 246, 38),
             border_color=QColor(167, 139, 250, 95),
             text_color=QColor("#d8b4fe"),
+            bg_hover=QColor(139, 92, 246, 68),
+            border_hover=QColor(167, 139, 250, 180),
+            removable=True,
             parent=self,
         )
-        playlist_delegate = ChipBadgeDelegate(
+        self._playlist_delegate = ChipBadgeDelegate(
             bg_color=QColor(20, 184, 166, 38),
             border_color=QColor(45, 212, 191, 95),
             text_color=QColor("#5eead4"),
+            bg_hover=QColor(20, 184, 166, 68),
+            border_hover=QColor(45, 212, 191, 180),
+            removable=True,
             parent=self,
         )
         path_link_delegate = PathLinkDelegate(parent=self)
@@ -996,10 +1497,10 @@ class TracksTableWidget(QTableView):
             if col_name == TrackColumn.FILE_TYPE:
                 self.setItemDelegateForColumn(col_idx, file_type_delegate)
             elif col_name == TrackColumn.TAGS:
-                self.setItemDelegateForColumn(col_idx, tags_delegate)
+                self.setItemDelegateForColumn(col_idx, self._tags_delegate)
                 self._tags_col_idx = col_idx
             elif col_name == TrackColumn.PLAYLISTS:
-                self.setItemDelegateForColumn(col_idx, playlist_delegate)
+                self.setItemDelegateForColumn(col_idx, self._playlist_delegate)
                 self._playlist_col_idx = col_idx
             elif col_name == TrackColumn.FOLDER:
                 self.setItemDelegateForColumn(col_idx, path_link_delegate)
@@ -1038,8 +1539,70 @@ class TracksTableWidget(QTableView):
                 self.viewport().unsetCursor()
             self.viewport().update()
 
+    def _update_chip_hover_state(self, mouse_pos: QPoint) -> None:
+        """Update hover state on badge chips when mouse moves over tags/playlists columns."""
+        if self.hovered_link_cell is not None:
+            return
+
+        if not self.viewport().rect().contains(mouse_pos):
+            self._clear_chip_hover()
+            return
+
+        idx = self.indexAt(mouse_pos)
+        if not idx.isValid() or idx.column() not in (self._tags_col_idx, self._playlist_col_idx):
+            self._clear_chip_hover()
+            return
+
+        col = idx.column()
+        delegate = self._playlist_delegate if col == self._playlist_col_idx else self._tags_delegate
+        other_delegate = self._tags_delegate if col == self._playlist_col_idx else self._playlist_delegate
+
+        if other_delegate:
+            if other_delegate.clear_hover():
+                self.viewport().update()
+
+        if not delegate:
+            return
+
+        cell = (idx.row(), col)
+        cell_rect = self.visualRect(idx)
+        items = idx.data(Qt.ItemDataRole.UserRole) or []
+        if isinstance(items, str):
+            items = [items]
+
+        item_name, is_chip, is_delete_btn = delegate.update_hover(
+            cell, QRectF(cell_rect), mouse_pos, items
+        )
+        self.viewport().update(cell_rect)
+
+        if is_delete_btn:
+            self.viewport().setCursor(Qt.CursorShape.PointingHandCursor)
+            self.viewport().setToolTip(f"Remove '{item_name}'")
+        elif is_chip:
+            self.viewport().setCursor(Qt.CursorShape.PointingHandCursor)
+            cat_name = "playlist" if col == self._playlist_col_idx else "tag"
+            self.viewport().setToolTip(f"Open {cat_name} '{item_name}' (click to view)")
+        else:
+            self.viewport().unsetCursor()
+            cat_name = "to playlist" if col == self._playlist_col_idx else "tags"
+            self.viewport().setToolTip(f"💡 Double-click empty space to add {cat_name}")
+
+    def _clear_chip_hover(self) -> None:
+        """Clear chip hover state across all chip delegates."""
+        cleared = False
+        if self._playlist_delegate and self._playlist_delegate.clear_hover():
+            cleared = True
+        if self._tags_delegate and self._tags_delegate.clear_hover():
+            cleared = True
+        if cleared:
+            if self.hovered_link_cell is None:
+                self.viewport().unsetCursor()
+            self.viewport().update()
+
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
-        self._update_hover_state(event.position().toPoint())
+        pos = event.position().toPoint()
+        self._update_hover_state(pos)
+        self._update_chip_hover_state(pos)
         super().mouseMoveEvent(event)
 
     def leaveEvent(self, event: QEvent) -> None:
@@ -1047,41 +1610,264 @@ class TracksTableWidget(QTableView):
             self.hovered_link_cell = None
             self.viewport().unsetCursor()
             self.viewport().update()
+        self._clear_chip_hover()
         super().leaveEvent(event)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
+        if self._chip_editor and self._chip_editor.isVisible():
+            pos = event.position().toPoint()
+            if not self._chip_editor.geometry().contains(pos):
+                self._chip_editor.close_editor()
+
         if event.button() == Qt.MouseButton.LeftButton:
-            idx = self.indexAt(event.position().toPoint())
-            if idx.isValid() and idx.column() == self._playlist_col_idx:
+            pos = event.position().toPoint()
+            idx = self.indexAt(pos)
+            if idx.isValid() and idx.column() in (self._playlist_col_idx, self._tags_col_idx):
                 items = idx.data(Qt.ItemDataRole.UserRole)
                 if items:
                     if isinstance(items, str):
                         items = [items]
-                    delegate = self.itemDelegateForColumn(self._playlist_col_idx)
+                    delegate = (
+                        self._playlist_delegate
+                        if idx.column() == self._playlist_col_idx
+                        else self._tags_delegate
+                    )
                     if isinstance(delegate, ChipBadgeDelegate):
                         cell_rect = self.visualRect(idx)
-                        clicked_item = delegate.item_at_point(
-                            QRectF(cell_rect), event.position().toPoint(), items
+                        del_item = delegate.delete_button_at_point(
+                            QRectF(cell_rect), pos, items
                         )
-                        if clicked_item:
-                            self.open_playlist_requested.emit(clicked_item)
+                        if del_item:
+                            category = "playlists" if idx.column() == self._playlist_col_idx else "tags"
+                            self._on_chip_item_deleted(idx.row(), category, del_item)
                             event.accept()
                             return
-            elif idx.isValid() and idx.column() == self._tags_col_idx:
-                items = idx.data(Qt.ItemDataRole.UserRole)
-                if items:
-                    if isinstance(items, str):
-                        items = [items]
-                    delegate = self.itemDelegateForColumn(self._tags_col_idx)
-                    if isinstance(delegate, ChipBadgeDelegate):
-                        cell_rect = self.visualRect(idx)
+
                         clicked_item = delegate.item_at_point(
-                            QRectF(cell_rect), event.position().toPoint(), items
+                            QRectF(cell_rect), pos, items
                         )
                         if clicked_item:
-                            self.open_tag_requested.emit(clicked_item)
+                            if idx.column() == self._playlist_col_idx:
+                                self.open_playlist_requested.emit(clicked_item)
+                            else:
+                                self.open_tag_requested.emit(clicked_item)
                             event.accept()
                             return
+
+        if event.button() == Qt.MouseButton.LeftButton and self.config.enable_finder_clicks:
+            mod = event.modifiers()
+            if mod & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.MetaModifier):
+                idx = self.indexAt(event.position().toPoint())
+                if idx.isValid():
+                    col = idx.column()
+                    if col == self._folder_col_idx:
+                        path_data = idx.data(Qt.ItemDataRole.UserRole)
+                        if path_data and str(path_data) not in ("", "—"):
+                            self.open_folder(str(path_data))
+                            self.folder_clicked.emit(str(path_data))
+                            event.accept()
+                            return
+                    elif col == self._file_col_idx:
+                        path_data = idx.data(Qt.ItemDataRole.UserRole)
+                        if path_data and str(path_data) not in ("", "—"):
+                            self.reveal_file(str(path_data))
+                            self.file_clicked.emit(str(path_data))
+                            event.accept()
+                            return
+        super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            pos = event.position().toPoint()
+            idx = self.indexAt(pos)
+            if idx.isValid() and idx.column() in (self._playlist_col_idx, self._tags_col_idx):
+                items = idx.data(Qt.ItemDataRole.UserRole) or []
+                if isinstance(items, str):
+                    items = [items]
+                delegate = (
+                    self._playlist_delegate
+                    if idx.column() == self._playlist_col_idx
+                    else self._tags_delegate
+                )
+                if isinstance(delegate, ChipBadgeDelegate):
+                    cell_rect = self.visualRect(idx)
+                    clicked_item = delegate.item_at_point(
+                        QRectF(cell_rect), pos, items
+                    )
+                    if clicked_item:
+                        # Double clicked on an existing chip: ignore to prevent opening track detail
+                        event.accept()
+                        return
+
+                    # Double clicked on empty space of cell: open inline add editor
+                    category = "playlists" if idx.column() == self._playlist_col_idx else "tags"
+                    self._open_chip_add_editor(idx, category)
+                    event.accept()
+                    return
+
+        super().mouseDoubleClickEvent(event)
+
+    def _open_chip_add_editor(self, idx: QModelIndex, category: str) -> None:
+        """Open floating inline add editor for tags or playlists at the specified cell."""
+        row = idx.row()
+        col = idx.column()
+        if not (0 <= row < len(self.records)):
+            return
+
+        track = self.records[row]
+        existing_items = list(track.get(category) or [])
+        available_items = self.get_available_items(category)
+
+        cell_rect = self.visualRect(idx)
+        delegate = self.itemDelegateForColumn(col)
+        if isinstance(delegate, ChipBadgeDelegate):
+            end_x = delegate.get_chips_end_x(QRectF(cell_rect), existing_items)
+        else:
+            end_x = cell_rect.x() + 5
+
+        h = 24
+        y = cell_rect.y() + (cell_rect.height() - h) // 2
+        avail_w = cell_rect.right() - end_x - 6
+
+        if avail_w >= 130:
+            x = end_x + 4
+            w = min(avail_w, 220)
+        else:
+            w = min(180, cell_rect.width() - 10)
+            x = max(cell_rect.x() + 5, cell_rect.right() - w - 4)
+
+        target_rect = QRect(int(x), int(y), int(w), int(h))
+        self._chip_editor.show_at(
+            target_rect,
+            category=category,
+            row=row,
+            col=col,
+            existing_items=existing_items,
+            available_items=available_items,
+        )
+
+    def _on_chip_item_added(self, row: int, category: str, item_name: str) -> None:
+        """Handle adding a tag or playlist item from the inline editor."""
+        if is_rekordbox_running():
+            QMessageBox.warning(
+                self,
+                "Rekordbox is Running",
+                "Please close Rekordbox before modifying tags or playlists.",
+            )
+            return
+
+        if not self.engine:
+            self.status_message.emit("⚠️ Database engine not available.")
+            return
+
+        if not (0 <= row < len(self.records)):
+            return
+
+        track = self.records[row]
+        content_id = track.get("id") or track.get("content_id")
+        if not content_id:
+            return
+
+        title = track.get("title") or "Track"
+
+        if category == "tags":
+            current_tags = list(track.get("tags") or [])
+            if item_name in current_tags:
+                return
+            try:
+                add_track_to_tag(self.engine, str(content_id), item_name)
+            except Exception as e:
+                QMessageBox.critical(
+                    self, "Add Tag Failed", f"Could not add tag '{item_name}':\n{e}"
+                )
+                return
+            current_tags.append(item_name)
+            track["tags"] = current_tags
+            self._model.update_track_tags(row, current_tags)
+            self.status_message.emit(f"🏷️ Added tag '{item_name}' to '{title}'")
+            self.track_tags_changed.emit(row, current_tags)
+            self.track_modified.emit(track)
+
+        elif category == "playlists":
+            current_pls = list(track.get("playlists") or [])
+            if item_name in current_pls:
+                return
+            try:
+                add_track_to_playlist(self.engine, str(content_id), item_name)
+            except Exception as e:
+                QMessageBox.critical(
+                    self, "Add Playlist Failed", f"Could not add to playlist '{item_name}':\n{e}"
+                )
+                return
+            current_pls.append(item_name)
+            track["playlists"] = current_pls
+            self._model.update_track_playlists(row, current_pls)
+            self.status_message.emit(f"📑 Added '{title}' to playlist '{item_name}'")
+            self.track_playlists_changed.emit(row, current_pls)
+            self.track_modified.emit(track)
+
+    def _on_chip_item_deleted(self, row: int, category: str, item_name: str) -> None:
+        """Handle removing a tag or playlist item when clicking its chip delete button."""
+        if is_rekordbox_running():
+            QMessageBox.warning(
+                self,
+                "Rekordbox is Running",
+                "Please close Rekordbox before modifying tags or playlists.",
+            )
+            return
+
+        if not self.engine:
+            self.status_message.emit("⚠️ Database engine not available.")
+            return
+
+        if not (0 <= row < len(self.records)):
+            return
+
+        track = self.records[row]
+        content_id = track.get("id") or track.get("content_id")
+        if not content_id:
+            return
+
+        title = track.get("title") or "Track"
+
+        if category == "tags":
+            current_tags = list(track.get("tags") or [])
+            if item_name not in current_tags:
+                return
+            try:
+                remove_track_from_tag(self.engine, str(content_id), item_name)
+            except Exception as e:
+                QMessageBox.critical(
+                    self, "Remove Tag Failed", f"Could not remove tag '{item_name}':\n{e}"
+                )
+                return
+            current_tags.remove(item_name)
+            track["tags"] = current_tags
+            self._model.update_track_tags(row, current_tags)
+            self._clear_chip_hover()
+            self.status_message.emit(f"🗑️ Removed tag '{item_name}' from '{title}'")
+            self.track_tags_changed.emit(row, current_tags)
+            self.track_modified.emit(track)
+
+        elif category == "playlists":
+            current_pls = list(track.get("playlists") or [])
+            if item_name not in current_pls:
+                return
+            try:
+                remove_track_from_playlist(self.engine, str(content_id), item_name)
+            except Exception as e:
+                QMessageBox.critical(
+                    self, "Remove Playlist Failed", f"Could not remove from playlist '{item_name}':\n{e}"
+                )
+                return
+            current_pls.remove(item_name)
+            track["playlists"] = current_pls
+            self._model.update_track_playlists(row, current_pls)
+            self._clear_chip_hover()
+            self.status_message.emit(f"🗑️ Removed '{title}' from playlist '{item_name}'")
+            self.track_playlists_changed.emit(row, current_pls)
+            self.track_modified.emit(track)
+
 
         if event.button() == Qt.MouseButton.LeftButton and self.config.enable_finder_clicks:
             mod = event.modifiers()
@@ -1172,6 +1958,10 @@ class TracksTableWidget(QTableView):
     def update_track_playlists(self, row_idx: int, playlists: List[str]) -> None:
         """Update the playlists column cell for a specific row without rebuilding table."""
         self._model.update_track_playlists(row_idx, playlists)
+
+    def update_track_tags(self, row_idx: int, tags: List[str]) -> None:
+        """Update the tags column cell for a specific row without rebuilding table."""
+        self._model.update_track_tags(row_idx, tags)
 
     def rowCount(self) -> int:
         """Return the number of rows in the table model."""
@@ -1325,9 +2115,13 @@ class TracksTableWidget(QTableView):
     def _on_cell_double_clicked(self, index_or_row: Any, column: Optional[int] = None) -> None:
         """Double clicking a track row emits track_detail_requested with track record."""
         if isinstance(index_or_row, QModelIndex):
+            if index_or_row.column() in (self._tags_col_idx, self._playlist_col_idx):
+                return
             row = index_or_row.row()
         elif isinstance(index_or_row, int):
             row = index_or_row
+            if column is not None and column in (self._tags_col_idx, self._playlist_col_idx):
+                return
         else:
             return
         if 0 <= row < len(self.records):

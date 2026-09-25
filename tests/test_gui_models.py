@@ -1579,8 +1579,244 @@ class TestTracksTableWidget(unittest.TestCase):
         self.assertEqual(table.selected_rows(), [5000])
 
 
+class TestTableChipInteractions(unittest.TestCase):
+    """Unit tests for chip hover-to-delete and double-click to add tags/playlists in TracksTableWidget."""
+
+    @classmethod
+    def setUpClass(cls):
+        from PySide6.QtWidgets import QApplication
+        cls.app = QApplication.instance() or QApplication([])
+
+    def setUp(self):
+        from rekordbox_collection_manager.gui.track_table import (
+            DEFAULT_COLLECTION_COLUMNS,
+            TrackTableConfig,
+            TracksTableWidget,
+        )
+        self.mock_tracks = [
+            {
+                "id": "trk_1",
+                "title": "Breathe",
+                "artist": "CamelPhat",
+                "album": "Dark Matter",
+                "key": "8A",
+                "bpm": 125.0,
+                "duration_sec": 195,
+                "duration_str": "3:15",
+                "play_count": 12,
+                "bitrate": 320,
+                "file_type": "AIFF",
+                "tags": ["Melodic", "Deep House"],
+                "playlists": ["Peak Time", "Summer 2026"],
+                "folder_name": "Melodic",
+                "folder_dir": "/Music/Melodic",
+                "file_name": "breathe.aiff",
+                "file_path": "/Music/Melodic/breathe.aiff",
+            },
+            {
+                "id": "trk_2",
+                "title": "Glue",
+                "artist": "Bicep",
+                "album": "Bicep",
+                "key": "6A",
+                "bpm": 130.0,
+                "duration_sec": 269,
+                "duration_str": "4:29",
+                "play_count": 5,
+                "bitrate": 320,
+                "file_type": "AIFF",
+                "tags": [],
+                "playlists": [],
+                "folder_name": "Breaks",
+                "folder_dir": "/Music/Breaks",
+                "file_name": "glue.aiff",
+                "file_path": "/Music/Breaks/glue.aiff",
+            },
+        ]
+        self.table = TracksTableWidget(config=TrackTableConfig(columns=list(DEFAULT_COLLECTION_COLUMNS)))
+        self.table.set_tracks(self.mock_tracks)
+        self.table.set_available_playlists(["Peak Time", "Summer 2026", "Club Hits", "Warmup"])
+        self.table.set_available_tags(["Melodic", "Deep House", "Techno", "Vocal"])
+        self.table.show()
+
+    def tearDown(self):
+        if hasattr(self, "table") and self.table:
+            self.table.close()
+
+    def test_chip_badge_delegate_hover_detection(self):
+        from PySide6.QtCore import QPoint, QRectF
+        from PySide6.QtGui import QColor
+        from rekordbox_collection_manager.gui.track_table import ChipBadgeDelegate
+
+        delegate = ChipBadgeDelegate(
+            bg_color=QColor(20, 184, 166, 38),
+            border_color=QColor(45, 212, 191, 95),
+            text_color=QColor("#5eead4"),
+            removable=True,
+        )
+        cell_rect = QRectF(0, 0, 270, 36)
+        items = ["Peak Time", "Summer 2026"]
+
+        # 1. Point outside chips (empty space)
+        name, is_chip, is_del = delegate.update_hover((0, 10), cell_rect, QPoint(250, 18), items)
+        self.assertIsNone(name)
+        self.assertFalse(is_chip)
+        self.assertFalse(is_del)
+
+        # 2. Point inside chip 0 body
+        name, is_chip, is_del = delegate.update_hover((0, 10), cell_rect, QPoint(20, 18), items)
+        self.assertEqual(name, "Peak Time")
+        self.assertTrue(is_chip)
+        self.assertFalse(is_del)
+
+        # 3. Point inside chip 0 delete button (top right of chip 0)
+        raw_w = delegate.fm.horizontalAdvance("Peak Time")
+        chip_w = raw_w + 14
+        btn_cx = 5 + chip_w - 2.0
+        btn_cy = 8 + 2.0
+        name, is_chip, is_del = delegate.update_hover((0, 10), cell_rect, QPoint(int(btn_cx), int(btn_cy)), items)
+        self.assertEqual(name, "Peak Time")
+        self.assertTrue(is_chip)
+        self.assertTrue(is_del)
+        self.assertEqual(delegate.delete_button_at_point(cell_rect, QPoint(int(btn_cx), int(btn_cy)), items), "Peak Time")
+
+    def test_table_chip_add_editor_lifecycle(self):
+        from PySide6.QtCore import QPoint, QRect
+        from rekordbox_collection_manager.gui.track_table import TableChipAddEditor
+
+        editor = TableChipAddEditor(self.table.viewport())
+        target_rect = QRect(100, 5, 150, 24)
+
+        editor.show_at(
+            rect=target_rect,
+            category="tags",
+            row=0,
+            col=self.table._tags_col_idx,
+            existing_items=["Melodic", "Deep House"],
+            available_items=["Melodic", "Deep House", "Techno", "Vocal"],
+        )
+
+        self.assertTrue(editor.isVisible())
+        self.assertEqual(editor.category, "tags")
+        # Candidates should exclude existing items
+        candidates = editor.completer_model.stringList()
+        self.assertEqual(candidates, ["Techno", "Vocal"])
+
+        # Test selecting an item
+        received = []
+        editor.item_added.connect(lambda r, c, val: received.append((r, c, val)))
+        editor._on_item_chosen("Techno")
+        self.assertEqual(received, [(0, "tags", "Techno")])
+        self.assertFalse(editor.isVisible())
+
+    def test_double_click_on_empty_space_opens_editor(self):
+        from PySide6.QtCore import QPoint, Qt
+        from PySide6.QtGui import QMouseEvent
+
+        col_idx = self.table._tags_col_idx
+        # Row 1 has no tags -> clicking in center of cell is clicking empty space
+        rect = self.table.visualRect(self.table.model().index(1, col_idx))
+        click_pos = rect.center()
+
+        event = QMouseEvent(
+            QMouseEvent.Type.MouseButtonDblClick,
+            click_pos,
+            click_pos,
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+
+        detail_signals = []
+        self.table.track_detail_requested.connect(lambda t: detail_signals.append(t))
+
+        self.table.mouseDoubleClickEvent(event)
+
+        # Assert inline add editor opened
+        self.assertTrue(self.table._chip_editor.isVisible())
+        self.assertEqual(self.table._chip_editor.category, "tags")
+        self.assertEqual(self.table._chip_editor.current_row, 1)
+
+        # Assert track detail view was NOT triggered
+        self.assertEqual(len(detail_signals), 0)
+
+    def test_double_click_on_chip_does_not_open_detail_view(self):
+        from PySide6.QtCore import QPoint, Qt
+        from PySide6.QtGui import QMouseEvent
+
+        col_idx = self.table._playlist_col_idx
+        # Row 0 has playlists ["Peak Time", "Summer 2026"]
+        rect = self.table.visualRect(self.table.model().index(0, col_idx))
+        click_pos = QPoint(rect.x() + 20, rect.center().y())
+
+        event = QMouseEvent(
+            QMouseEvent.Type.MouseButtonDblClick,
+            click_pos,
+            click_pos,
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+
+        detail_signals = []
+        self.table.track_detail_requested.connect(lambda t: detail_signals.append(t))
+
+        self.table.mouseDoubleClickEvent(event)
+
+        # Assert track detail was NOT opened and editor was NOT opened
+        self.assertEqual(len(detail_signals), 0)
+        self.assertFalse(self.table._chip_editor.isVisible())
+
+    def test_double_click_on_title_opens_detail_view(self):
+        from PySide6.QtCore import QPoint, Qt
+        from PySide6.QtGui import QMouseEvent
+        from rekordbox_collection_manager.gui.track_table import TrackColumn
+
+        title_col_idx = list(self.table.config.columns).index(TrackColumn.TITLE)
+        rect = self.table.visualRect(self.table.model().index(0, title_col_idx))
+        click_pos = rect.center()
+
+        press_event = QMouseEvent(
+            QMouseEvent.Type.MouseButtonPress,
+            click_pos,
+            click_pos,
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        dbl_event = QMouseEvent(
+            QMouseEvent.Type.MouseButtonDblClick,
+            click_pos,
+            click_pos,
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+
+        detail_signals = []
+        self.table.track_detail_requested.connect(lambda t: detail_signals.append(t))
+
+        self.table.mousePressEvent(press_event)
+        self.table.mouseDoubleClickEvent(dbl_event)
+
+        # Assert track detail WAS opened for title double-click
+        self.assertEqual(len(detail_signals), 1)
+        self.assertEqual(detail_signals[0]["title"], "Breathe")
+
+    def test_update_track_tags_and_playlists_in_model(self):
+        from PySide6.QtCore import Qt
+
+        self.table.update_track_tags(0, ["Melodic", "Deep House", "Progressive"])
+        self.assertEqual(self.table.records[0]["tags"], ["Melodic", "Deep House", "Progressive"])
+
+        idx = self.table.model().index(0, self.table._tags_col_idx)
+        self.assertEqual(idx.data(Qt.ItemDataRole.UserRole), ["Melodic", "Deep House", "Progressive"])
+        self.assertIn("Progressive", idx.data(Qt.ItemDataRole.DisplayRole))
+
+
 if __name__ == "__main__":
     unittest.main()
+
 
 
 

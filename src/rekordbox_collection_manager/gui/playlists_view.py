@@ -249,6 +249,7 @@ class PlaylistsView(QWidget):
         self.table.replace_file_requested.connect(self.replace_file_requested.emit)
         self.table.open_playlist_requested.connect(self.open_playlist_by_id_or_name)
         self.table.open_tag_requested.connect(self.open_tag_requested.emit)
+        self.table.track_playlists_changed.connect(self._on_table_playlists_changed)
         right_layout.addWidget(self.table, stretch=1)
 
         # Status Bar
@@ -287,6 +288,11 @@ class PlaylistsView(QWidget):
         """Assign active database engine and initiate asynchronous playlist tree load."""
         self.engine = engine
         self.db_path = db_path
+        self.table.set_engine(engine)
+        self._load_playlists_tree()
+
+    def _on_table_playlists_changed(self, row: int, playlists: List[str]) -> None:
+        """Refresh sidebar playlist tree when playlist chips are added or removed."""
         self._load_playlists_tree()
 
     def _load_playlists_tree(self) -> None:
@@ -636,6 +642,8 @@ class PlaylistsView(QWidget):
             self.records[idx].update(track)
             if "playlists" in track:
                 self.table.update_track_playlists(idx, track["playlists"])
+            if "tags" in track:
+                self.table.update_track_tags(idx, track["tags"])
         if 0 <= idx < self.table.rowCount():
             self.table.selectRow(idx)
             self.table.scrollToRow(idx)
