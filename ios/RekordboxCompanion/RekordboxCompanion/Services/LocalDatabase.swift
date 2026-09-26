@@ -257,7 +257,7 @@ final class LocalDatabase {
           AND title NOT LIKE '%spotify%' AND artist NOT LIKE '%spotify%'
           AND title NOT LIKE '%apple-music%' AND artist NOT LIKE '%apple-music%'
           AND id NOT IN ('14939874', '218663293', '152484359', '61897480', '65048245')
-        ORDER BY artist COLLATE NOCASE, title COLLATE NOCASE;
+        ORDER BY title COLLATE NOCASE, artist COLLATE NOCASE;
         """
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
@@ -477,7 +477,7 @@ final class LocalDatabase {
           AND t.title NOT LIKE '%spotify%' AND t.artist NOT LIKE '%spotify%'
           AND t.title NOT LIKE '%apple-music%' AND t.artist NOT LIKE '%apple-music%'
           AND t.id NOT IN ('14939874', '218663293', '152484359', '61897480', '65048245')
-        ORDER BY t.artist COLLATE NOCASE, t.title COLLATE NOCASE;
+        ORDER BY t.title COLLATE NOCASE, t.artist COLLATE NOCASE;
         """
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }

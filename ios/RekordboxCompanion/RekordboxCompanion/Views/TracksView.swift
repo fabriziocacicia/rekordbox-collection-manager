@@ -1,8 +1,8 @@
 import SwiftUI
 
 enum TrackSortOption: String, CaseIterable, Identifiable {
-    case artistAZ = "Artist (A-Z)"
     case titleAZ = "Title (A-Z)"
+    case artistAZ = "Artist (A-Z)"
     case bpmAsc = "BPM (Low to High)"
     case bpmDesc = "BPM (High to Low)"
     case playCountDesc = "Play Count (Most Played)"
@@ -32,7 +32,7 @@ enum BpmFilterOption: String, CaseIterable, Identifiable {
 struct TracksView: View {
     @Environment(AppState.self) private var appState
     @State private var searchText = ""
-    @State private var selectedSortOption: TrackSortOption = .artistAZ
+    @State private var selectedSortOption: TrackSortOption = .titleAZ
     @State private var playStatusFilter: PlayStatusFilter = .all
     @State private var bpmRangeFilter: BpmFilterOption = .all
     @State private var selectedKey: String? = nil
@@ -71,7 +71,7 @@ struct TracksView: View {
             bpmRangeFilter = .all
             selectedKey = nil
             selectedTagId = nil
-            selectedSortOption = .artistAZ
+            selectedSortOption = .titleAZ
         }
     }
 
@@ -126,6 +126,13 @@ struct TracksView: View {
 
         // 6. Sorting
         switch selectedSortOption {
+        case .titleAZ:
+            result.sort {
+                if $0.title.caseInsensitiveCompare($1.title) == .orderedSame {
+                    return $0.artist.caseInsensitiveCompare($1.artist) == .orderedAscending
+                }
+                return $0.title.caseInsensitiveCompare($1.title) == .orderedAscending
+            }
         case .artistAZ:
             result.sort {
                 if $0.artist.caseInsensitiveCompare($1.artist) == .orderedSame {
@@ -133,8 +140,6 @@ struct TracksView: View {
                 }
                 return $0.artist.caseInsensitiveCompare($1.artist) == .orderedAscending
             }
-        case .titleAZ:
-            result.sort { $0.title.caseInsensitiveCompare($1.title) == .orderedAscending }
         case .bpmAsc:
             result.sort { $0.bpm < $1.bpm }
         case .bpmDesc:
@@ -148,24 +153,22 @@ struct TracksView: View {
         return result
     }
 
-    var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                // Horizontal Filter & Sort Bar
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        // 1. Master Filter Button Pill (Opens Full Filter Sheet)
-                        Button {
-                            showingFilterSheet = true
-                        } label: {
-                            HStack(spacing: 5) {
-                                Image(systemName: activeFilterCount > 0 ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
-                                    .font(.subheadline)
-                                Text("Filters")
-                                    .fontWeight(.semibold)
+    private var filterBarView: some View {
+        VStack(spacing: 0) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    // 1. Master Filter Button Pill (Opens Full Filter Sheet)
+                    Button {
+                        showingFilterSheet = true
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: activeFilterCount > 0 ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+                                .font(.subheadline)
+                            Text("Filters")
+                                .fontWeight(.semibold)
 
-                                if activeFilterCount > 0 {
-                                    Text("\(activeFilterCount)")
+                            if activeFilterCount > 0 {
+                                Text("\(activeFilterCount)")
                                         .font(.caption2)
                                         .fontWeight(.bold)
                                         .padding(.horizontal, 6)
@@ -173,185 +176,195 @@ struct TracksView: View {
                                         .background(Color.white)
                                         .foregroundStyle(.blue)
                                         .clipShape(Capsule())
-                                }
                             }
-                            .font(.caption)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 7)
-                            .background(activeFilterCount > 0 ? Color.blue : Color(.secondarySystemBackground))
-                            .foregroundStyle(activeFilterCount > 0 ? .white : .primary)
-                            .clipShape(Capsule())
                         }
+                        .font(.caption)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 7)
+                        .background(activeFilterCount > 0 ? Color.blue : Color(.secondarySystemBackground))
+                        .foregroundStyle(activeFilterCount > 0 ? .white : .primary)
+                        .clipShape(Capsule())
+                    }
 
-                        // 2. Sort Pill Menu
-                        Menu {
-                            ForEach(TrackSortOption.allCases) { opt in
-                                Button {
-                                    selectedSortOption = opt
-                                } label: {
-                                    if selectedSortOption == opt {
-                                        Label(opt.rawValue, systemImage: "checkmark")
-                                    } else {
-                                        Text(opt.rawValue)
-                                    }
-                                }
-                            }
-                        } label: {
-                            HStack(spacing: 4) {
-                                Image(systemName: "arrow.up.arrow.down")
-                                Text(selectedSortOption.rawValue)
-                            }
-                            .font(.caption)
-                            .fontWeight(.medium)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 7)
-                            .background(Color(.secondarySystemBackground))
-                            .foregroundStyle(.primary)
-                            .clipShape(Capsule())
-                        }
-
-                        // 3. Play Status Filter Pill
-                        Menu {
-                            Button("All Plays") { playStatusFilter = .all }
-                            Button("Played Only (> 0)") { playStatusFilter = .played }
-                            Button("Unplayed Only (0)") { playStatusFilter = .unplayed }
-                        } label: {
-                            HStack(spacing: 4) {
-                                Image(systemName: "play.circle")
-                                Text(playStatusFilter.rawValue)
-                            }
-                            .font(.caption)
-                            .fontWeight(.medium)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 7)
-                            .background(playStatusFilter != .all ? Color.blue : Color(.secondarySystemBackground))
-                            .foregroundStyle(playStatusFilter != .all ? .white : .primary)
-                            .clipShape(Capsule())
-                        }
-
-                        // 4. BPM Range Filter Pill
-                        Menu {
-                            ForEach(BpmFilterOption.allCases) { opt in
-                                Button(opt.rawValue) { bpmRangeFilter = opt }
-                            }
-                        } label: {
-                            HStack(spacing: 4) {
-                                Image(systemName: "metronome")
-                                Text(bpmRangeFilter == .all ? "BPM" : bpmRangeFilter.rawValue)
-                            }
-                            .font(.caption)
-                            .fontWeight(.medium)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 7)
-                            .background(bpmRangeFilter != .all ? Color.blue : Color(.secondarySystemBackground))
-                            .foregroundStyle(bpmRangeFilter != .all ? .white : .primary)
-                            .clipShape(Capsule())
-                        }
-
-                        // 5. Musical Key Filter Pill
-                        if !availableKeys.isEmpty {
-                            Menu {
-                                Button("All Keys") { selectedKey = nil }
-                                ForEach(availableKeys, id: \.self) { key in
-                                    Button(key) { selectedKey = key }
-                                }
+                    // 2. Sort Pill Menu
+                    Menu {
+                        ForEach(TrackSortOption.allCases) { opt in
+                            Button {
+                                selectedSortOption = opt
                             } label: {
-                                HStack(spacing: 4) {
-                                    Image(systemName: "music.note")
-                                    Text(selectedKey != nil ? "Key: \(selectedKey!)" : "Key")
+                                if selectedSortOption == opt {
+                                    Label(opt.rawValue, systemImage: "checkmark")
+                                } else {
+                                    Text(opt.rawValue)
                                 }
-                                .font(.caption)
-                                .fontWeight(.medium)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 7)
-                                .background(selectedKey != nil ? Color.blue : Color(.secondarySystemBackground))
-                                .foregroundStyle(selectedKey != nil ? .white : .primary)
-                                .clipShape(Capsule())
                             }
                         }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "arrow.up.arrow.down")
+                            Text(selectedSortOption.rawValue)
+                        }
+                        .font(.caption)
+                        .fontWeight(.medium)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 7)
+                        .background(Color(.secondarySystemBackground))
+                        .foregroundStyle(.primary)
+                        .clipShape(Capsule())
+                    }
 
-                        // 6. MyTag Filter Pill
-                        if !categoryFolders.isEmpty {
-                            Menu {
-                                Button("All Tags") { selectedTagId = nil }
-                                ForEach(categoryFolders) { folder in
-                                    let tags = appState.tags.filter { $0.parentId == folder.id }.sorted { $0.seq < $1.seq }
-                                    if !tags.isEmpty {
-                                        Section(folder.name) {
-                                            ForEach(tags) { tag in
-                                                Button(tag.name) { selectedTagId = tag.id }
-                                            }
+                    // 3. Play Status Filter Pill
+                    Menu {
+                        Button("All Plays") { playStatusFilter = .all }
+                        Button("Played Only (> 0)") { playStatusFilter = .played }
+                        Button("Unplayed Only (0)") { playStatusFilter = .unplayed }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "play.circle")
+                            Text(playStatusFilter.rawValue)
+                        }
+                        .font(.caption)
+                        .fontWeight(.medium)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 7)
+                        .background(playStatusFilter != .all ? Color.blue : Color(.secondarySystemBackground))
+                        .foregroundStyle(playStatusFilter != .all ? .white : .primary)
+                        .clipShape(Capsule())
+                    }
+
+                    // 4. BPM Range Filter Pill
+                    Menu {
+                        ForEach(BpmFilterOption.allCases) { opt in
+                            Button(opt.rawValue) { bpmRangeFilter = opt }
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "metronome")
+                            Text(bpmRangeFilter == .all ? "BPM" : bpmRangeFilter.rawValue)
+                        }
+                        .font(.caption)
+                        .fontWeight(.medium)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 7)
+                        .background(bpmRangeFilter != .all ? Color.blue : Color(.secondarySystemBackground))
+                        .foregroundStyle(bpmRangeFilter != .all ? .white : .primary)
+                        .clipShape(Capsule())
+                    }
+
+                    // 5. Musical Key Filter Pill
+                    if !availableKeys.isEmpty {
+                        Menu {
+                            Button("All Keys") { selectedKey = nil }
+                            ForEach(availableKeys, id: \.self) { key in
+                                Button(key) { selectedKey = key }
+                            }
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "music.note")
+                                Text(selectedKey != nil ? "Key: \(selectedKey!)" : "Key")
+                            }
+                            .font(.caption)
+                            .fontWeight(.medium)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 7)
+                            .background(selectedKey != nil ? Color.blue : Color(.secondarySystemBackground))
+                            .foregroundStyle(selectedKey != nil ? .white : .primary)
+                            .clipShape(Capsule())
+                        }
+                    }
+
+                    // 6. MyTag Filter Pill
+                    if !categoryFolders.isEmpty {
+                        Menu {
+                            Button("All Tags") { selectedTagId = nil }
+                            ForEach(categoryFolders) { folder in
+                                let tags = appState.tags.filter { $0.parentId == folder.id }.sorted { $0.seq < $1.seq }
+                                if !tags.isEmpty {
+                                    Section(folder.name) {
+                                        ForEach(tags) { tag in
+                                            Button(tag.name) { selectedTagId = tag.id }
                                         }
                                     }
                                 }
-                            } label: {
-                                HStack(spacing: 4) {
-                                    Image(systemName: "tag.fill")
-                                    let tagName = appState.tags.first(where: { $0.id == selectedTagId })?.name
-                                    Text(tagName != nil ? "Tag: \(tagName!)" : "Tag")
-                                }
-                                .font(.caption)
-                                .fontWeight(.medium)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 7)
-                                .background(selectedTagId != nil ? Color.purple : Color(.secondarySystemBackground))
-                                .foregroundStyle(selectedTagId != nil ? .white : .primary)
-                                .clipShape(Capsule())
                             }
-                        }
-
-                        // 7. Clear All Filters Button
-                        if activeFilterCount > 0 {
-                            Button {
-                                resetFilters()
-                            } label: {
-                                HStack(spacing: 4) {
-                                    Image(systemName: "xmark.circle")
-                                    Text("Reset")
-                                }
-                                .font(.caption)
-                                .fontWeight(.semibold)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 7)
-                                .background(Color.red.opacity(0.12))
-                                .foregroundStyle(.red)
-                                .clipShape(Capsule())
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "tag.fill")
+                                let tagName = appState.tags.first(where: { $0.id == selectedTagId })?.name
+                                Text(tagName != nil ? "Tag: \(tagName!)" : "Tag")
                             }
+                            .font(.caption)
+                            .fontWeight(.medium)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 7)
+                            .background(selectedTagId != nil ? Color.purple : Color(.secondarySystemBackground))
+                            .foregroundStyle(selectedTagId != nil ? .white : .primary)
+                            .clipShape(Capsule())
                         }
                     }
-                    .padding(.horizontal)
-                    .padding(.vertical, 6)
+
+                    // 7. Clear All Filters Button
+                    if activeFilterCount > 0 {
+                        Button {
+                            resetFilters()
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "xmark.circle")
+                                Text("Reset")
+                            }
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 7)
+                            .background(Color.red.opacity(0.12))
+                            .foregroundStyle(.red)
+                            .clipShape(Capsule())
+                        }
+                    }
                 }
-                .background(Color(.systemBackground))
+                .padding(.horizontal)
+                .padding(.vertical, 7)
+            }
+            Divider()
+        }
+        .background(Color(.systemBackground))
+    }
 
-                Divider()
-
-                // Tracks List or Empty State
-                if appState.tracks.isEmpty && appState.isSyncing {
-                    VStack(spacing: 16) {
-                        ProgressView()
-                        Text("Downloading Rekordbox collection...")
-                            .foregroundStyle(.secondary)
-                    }
-                    .frame(maxHeight: .infinity)
-                } else if filteredTracks.isEmpty {
-                    ContentUnavailableView {
-                        Label("No Matching Tracks", systemImage: "line.3.horizontal.decrease.circle")
-                    } description: {
-                        Text(activeFilterCount > 0 || !searchText.isEmpty
-                             ? "Try clearing some filters or changing your search keywords."
-                             : "No tracks in library.")
-                    } actions: {
-                        if activeFilterCount > 0 || !searchText.isEmpty {
-                            Button("Reset Filters & Search") {
-                                searchText = ""
-                                resetFilters()
-                            }
-                            .buttonStyle(.borderedProminent)
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    if appState.tracks.isEmpty && appState.isSyncing {
+                        VStack(spacing: 16) {
+                            ProgressView()
+                            Text("Downloading Rekordbox collection...")
+                                .foregroundStyle(.secondary)
                         }
-                    }
-                } else {
-                    List {
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 60)
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(Color.clear)
+                    } else if filteredTracks.isEmpty {
+                        ContentUnavailableView {
+                            Label("No Matching Tracks", systemImage: "line.3.horizontal.decrease.circle")
+                        } description: {
+                            Text(activeFilterCount > 0 || !searchText.isEmpty
+                                 ? "Try clearing some filters or changing your search keywords."
+                                 : "No tracks in library.")
+                        } actions: {
+                            if activeFilterCount > 0 || !searchText.isEmpty {
+                                Button("Reset Filters & Search") {
+                                    searchText = ""
+                                    resetFilters()
+                                }
+                                .buttonStyle(.borderedProminent)
+                            }
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 40)
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(Color.clear)
+                    } else {
                         ForEach(filteredTracks) { track in
                             TrackRow(track: track)
                                 .contentShape(Rectangle())
@@ -375,11 +388,15 @@ struct TracksView: View {
                                 }
                         }
                     }
-                    .listStyle(.plain)
+                } header: {
+                    filterBarView
+                        .listRowInsets(EdgeInsets())
+                        .textCase(nil)
                 }
             }
+            .listStyle(.plain)
             .navigationTitle("Tracks (\(filteredTracks.count))")
-            .searchable(text: $searchText, prompt: "Search title, artist, album, key...")
+            .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search title, artist, album, key...")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     if appState.isSyncing {
