@@ -101,6 +101,20 @@ struct SyncQueueView: View {
                         }
                     }
                 }
+
+                Section {
+                    VStack(spacing: 4) {
+                        Text("Rekordbox Companion")
+                            .font(.footnote)
+                            .fontWeight(.semibold)
+                            .foregroundStyle(.secondary)
+                        Text("Version \(appVersion)")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .listRowBackground(Color.clear)
+                }
             }
             .navigationTitle("Sync & Queue")
             .toolbar {
@@ -155,6 +169,15 @@ struct SettingsSheet: View {
                     }
                     .foregroundStyle(.red)
                 }
+
+                Section("About") {
+                    HStack {
+                        Text("App Version")
+                        Spacer()
+                        Text(appVersion)
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
             .navigationTitle("Turso Settings")
             .navigationBarTitleDisplayMode(.inline)
@@ -173,4 +196,8 @@ struct SettingsSheet: View {
             }
         }
     }
+}
+
+fileprivate var appVersion: String {
+    Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—"
 }
