@@ -194,415 +194,52 @@ struct TrackDetailSheet: View {
     var body: some View {
         NavigationStack {
             ScrollViewReader { proxy in
-                Form {
-                    // 1. Core Track Information (Read-Only, Genre removed)
-                    Section("Track Information") {
-                        HStack {
-                            Text("Title")
-                                .foregroundStyle(.secondary)
-                            Spacer()
-                            Text(track.title.isEmpty ? "(Untitled)" : track.title)
-                                .fontWeight(.medium)
-                                .multilineTextAlignment(.trailing)
-                        }
+                ScrollView {
+                    VStack(spacing: 20) {
+                        // 1. Core Track Information
+                        trackInformationSection
 
-                        HStack {
-                            Text("Artist")
-                                .foregroundStyle(.secondary)
-                            Spacer()
-                            Text(track.artist.isEmpty ? "Unknown Artist" : track.artist)
-                                .multilineTextAlignment(.trailing)
-                        }
+                        // 2. Playlists Chips & Searchable Section (Teal theme)
+                        playlistsSection
+                            .id("playlistSection")
 
-                        if !track.album.isEmpty {
-                            HStack {
-                                Text("Album")
-                                    .foregroundStyle(.secondary)
-                                    Spacer()
-                                Text(track.album)
-                                    .multilineTextAlignment(.trailing)
-                            }
-                        }
-
-                        HStack {
-                            Text("Tempo (BPM)")
-                                .foregroundStyle(.secondary)
-                            Spacer()
-                            Text(track.formattedBpm)
-                                .monospacedDigit()
-                        }
-
-                        HStack {
-                            Text("Musical Key")
-                                .foregroundStyle(.secondary)
-                            Spacer()
-                            Text(track.keyName.isEmpty ? "—" : track.keyName)
-                                .fontWeight(.semibold)
-                                .foregroundStyle(.blue)
-                        }
-
-                        HStack {
-                            Text("DJ Play Count")
-                                .foregroundStyle(.secondary)
-                            Spacer()
-                            Text("\(track.djPlayCount)")
-                                .fontWeight(.medium)
-                                .monospacedDigit()
-                        }
-
-                        HStack {
-                            Text("Date Added")
-                                .foregroundStyle(.secondary)
-                            Spacer()
-                            Text(track.formattedDateAdded)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
+                        // 3. MyTags Chips & Searchable Section (Purple theme)
+                        myTagsSection
+                            .id("tagSection")
                     }
-
-                    // 2. Playlists Chips & Searchable Dropdown (Teal theme)
-                    Section {
-                        VStack(alignment: .leading, spacing: 10) {
-                            // Chips area
-                            if selectedPlaylistsList.isEmpty {
-                                Text("Not in any playlist")
-                                    .font(.subheadline)
-                                    .foregroundStyle(.secondary)
-                                    .padding(.vertical, 2)
-                            } else {
-                                FlowLayout(spacing: 8) {
-                                    ForEach(selectedPlaylistsList) { pl in
-                                        ChipView(
-                                            title: pl.name,
-                                            systemImage: "music.note.list",
-                                            tintColor: .teal
-                                        ) {
-                                            _ = selectedPlaylistIds.remove(pl.id)
-                                        }
-                                    }
-                                }
-                                .padding(.vertical, 2)
-                            }
-
-                            // Search input & browse menu
-                            HStack(spacing: 8) {
-                                HStack {
-                                    Image(systemName: "magnifyingglass")
-                                        .foregroundStyle(.secondary)
-                                        .font(.caption)
-                                    TextField("Search playlist to add...", text: $playlistSearchText)
-                                        .font(.subheadline)
-                                        .focused($focusedField, equals: .playlist)
-                                        .submitLabel(.done)
-                                        .onSubmit {
-                                            if let first = matchingPlaylists.first, matchingPlaylists.count == 1 {
-                                                withAnimation {
-                                                    _ = selectedPlaylistIds.insert(first.id)
-                                                    playlistSearchText = ""
-                                                }
-                                            }
-                                            focusedField = nil
-                                        }
-
-                                    if !playlistSearchText.isEmpty {
-                                        Button {
-                                            playlistSearchText = ""
-                                        } label: {
-                                            Image(systemName: "xmark.circle.fill")
-                                                .foregroundStyle(.secondary)
-                                                .font(.caption)
-                                        }
-                                    }
-                                }
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 7)
-                                .background(Color(.secondarySystemBackground))
-                                .clipShape(RoundedRectangle(cornerRadius: 8))
-
-                                Menu {
-                                    ForEach(availablePlaylists.sorted { $0.name.localizedCompare($1.name) == .orderedAscending }) { pl in
-                                        Button {
-                                            withAnimation {
-                                                _ = selectedPlaylistIds.insert(pl.id)
-                                            }
-                                        } label: {
-                                            Label(pl.name, systemImage: "music.note.list")
-                                        }
-                                    }
-                                } label: {
-                                    Image(systemName: "plus.circle.fill")
-                                        .font(.title3)
-                                        .foregroundStyle(availablePlaylists.isEmpty ? Color.secondary : Color.teal)
-                                }
-                                .disabled(availablePlaylists.isEmpty)
-                            }
-                            .id("playlistField")
-
-                            // Search suggestions dropdown
-                            if !playlistSearchText.isEmpty {
-                                VStack(alignment: .leading, spacing: 0) {
-                                    if matchingPlaylists.isEmpty {
-                                        Text("No playlists matching \"\(playlistSearchText)\"")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                            .padding(10)
-                                    } else {
-                                        ForEach(matchingPlaylists.prefix(5)) { pl in
-                                            Button {
-                                                withAnimation {
-                                                    _ = selectedPlaylistIds.insert(pl.id)
-                                                    playlistSearchText = ""
-                                                }
-                                            } label: {
-                                                HStack {
-                                                    Label(pl.name, systemImage: "music.note.list")
-                                                        .font(.subheadline)
-                                                        .foregroundStyle(.primary)
-                                                    Spacer()
-                                                    Image(systemName: "plus")
-                                                        .font(.caption)
-                                                        .foregroundStyle(.teal)
-                                                }
-                                                .contentShape(Rectangle())
-                                                .padding(.horizontal, 12)
-                                                .padding(.vertical, 8)
-                                            }
-                                            .buttonStyle(.plain)
-
-                                            if pl.id != matchingPlaylists.prefix(5).last?.id {
-                                                Divider()
-                                            }
-                                        }
-
-                                        if matchingPlaylists.count > 5 {
-                                            Text("+ \(matchingPlaylists.count - 5) more (keep typing to refine)")
-                                                .font(.caption2)
-                                                .foregroundStyle(.secondary)
-                                                .padding(.horizontal, 12)
-                                                .padding(.vertical, 4)
-                                        }
-                                    }
-
-                                    Color.clear
-                                        .frame(height: 1)
-                                        .id("playlistDropdownBottom")
-                                }
-                                .background(Color(.secondarySystemBackground))
-                                .clipShape(RoundedRectangle(cornerRadius: 8))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 8)
-                                        .stroke(Color.teal.opacity(0.3), lineWidth: 1)
-                                )
-                            }
-                        }
-                    } header: {
-                        Text("Playlists (\(selectedPlaylistIds.count))")
-                    }
-
-                    // 3. MyTags Chips & Searchable Dropdown (Purple theme)
-                    Section {
-                        VStack(alignment: .leading, spacing: 10) {
-                            // Chips area
-                            if selectedTagsList.isEmpty {
-                                Text("No MyTags assigned")
-                                    .font(.subheadline)
-                                    .foregroundStyle(.secondary)
-                                    .padding(.vertical, 2)
-                            } else {
-                                FlowLayout(spacing: 8) {
-                                    ForEach(selectedTagsList) { tag in
-                                        let folder = categoryName(for: tag)
-                                        ChipView(
-                                            title: tag.name,
-                                            subtitle: folder,
-                                            systemImage: "tag.fill",
-                                            tintColor: .purple
-                                        ) {
-                                            _ = selectedTagIds.remove(tag.id)
-                                        }
-                                    }
-                                }
-                                .padding(.vertical, 2)
-                            }
-
-                            // Search input & browse menu
-                            HStack(spacing: 8) {
-                                HStack {
-                                    Image(systemName: "magnifyingglass")
-                                        .foregroundStyle(.secondary)
-                                        .font(.caption)
-                                    TextField("Search tag to add...", text: $tagSearchText)
-                                        .font(.subheadline)
-                                        .focused($focusedField, equals: .tag)
-                                        .submitLabel(.done)
-                                        .onSubmit {
-                                            if let first = matchingTags.first, matchingTags.count == 1 {
-                                                withAnimation {
-                                                    _ = selectedTagIds.insert(first.id)
-                                                    tagSearchText = ""
-                                                }
-                                            }
-                                            focusedField = nil
-                                        }
-
-                                    if !tagSearchText.isEmpty {
-                                        Button {
-                                            tagSearchText = ""
-                                        } label: {
-                                            Image(systemName: "xmark.circle.fill")
-                                                .foregroundStyle(.secondary)
-                                                .font(.caption)
-                                        }
-                                    }
-                                }
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 7)
-                                .background(Color(.secondarySystemBackground))
-                                .clipShape(RoundedRectangle(cornerRadius: 8))
-
-                                Menu {
-                                    ForEach(categoryFolders) { folder in
-                                        let tagsInFolder = allAvailableTags.filter { $0.parentId == folder.id }.sorted { $0.seq < $1.seq }
-                                        if !tagsInFolder.isEmpty {
-                                            Section(folder.name) {
-                                                ForEach(tagsInFolder) { tag in
-                                                    Button {
-                                                        withAnimation {
-                                                            _ = selectedTagIds.insert(tag.id)
-                                                        }
-                                                    } label: {
-                                                        Label(tag.name, systemImage: "tag.fill")
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                } label: {
-                                    Image(systemName: "plus.circle.fill")
-                                        .font(.title3)
-                                        .foregroundStyle(allAvailableTags.isEmpty ? Color.secondary : Color.purple)
-                                }
-                                .disabled(allAvailableTags.isEmpty)
-                            }
-                            .id("tagField")
-
-                            // Search suggestions dropdown
-                            if !tagSearchText.isEmpty {
-                                VStack(alignment: .leading, spacing: 0) {
-                                    if matchingTags.isEmpty {
-                                        Text("No tags matching \"\(tagSearchText)\"")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                            .padding(10)
-                                    } else {
-                                        ForEach(matchingTags.prefix(5)) { tag in
-                                            let folder = categoryName(for: tag)
-                                            Button {
-                                                withAnimation {
-                                                    _ = selectedTagIds.insert(tag.id)
-                                                    tagSearchText = ""
-                                                }
-                                            } label: {
-                                                HStack {
-                                                    Label {
-                                                        HStack(spacing: 4) {
-                                                            if let f = folder {
-                                                                Text(f)
-                                                                    .font(.caption2)
-                                                                    .foregroundStyle(.secondary)
-                                                                Text("›")
-                                                                    .font(.caption2)
-                                                                    .foregroundStyle(.secondary)
-                                                            }
-                                                            Text(tag.name)
-                                                                .font(.subheadline)
-                                                                .foregroundStyle(.primary)
-                                                        }
-                                                    } icon: {
-                                                        Image(systemName: "tag.fill")
-                                                            .foregroundStyle(.purple)
-                                                    }
-                                                    Spacer()
-                                                    Image(systemName: "plus")
-                                                        .font(.caption)
-                                                        .foregroundStyle(.purple)
-                                                }
-                                                .contentShape(Rectangle())
-                                                .padding(.horizontal, 12)
-                                                .padding(.vertical, 8)
-                                            }
-                                            .buttonStyle(.plain)
-
-                                            if tag.id != matchingTags.prefix(5).last?.id {
-                                                Divider()
-                                            }
-                                        }
-
-                                        if matchingTags.count > 5 {
-                                            Text("+ \(matchingTags.count - 5) more (keep typing to refine)")
-                                                .font(.caption2)
-                                                .foregroundStyle(.secondary)
-                                                .padding(.horizontal, 12)
-                                                .padding(.vertical, 4)
-                                        }
-                                    }
-
-                                    Color.clear
-                                        .frame(height: 1)
-                                        .id("tagDropdownBottom")
-                                }
-                                .background(Color(.secondarySystemBackground))
-                                .clipShape(RoundedRectangle(cornerRadius: 8))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 8)
-                                        .stroke(Color.purple.opacity(0.3), lineWidth: 1)
-                                )
-                            }
-                        }
-                    } header: {
-                        Text("MyTags (\(selectedTagIds.count))")
-                    }
-
-                    // 4. Keyboard / Autocomplete Spacing
-                    if focusedField != nil || !tagSearchText.isEmpty || !playlistSearchText.isEmpty {
-                        Section {
-                            Color.clear
-                                .frame(height: 280)
-                                .listRowBackground(Color.clear)
-                                .listRowSeparator(.hidden)
-                        }
-                    }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 16)
+                    .padding(.bottom, focusedField != nil ? 340 : 32)
                 }
                 .scrollDismissesKeyboard(.interactively)
+                .background(Color(.systemGroupedBackground))
                 .onChange(of: tagSearchText) { _, newValue in
                     if !newValue.isEmpty {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
-                            withAnimation(.easeOut(duration: 0.25)) {
-                                proxy.scrollTo("tagDropdownBottom", anchor: .bottom)
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                proxy.scrollTo("tagSection", anchor: .top)
                             }
                         }
                     }
                 }
                 .onChange(of: playlistSearchText) { _, newValue in
                     if !newValue.isEmpty {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
-                            withAnimation(.easeOut(duration: 0.25)) {
-                                proxy.scrollTo("playlistDropdownBottom", anchor: .bottom)
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                proxy.scrollTo("playlistSection", anchor: .top)
                             }
                         }
                     }
                 }
                 .onChange(of: focusedField) { _, newValue in
                     if let field = newValue {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                            withAnimation(.easeOut(duration: 0.25)) {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                            withAnimation(.easeInOut(duration: 0.25)) {
                                 switch field {
                                 case .playlist:
-                                    let target = playlistSearchText.isEmpty ? "playlistField" : "playlistDropdownBottom"
-                                    proxy.scrollTo(target, anchor: .bottom)
+                                    proxy.scrollTo("playlistSection", anchor: .top)
                                 case .tag:
-                                    let target = tagSearchText.isEmpty ? "tagField" : "tagDropdownBottom"
-                                    proxy.scrollTo(target, anchor: .bottom)
+                                    proxy.scrollTo("tagSection", anchor: .top)
                                 }
                             }
                         }
@@ -612,23 +249,6 @@ struct TrackDetailSheet: View {
             .navigationTitle("Track Details")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItemGroup(placement: .keyboard) {
-                    if !tagSearchText.isEmpty {
-                        Button("Clear") {
-                            tagSearchText = ""
-                        }
-                    } else if !playlistSearchText.isEmpty {
-                        Button("Clear") {
-                            playlistSearchText = ""
-                        }
-                    }
-                    Spacer()
-                    Button("Done") {
-                        focusedField = nil
-                    }
-                    .fontWeight(.semibold)
-                }
-
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                 }
@@ -659,6 +279,405 @@ struct TrackDetailSheet: View {
                     .fontWeight(.bold)
                 }
             }
+        }
+    }
+
+    // MARK: - Section 1: Track Information
+    private var trackInformationSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Track Information")
+                .font(.footnote)
+                .fontWeight(.medium)
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+                .padding(.horizontal, 4)
+
+            VStack(spacing: 0) {
+                infoRow(label: "Title", value: track.title.isEmpty ? "(Untitled)" : track.title, isBold: true)
+                Divider().padding(.leading, 16)
+
+                infoRow(label: "Artist", value: track.artist.isEmpty ? "Unknown Artist" : track.artist)
+                Divider().padding(.leading, 16)
+
+                if !track.album.isEmpty {
+                    infoRow(label: "Album", value: track.album)
+                    Divider().padding(.leading, 16)
+                }
+
+                infoRow(label: "Tempo (BPM)", value: track.formattedBpm, isMonospaced: true)
+                Divider().padding(.leading, 16)
+
+                infoRow(label: "Musical Key", value: track.keyName.isEmpty ? "—" : track.keyName, valueColor: .blue, isBold: true)
+                Divider().padding(.leading, 16)
+
+                infoRow(label: "DJ Play Count", value: "\(track.djPlayCount)", isMonospaced: true)
+                Divider().padding(.leading, 16)
+
+                infoRow(label: "Date Added", value: track.formattedDateAdded, isCaption: true)
+            }
+            .background(Color(.secondarySystemGroupedBackground))
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+    }
+
+    private func infoRow(
+        label: String,
+        value: String,
+        valueColor: Color = .primary,
+        isBold: Bool = false,
+        isMonospaced: Bool = false,
+        isCaption: Bool = false
+    ) -> some View {
+        HStack {
+            Text(label)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            Spacer()
+            Text(value)
+                .font(isCaption ? .caption : .subheadline)
+                .fontWeight(isBold ? .semibold : .regular)
+                .monospacedDigit()
+                .foregroundStyle(valueColor)
+                .multilineTextAlignment(.trailing)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 11)
+    }
+
+    // MARK: - Section 2: Playlists
+    private var playlistsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Playlists (\(selectedPlaylistIds.count))")
+                .font(.footnote)
+                .fontWeight(.medium)
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+                .padding(.horizontal, 4)
+
+            VStack(alignment: .leading, spacing: 12) {
+                // Chips area
+                if selectedPlaylistsList.isEmpty {
+                    Text("Not in any playlist")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .padding(.vertical, 2)
+                } else {
+                    FlowLayout(spacing: 8) {
+                        ForEach(selectedPlaylistsList) { pl in
+                            ChipView(
+                                title: pl.name,
+                                systemImage: "music.note.list",
+                                tintColor: .teal
+                            ) {
+                                _ = selectedPlaylistIds.remove(pl.id)
+                            }
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+
+                // Search input & browse menu
+                HStack(spacing: 8) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "magnifyingglass")
+                            .foregroundStyle(.secondary)
+                            .font(.caption)
+                        TextField("Search playlist to add...", text: $playlistSearchText)
+                            .font(.subheadline)
+                            .focused($focusedField, equals: .playlist)
+                            .submitLabel(.done)
+                            .onSubmit {
+                                if let first = matchingPlaylists.first, matchingPlaylists.count == 1 {
+                                    withAnimation {
+                                        _ = selectedPlaylistIds.insert(first.id)
+                                        playlistSearchText = ""
+                                    }
+                                }
+                                focusedField = nil
+                            }
+
+                        if !playlistSearchText.isEmpty {
+                            Button {
+                                playlistSearchText = ""
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .foregroundStyle(.secondary)
+                                    .font(.caption)
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .background(Color(.secondarySystemBackground))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+
+                    Menu {
+                        ForEach(availablePlaylists.sorted { $0.name.localizedCompare($1.name) == .orderedAscending }) { pl in
+                            Button {
+                                withAnimation {
+                                    _ = selectedPlaylistIds.insert(pl.id)
+                                }
+                            } label: {
+                                Label(pl.name, systemImage: "music.note.list")
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "plus.circle.fill")
+                            .font(.title3)
+                            .foregroundStyle(availablePlaylists.isEmpty ? Color.secondary : Color.teal)
+                    }
+                    .disabled(availablePlaylists.isEmpty)
+
+                    if focusedField == .playlist {
+                        Button("Done") {
+                            focusedField = nil
+                        }
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.teal)
+                        .transition(.move(edge: .trailing).combined(with: .opacity))
+                    }
+                }
+
+                // Search suggestions dropdown
+                if !playlistSearchText.isEmpty {
+                    VStack(alignment: .leading, spacing: 0) {
+                        if matchingPlaylists.isEmpty {
+                            Text("No playlists matching \"\(playlistSearchText)\"")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .padding(12)
+                        } else {
+                            ForEach(matchingPlaylists.prefix(6)) { pl in
+                                Button {
+                                    withAnimation {
+                                        _ = selectedPlaylistIds.insert(pl.id)
+                                        playlistSearchText = ""
+                                    }
+                                } label: {
+                                    HStack {
+                                        Label(pl.name, systemImage: "music.note.list")
+                                            .font(.subheadline)
+                                            .foregroundStyle(.primary)
+                                        Spacer()
+                                        Image(systemName: "plus")
+                                            .font(.caption)
+                                            .fontWeight(.bold)
+                                            .foregroundStyle(.teal)
+                                    }
+                                    .contentShape(Rectangle())
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 9)
+                                }
+                                .buttonStyle(.plain)
+
+                                if pl.id != matchingPlaylists.prefix(6).last?.id {
+                                    Divider()
+                                }
+                            }
+
+                            if matchingPlaylists.count > 6 {
+                                Text("+ \(matchingPlaylists.count - 6) more (keep typing to refine)")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 6)
+                            }
+                        }
+                    }
+                    .background(Color(.secondarySystemBackground))
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10)
+                            .stroke(Color.teal.opacity(0.35), lineWidth: 1)
+                    )
+                }
+            }
+            .padding(16)
+            .background(Color(.secondarySystemGroupedBackground))
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .animation(.easeInOut(duration: 0.2), value: focusedField)
+        }
+    }
+
+    // MARK: - Section 3: MyTags
+    private var myTagsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("MyTags (\(selectedTagIds.count))")
+                .font(.footnote)
+                .fontWeight(.medium)
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+                .padding(.horizontal, 4)
+
+            VStack(alignment: .leading, spacing: 12) {
+                // Chips area
+                if selectedTagsList.isEmpty {
+                    Text("No MyTags assigned")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .padding(.vertical, 2)
+                } else {
+                    FlowLayout(spacing: 8) {
+                        ForEach(selectedTagsList) { tag in
+                            let folder = categoryName(for: tag)
+                            ChipView(
+                                title: tag.name,
+                                subtitle: folder,
+                                systemImage: "tag.fill",
+                                tintColor: .purple
+                            ) {
+                                _ = selectedTagIds.remove(tag.id)
+                            }
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+
+                // Search input & browse menu
+                HStack(spacing: 8) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "magnifyingglass")
+                            .foregroundStyle(.secondary)
+                            .font(.caption)
+                        TextField("Search tag to add...", text: $tagSearchText)
+                            .font(.subheadline)
+                            .focused($focusedField, equals: .tag)
+                            .submitLabel(.done)
+                            .onSubmit {
+                                if let first = matchingTags.first, matchingTags.count == 1 {
+                                    withAnimation {
+                                        _ = selectedTagIds.insert(first.id)
+                                        tagSearchText = ""
+                                    }
+                                }
+                                focusedField = nil
+                            }
+
+                        if !tagSearchText.isEmpty {
+                            Button {
+                                tagSearchText = ""
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .foregroundStyle(.secondary)
+                                    .font(.caption)
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .background(Color(.secondarySystemBackground))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+
+                    Menu {
+                        ForEach(categoryFolders) { folder in
+                            let tagsInFolder = allAvailableTags.filter { $0.parentId == folder.id }.sorted { $0.seq < $1.seq }
+                            if !tagsInFolder.isEmpty {
+                                Section(folder.name) {
+                                    ForEach(tagsInFolder) { tag in
+                                        Button {
+                                            withAnimation {
+                                                _ = selectedTagIds.insert(tag.id)
+                                            }
+                                        } label: {
+                                            Label(tag.name, systemImage: "tag.fill")
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "plus.circle.fill")
+                            .font(.title3)
+                            .foregroundStyle(allAvailableTags.isEmpty ? Color.secondary : Color.purple)
+                    }
+                    .disabled(allAvailableTags.isEmpty)
+
+                    if focusedField == .tag {
+                        Button("Done") {
+                            focusedField = nil
+                        }
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.purple)
+                        .transition(.move(edge: .trailing).combined(with: .opacity))
+                    }
+                }
+
+                // Search suggestions dropdown
+                if !tagSearchText.isEmpty {
+                    VStack(alignment: .leading, spacing: 0) {
+                        if matchingTags.isEmpty {
+                            Text("No tags matching \"\(tagSearchText)\"")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .padding(12)
+                        } else {
+                            ForEach(matchingTags.prefix(6)) { tag in
+                                let folder = categoryName(for: tag)
+                                Button {
+                                    withAnimation {
+                                        _ = selectedTagIds.insert(tag.id)
+                                        tagSearchText = ""
+                                    }
+                                } label: {
+                                    HStack {
+                                        Label {
+                                            HStack(spacing: 4) {
+                                                if let f = folder {
+                                                    Text(f)
+                                                        .font(.caption2)
+                                                        .foregroundStyle(.secondary)
+                                                    Text("›")
+                                                        .font(.caption2)
+                                                        .foregroundStyle(.secondary)
+                                                }
+                                                Text(tag.name)
+                                                    .font(.subheadline)
+                                                    .foregroundStyle(.primary)
+                                            }
+                                        } icon: {
+                                            Image(systemName: "tag.fill")
+                                                .foregroundStyle(.purple)
+                                        }
+                                        Spacer()
+                                        Image(systemName: "plus")
+                                            .font(.caption)
+                                            .fontWeight(.bold)
+                                            .foregroundStyle(.purple)
+                                    }
+                                    .contentShape(Rectangle())
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 9)
+                                }
+                                .buttonStyle(.plain)
+
+                                if tag.id != matchingTags.prefix(6).last?.id {
+                                    Divider()
+                                }
+                            }
+
+                            if matchingTags.count > 6 {
+                                Text("+ \(matchingTags.count - 6) more (keep typing to refine)")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 6)
+                            }
+                        }
+                    }
+                    .background(Color(.secondarySystemBackground))
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10)
+                            .stroke(Color.purple.opacity(0.35), lineWidth: 1)
+                    )
+                }
+            }
+            .padding(16)
+            .background(Color(.secondarySystemGroupedBackground))
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .animation(.easeInOut(duration: 0.2), value: focusedField)
         }
     }
 }
