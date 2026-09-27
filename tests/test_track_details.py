@@ -1099,6 +1099,26 @@ class TestPlaylistChipsUI(unittest.TestCase):
         self.assertFalse(view.tags_container.is_input_active())
         self.assertEqual(len(back_called), 0)
 
+    def test_table_chip_item_deleted(self):
+        """Verify deleting a chip from TracksTableWidget does not error with dangling event."""
+        from unittest.mock import MagicMock
+        from rekordbox_collection_manager.gui.track_table import TracksTableWidget, TrackTableConfig
+
+        table = TracksTableWidget(config=TrackTableConfig())
+        table.engine = self.engine
+        table.records = [{"id": "track_1", "title": "Track 1", "tags": ["Melodic Techno"], "playlists": ["Favorites"]}]
+
+        with patch("rekordbox_collection_manager.gui.track_table.is_rekordbox_running", return_value=False), \
+             patch("rekordbox_collection_manager.gui.track_table.remove_track_from_tag") as mock_rm_tag, \
+             patch("rekordbox_collection_manager.gui.track_table.remove_track_from_playlist") as mock_rm_pl:
+            table._on_chip_item_deleted(0, "tags", "Melodic Techno")
+            mock_rm_tag.assert_called_once()
+            self.assertNotIn("Melodic Techno", table.records[0]["tags"])
+
+            table._on_chip_item_deleted(0, "playlists", "Favorites")
+            mock_rm_pl.assert_called_once()
+            self.assertNotIn("Favorites", table.records[0]["playlists"])
+
 
 if __name__ == "__main__":
     unittest.main()

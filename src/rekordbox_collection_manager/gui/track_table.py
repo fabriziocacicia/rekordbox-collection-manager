@@ -1868,29 +1868,6 @@ class TracksTableWidget(QTableView):
             self.track_playlists_changed.emit(row, current_pls)
             self.track_modified.emit(track)
 
-
-        if event.button() == Qt.MouseButton.LeftButton and self.config.enable_finder_clicks:
-            mod = event.modifiers()
-            if mod & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.MetaModifier):
-                idx = self.indexAt(event.position().toPoint())
-                if idx.isValid():
-                    col = idx.column()
-                    if col == self._folder_col_idx:
-                        path_data = idx.data(Qt.ItemDataRole.UserRole)
-                        if path_data and str(path_data) not in ("", "—"):
-                            self.open_folder(str(path_data))
-                            self.folder_clicked.emit(str(path_data))
-                            event.accept()
-                            return
-                    elif col == self._file_col_idx:
-                        path_data = idx.data(Qt.ItemDataRole.UserRole)
-                        if path_data and str(path_data) not in ("", "—"):
-                            self.reveal_file(str(path_data))
-                            self.file_clicked.emit(str(path_data))
-                            event.accept()
-                            return
-        super().mousePressEvent(event)
-
     def _on_header_section_clicked(self, logical_index: int) -> None:
         """Handle header click for server-side sorting."""
         if self.config.sorting_mode != "server":
