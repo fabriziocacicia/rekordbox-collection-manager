@@ -15,6 +15,7 @@ from rekordbox_collection_manager.tags import (
     _resolve_tag_matching_ids,
     fetch_tag_tracks,
     fetch_tags_tree,
+    sort_tags_in_folder,
 )
 
 
@@ -178,6 +179,36 @@ class TestTagsBackend(unittest.TestCase):
         self.assertEqual(len(tracks_local), 1)
         self.assertEqual(tracks_local[0]["title"], "Baianá")
 
+    def test_sort_tags_in_folder_asc(self):
+        # Under Genre ('1'): Initially 'Melodic Techno' (Seq 1), 'Afro House' (Seq 2)
+        count = sort_tags_in_folder(self.engine, "1", descending=False)
+        self.assertEqual(count, 2)
+
+        tree = fetch_tags_tree(self.engine)
+        genre_folder = next(c for c in tree if c["name"] == "Genre")
+        child_names = [t["name"] for t in genre_folder["children"]]
+        # Afro House (Seq 1) should now come before Melodic Techno (Seq 2)
+        self.assertEqual(child_names, ["Afro House", "Melodic Techno"])
+        self.assertEqual(genre_folder["children"][0]["seq"], 1)
+        self.assertEqual(genre_folder["children"][1]["seq"], 2)
+
+    def test_sort_tags_in_folder_desc(self):
+        # Under Style ('4'): Initially 'Peak Time' (Seq 1), 'Deep Vibes' (Seq 2)
+        # In descending order, Peak Time ('P') should come before Deep Vibes ('D')
+        count = sort_tags_in_folder(self.engine, "4", descending=True)
+        self.assertEqual(count, 2)
+
+        tree = fetch_tags_tree(self.engine)
+        style_folder = next(c for c in tree if c["name"] == "Style")
+        child_names = [t["name"] for t in style_folder["children"]]
+        self.assertEqual(child_names, ["Peak Time", "Deep Vibes"])
+        self.assertEqual(style_folder["children"][0]["seq"], 1)
+        self.assertEqual(style_folder["children"][1]["seq"], 2)
+
+    def test_sort_tags_in_folder_empty_or_nonexistent(self):
+        count = sort_tags_in_folder(self.engine, "999999", descending=False)
+        self.assertEqual(count, 0)
+
 
 class TestTagsGUI(unittest.TestCase):
     """Test suite for TagsView GUI widget and user interactions."""
@@ -237,6 +268,7 @@ class TestTagsGUI(unittest.TestCase):
                     ('1', 1, 'Genre', 1, 'root', 0),
                     ('4', 2, 'Style', 1, 'root', 0),
                     ('tag_melodic', 1, 'Melodic Techno', 0, '1', 0),
+                    ('tag_afro', 2, 'Afro House', 0, '1', 0),
                     ('tag_peak', 1, 'Peak Time', 0, '4', 0);
             """)
             conn.exec_driver_sql("""
@@ -268,6 +300,13 @@ class TestTagsGUI(unittest.TestCase):
             except Exception:
                 pass
             self.view.active_tracks_worker.wait(50)
+        if self.view.active_sort_worker:
+            try:
+                self.view.active_sort_worker.success.disconnect()
+                self.view.active_sort_worker.error.disconnect()
+            except Exception:
+                pass
+            self.view.active_sort_worker.wait(50)
         self.view.close()
 
     def test_tags_view_structure(self):
@@ -288,8 +327,8 @@ class TestTagsGUI(unittest.TestCase):
         self.assertIn("Genre", top1.text(0))
         self.assertIn("Style", top2.text(0))
 
-        # Check child item under Genre
-        self.assertEqual(top1.childCount(), 1)
+        # Check child items under Genre
+        self.assertEqual(top1.childCount(), 2)
         tag_child = top1.child(0)
         self.assertIn("Melodic Techno", tag_child.text(0))
         self.assertIn("(1)", tag_child.text(0))
@@ -345,6 +384,64 @@ class TestTagsGUI(unittest.TestCase):
             finally:
                 win.safety_timer.stop()
                 win.close()
+
+    def test_tags_view_sort_folder_rekordbox_running(self):
+        from PySide6.QtWidgets import QMessageBox
+
+        with patch("rekordbox_collection_manager.gui.tags_view.is_rekordbox_running", return_value=True), \
+             patch.object(QMessageBox, "warning") as mock_warn:
+            self.view._sort_folder_tags("1", "Genre")
+            mock_warn.assert_called_once()
+            self.assertIn("Rekordbox is Running", mock_warn.call_args[0][1])
+
+    def test_tags_view_sort_folder_success(self):
+        from PySide6.QtWidgets import QMessageBox
+
+        tree_data = fetch_tags_tree(self.engine)
+        self.view._on_tree_loaded(tree_data)
+
+        db_saved_called = []
+        self.view.db_saved.connect(lambda: db_saved_called.append(True))
+
+        with patch("rekordbox_collection_manager.gui.tags_view.is_rekordbox_running", return_value=False), \
+             patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes):
+            self.view._sort_folder_tags("1", "Genre", descending=False)
+            if self.view.active_sort_worker:
+                self.view.active_sort_worker.wait(2000)
+            QApplication.processEvents()
+
+        self.assertTrue(len(db_saved_called) > 0)
+        self.assertIn("Sorted 2 tags in 'Genre' alphabetically", self.view.status_label.text())
+
+    def test_tags_view_tree_context_menu_policy(self):
+        self.assertEqual(self.view.tree.contextMenuPolicy(), Qt.ContextMenuPolicy.CustomContextMenu)
+
+    def test_tags_view_on_tree_context_menu_triggers_sort(self):
+        from unittest.mock import MagicMock
+        from PySide6.QtCore import QPoint
+
+        tree_data = fetch_tags_tree(self.engine)
+        self.view._on_tree_loaded(tree_data)
+
+        item = self.view.tree.topLevelItem(0)
+
+        sort_calls = []
+        with patch.object(self.view.tree, "itemAt", return_value=item), \
+             patch.object(self.view, "_sort_folder_tags", side_effect=lambda fid, fname, descending=False: sort_calls.append((fid, fname, descending))), \
+             patch("rekordbox_collection_manager.gui.tags_view.QMenu") as mock_menu_cls:
+            mock_menu = MagicMock()
+            mock_menu_cls.return_value = mock_menu
+            mock_act_az = MagicMock()
+            mock_act_za = MagicMock()
+            mock_menu.addAction.side_effect = [mock_act_az, mock_act_za]
+            mock_menu.exec.return_value = mock_act_az
+
+            self.view._on_tree_context_menu(QPoint(10, 10))
+
+        self.assertEqual(len(sort_calls), 1)
+        self.assertEqual(sort_calls[0][0], "1")
+        self.assertEqual(sort_calls[0][1], "Genre")
+        self.assertFalse(sort_calls[0][2])
 
 
 if __name__ == "__main__":

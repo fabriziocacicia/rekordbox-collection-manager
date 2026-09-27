@@ -11,6 +11,7 @@ from sqlalchemy.engine import Engine
 from rekordbox_collection_manager.utils import (
     build_exclude_streaming_clause,
     build_track_record,
+    get_rekordbox_timestamp,
 )
 
 
@@ -379,3 +380,80 @@ def fetch_tag_tracks(
             tracks.append(build_track_record(r, extra={"track_no": idx}))
 
         return tracks
+
+
+def sort_tags_in_folder(
+    engine: Engine,
+    folder_id: str,
+    descending: bool = False,
+) -> int:
+    """Sort child tags inside a specified category/folder alphabetically.
+
+    Updates the Seq column in djmdMyTag for all active tags under ParentID = folder_id.
+    Returns the number of tags reordered.
+    """
+    now_utc = get_rekordbox_timestamp()
+
+    with engine.begin() as conn:
+        existing_tables = {
+            r[0]
+            for r in conn.exec_driver_sql(
+                "SELECT name FROM sqlite_master WHERE type='table';"
+            ).fetchall()
+        }
+        if "djmdMyTag" not in existing_tables:
+            raise ValueError("Table djmdMyTag not found in database.")
+
+        tag_cols = {
+            r[1]
+            for r in conn.exec_driver_sql("PRAGMA table_info(djmdMyTag);").fetchall()
+        }
+
+        del_filter = (
+            "AND (rb_local_deleted = 0 OR rb_local_deleted IS NULL)"
+            if "rb_local_deleted" in tag_cols
+            else ""
+        )
+
+        direction = "DESC" if descending else "ASC"
+        matching_ids = _resolve_tag_matching_ids(folder_id) or [str(folder_id)]
+        placeholders = ", ".join(f":fid_{i}" for i in range(len(matching_ids)))
+        q_params: Dict[str, Any] = {f"fid_{i}": fid for i, fid in enumerate(matching_ids)}
+
+        query = f"""
+            SELECT ID, Name
+            FROM djmdMyTag
+            WHERE ParentID IN ({placeholders})
+              AND Attribute = 0
+              {del_filter}
+            ORDER BY lower(Name) {direction}, Name {direction};
+        """
+        rows = conn.execute(text(query), q_params).fetchall()
+        if not rows:
+            return 0
+
+        update_fields = ["Seq = :seq"]
+        if "updated_at" in tag_cols:
+            update_fields.append("updated_at = :now")
+        if "rb_local_synced" in tag_cols:
+            update_fields.append("rb_local_synced = 1")
+        if "rb_local_data_status" in tag_cols:
+            update_fields.append("rb_local_data_status = 1")
+
+        update_sql = f"""
+            UPDATE djmdMyTag
+            SET {', '.join(update_fields)}
+            WHERE ID = :tag_id;
+        """
+
+        for idx, row in enumerate(rows, start=1):
+            tag_id = str(row[0])
+            params: Dict[str, Any] = {
+                "seq": idx,
+                "tag_id": tag_id,
+            }
+            if "updated_at" in tag_cols:
+                params["now"] = now_utc
+            conn.execute(text(update_sql), params)
+
+        return len(rows)

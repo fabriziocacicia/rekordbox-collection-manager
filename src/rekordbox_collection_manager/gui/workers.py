@@ -19,6 +19,7 @@ from rekordbox_collection_manager.playlists import (
 from rekordbox_collection_manager.tags import (
     fetch_tag_tracks,
     fetch_tags_tree,
+    sort_tags_in_folder,
 )
 from rekordbox_collection_manager.rename_history import (
     batch_update_history_records,
@@ -606,6 +607,34 @@ class TagsTreeLoaderWorker(QThread):
                 category_names=self.category_names,
             )
             self.success.emit(tree)
+        except Exception as e:
+            self.error.emit(str(e))
+
+
+class TagSortWorker(QThread):
+    """Worker to sort child tags inside a folder asynchronously without UI freeze."""
+
+    success = Signal(int)  # number of sorted tags
+    error = Signal(str)
+
+    def __init__(
+        self,
+        engine: Engine,
+        folder_id: str,
+        descending: bool = False,
+        parent: Optional[Any] = None,
+    ):
+        super().__init__(parent)
+        self.engine = engine
+        self.folder_id = folder_id
+        self.descending = descending
+
+    def run(self) -> None:
+        try:
+            count = sort_tags_in_folder(
+                self.engine, self.folder_id, descending=self.descending
+            )
+            self.success.emit(count)
         except Exception as e:
             self.error.emit(str(e))
 

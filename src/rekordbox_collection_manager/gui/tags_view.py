@@ -8,13 +8,15 @@ as well as supporting in-place track details and universal deep-linking.
 
 import os
 from typing import Any, Dict, List, Optional
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import QPoint, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMenu,
+    QMessageBox,
     QPushButton,
     QSplitter,
     QStackedWidget,
@@ -25,6 +27,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 from sqlalchemy.engine import Engine
+
+from rekordbox_collection_manager.tags import sort_tags_in_folder
+from rekordbox_collection_manager.utils import is_rekordbox_running
 
 from rekordbox_collection_manager.gui.theme import (
     COLOR_BG_CARD,
@@ -43,6 +48,7 @@ from rekordbox_collection_manager.gui.track_table import (
     TracksTableWidget,
 )
 from rekordbox_collection_manager.gui.workers import (
+    TagSortWorker,
     TagTracksWorker,
     TagsTreeLoaderWorker,
     stop_worker,
@@ -74,6 +80,7 @@ class TagsView(QWidget):
 
         self.active_loader_worker: Optional[TagsTreeLoaderWorker] = None
         self.active_tracks_worker: Optional[TagTracksWorker] = None
+        self.active_sort_worker: Optional[TagSortWorker] = None
 
         # Debounce timer for in-tag search
         self.search_debounce_timer = QTimer(self)
@@ -157,6 +164,8 @@ class TagsView(QWidget):
         )
         self.tree.itemClicked.connect(self._on_tree_item_clicked)
         self.tree.currentItemChanged.connect(self._on_tree_current_item_changed)
+        self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.tree.customContextMenuRequested.connect(self._on_tree_context_menu)
         left_layout.addWidget(self.tree, stretch=1)
 
         self.splitter.addWidget(left_container)
@@ -471,6 +480,113 @@ class TagsView(QWidget):
         self.records = []
         self.table.set_tracks([])
         self.status_label.setText("Select a tag inside this category to view its tracks.")
+
+    def _on_tree_context_menu(self, pos: QPoint) -> None:
+        """Right-click context menu on tree items (e.g. sort folder tags)."""
+        item = self.tree.itemAt(pos)
+        if not item:
+            return
+
+        node = item.data(0, Qt.ItemDataRole.UserRole)
+        if not node:
+            return
+
+        attr = node.get("attribute", 0)
+        menu = QMenu(self)
+        global_pos = self.tree.mapToGlobal(pos)
+
+        if attr == 1:
+            # Right-clicked a category folder
+            folder_id = str(node.get("id"))
+            folder_name = node.get("name", "Folder")
+
+            act_sort_az = menu.addAction(f"Sort '{folder_name}' Alphabetically (A to Z)")
+            act_sort_za = menu.addAction(f"Sort '{folder_name}' Alphabetically (Z to A)")
+
+            chosen = menu.exec(global_pos)
+            if chosen == act_sort_az:
+                self._sort_folder_tags(folder_id, folder_name, descending=False)
+            elif chosen == act_sort_za:
+                self._sort_folder_tags(folder_id, folder_name, descending=True)
+        else:
+            # Right-clicked a child tag
+            parent_id = str(node.get("parent_id", ""))
+            category_name = node.get("category_name") or "Folder"
+            if parent_id and parent_id != "root":
+                act_sort_folder = menu.addAction(f"Sort Folder '{category_name}' Alphabetically (A to Z)")
+                act_sort_folder_desc = menu.addAction(f"Sort Folder '{category_name}' Alphabetically (Z to A)")
+
+                chosen = menu.exec(global_pos)
+                if chosen == act_sort_folder:
+                    self._sort_folder_tags(parent_id, category_name, descending=False)
+                elif chosen == act_sort_folder_desc:
+                    self._sort_folder_tags(parent_id, category_name, descending=True)
+
+    def _sort_folder_tags(
+        self, folder_id: str, folder_name: str, descending: bool = False
+    ) -> None:
+        """Sort tags within the specified category folder asynchronously without UI freeze."""
+        if is_rekordbox_running():
+            QMessageBox.warning(
+                self,
+                "Rekordbox is Running",
+                "Please close Rekordbox before sorting tags in the database.",
+            )
+            return
+
+        if not self.engine:
+            QMessageBox.warning(self, "Database Error", "No active database connection.")
+            return
+
+        direction_label = "Z to A" if descending else "A to Z"
+        reply = QMessageBox.question(
+            self,
+            "Sort Folder Tags",
+            f"Sort all tags in '{folder_name}' alphabetically ({direction_label})?\n\n"
+            "This will update the tag sequence (Seq) in your Rekordbox database.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        self.status_label.setText(f"⏳ Sorting tags in '{folder_name}' alphabetically ({direction_label})...")
+        self.notify_status.emit(f"Sorting tags in '{folder_name}'...")
+
+        stop_worker(self.active_sort_worker)
+        self.active_sort_worker = TagSortWorker(
+            engine=self.engine,
+            folder_id=folder_id,
+            descending=descending,
+            parent=self,
+        )
+        self.active_sort_worker.success.connect(
+            lambda count: self._on_sort_tags_success(folder_name, count, direction_label)
+        )
+        self.active_sort_worker.error.connect(
+            lambda err_msg: self._on_sort_tags_error(folder_name, err_msg)
+        )
+        self.active_sort_worker.start()
+
+    def _on_sort_tags_success(
+        self, folder_name: str, count: int, direction_label: str
+    ) -> None:
+        """Handle completion of asynchronous tag sorting."""
+        self._load_tags_tree()
+        self.db_saved.emit()
+        msg = f"Sorted {count} tags in '{folder_name}' alphabetically ({direction_label})."
+        self.status_label.setText(f"✅ {msg}")
+        self.notify_status.emit(msg)
+
+    def _on_sort_tags_error(self, folder_name: str, err_msg: str) -> None:
+        """Handle failure of asynchronous tag sorting."""
+        self.status_label.setText(f"❌ Error sorting tags: {err_msg}")
+        self.notify_status.emit(f"Error sorting tags in '{folder_name}': {err_msg}")
+        QMessageBox.critical(
+            self,
+            "Sort Failed",
+            f"Failed to sort tags in folder '{folder_name}':\n{err_msg}",
+        )
 
     def load_tag(self, tag_dict: Dict[str, Any]) -> None:
         """Switch to and load the specified tag's tracks."""
