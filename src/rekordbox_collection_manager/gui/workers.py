@@ -859,6 +859,7 @@ class SyncWorker(QObject):
 
     success = Signal(object)  # SyncResult
     error = Signal(str)
+    progress = Signal(str, int, int)  # (stage, current, total)
     finished = Signal()
 
     def __init__(
@@ -903,10 +904,16 @@ class SyncWorker(QObject):
     def _run(self) -> None:
         try:
             from rekordbox_collection_manager.turso_sync import run_sync_cycle
+
+            def _on_progress(stage: str, current: int, total: int) -> None:
+                if not self.isInterruptionRequested():
+                    self.progress.emit(stage, current, total)
+
             res = run_sync_cycle(
                 db_path=self.db_path,
                 force=self.force,
                 create_backup=self.create_backup,
+                progress_cb=_on_progress,
                 cancel_fn=self.isInterruptionRequested,
             )
             if self.isInterruptionRequested():

@@ -8,6 +8,7 @@ from sqlalchemy import create_engine, text
 
 from rekordbox_collection_manager.turso_sync import (
     SyncResult,
+    TursoQueryResult,
     is_turso_configured,
     run_sync_cycle,
 )
@@ -270,3 +271,94 @@ def test_apply_changelog_events_play_count_and_reorder(tmp_path):
         pl_t1 = conn.execute(text("SELECT TrackNo FROM djmdSongPlaylist WHERE PlaylistID = 'pl1' AND ContentID = 't1';")).scalar()
         assert pl_t2 == 1
         assert pl_t1 == 2
+
+
+def test_build_multi_row_insert():
+    from rekordbox_collection_manager.turso_sync import _build_multi_row_insert
+
+    # Empty rows
+    sql, params = _build_multi_row_insert("test_tbl", ["a", "b"], [])
+    assert sql == ""
+    assert params == []
+
+    # Multiple rows
+    sql, params = _build_multi_row_insert("tracks", ["id", "title"], [["1", "Track 1"], ["2", "Track 2"]])
+    assert sql == "INSERT OR REPLACE INTO tracks (id, title) VALUES (?, ?), (?, ?);"
+    assert params == ["1", "Track 1", "2", "Track 2"]
+
+
+def test_sync_state_cache(tmp_path, monkeypatch):
+    from rekordbox_collection_manager.turso_sync import get_last_sync_state, save_sync_state
+
+    cache_file = tmp_path / "sync_state.json"
+    monkeypatch.setattr("rekordbox_collection_manager.turso_sync._get_sync_state_path", lambda: str(cache_file))
+
+    assert get_last_sync_state() == {}
+
+    test_db = tmp_path / "master.db"
+    test_db.write_text("dummy")
+
+    stats = {"tracks": 100, "playlists": 5}
+    save_sync_state(str(test_db), stats)
+
+    state = get_last_sync_state()
+    assert state.get("db_path") == str(test_db.resolve())
+    assert state.get("stats") == stats
+    assert state.get("db_size") == len("dummy")
+
+
+def test_run_sync_cycle_skips_when_up_to_date(tmp_path, monkeypatch):
+    fake_db = tmp_path / "master.db"
+    fake_db.write_text("test database content")
+
+    cache_file = tmp_path / "sync_state.json"
+    monkeypatch.setattr("rekordbox_collection_manager.turso_sync._get_sync_state_path", lambda: str(cache_file))
+
+    from rekordbox_collection_manager.turso_sync import save_sync_state
+    mock_stats = {"tracks": 42, "playlists": 5}
+    save_sync_state(str(fake_db), mock_stats)
+
+    mock_client = MagicMock()
+    # 0 pending changelog events
+    mock_client.execute.return_value = TursoQueryResult(cols=["count"], rows=[(0,)])
+
+    with patch("rekordbox_collection_manager.turso_sync.is_turso_configured", return_value=True), \
+         patch("rekordbox_collection_manager.turso_sync.is_rekordbox_running", return_value=False), \
+         patch("rekordbox_collection_manager.turso_sync.create_turso_client", return_value=mock_client), \
+         patch("rekordbox_collection_manager.turso_sync.create_database_backup") as mock_backup, \
+         patch("rekordbox_collection_manager.turso_sync.apply_changelog_events") as mock_apply, \
+         patch("rekordbox_collection_manager.turso_sync.export_collection_to_turso") as mock_export:
+
+        res = run_sync_cycle(db_path=str(fake_db), force=False, create_backup=True)
+
+        assert res.success is True
+        assert "no changes detected" in res.message
+        assert res.stats == mock_stats
+        # Neither backup nor apply nor export should be called when up-to-date!
+        mock_backup.assert_not_called()
+        mock_apply.assert_not_called()
+        mock_export.assert_not_called()
+
+
+def test_sync_worker_progress_signal(tmp_path):
+    get_qapp()
+    worker = SyncWorker(db_path=str(tmp_path / "master.db"))
+
+    progress_calls = []
+    worker.progress.connect(lambda stage, curr, tot: progress_calls.append((stage, curr, tot)))
+
+    mock_result = SyncResult(success=True, stats={"tracks": 10}, message="OK")
+
+    def fake_run_sync_cycle(**kwargs):
+        cb = kwargs.get("progress_cb")
+        if cb:
+            cb("tracks", 5, 10)
+            cb("tracks", 10, 10)
+        return mock_result
+
+    with patch("rekordbox_collection_manager.turso_sync.run_sync_cycle", side_effect=fake_run_sync_cycle):
+        worker.run()
+
+    assert len(progress_calls) == 2
+    assert progress_calls[0] == ("tracks", 5, 10)
+    assert progress_calls[1] == ("tracks", 10, 10)

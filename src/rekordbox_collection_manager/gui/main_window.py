@@ -711,7 +711,7 @@ class MainWindow(QMainWindow):
 
         act_sync = QAction("☁️ Sync with Turso Cloud", self)
         act_sync.setShortcut(QKeySequence("Ctrl+Shift+S"))
-        act_sync.triggered.connect(lambda: self.trigger_sync(background=True, create_backup=True))
+        act_sync.triggered.connect(lambda: self.trigger_sync(background=True, create_backup=True, force=True))
         db_menu.addAction(act_sync)
 
         db_menu.addSeparator()
@@ -807,6 +807,7 @@ class MainWindow(QMainWindow):
         self,
         background: bool = True,
         create_backup: bool = True,
+        force: bool = False,
     ) -> None:
         """Trigger a Turso cloud sync cycle using the unified sync engine."""
         if not is_turso_configured():
@@ -824,21 +825,33 @@ class MainWindow(QMainWindow):
                 self._sync_pending = True
                 return
 
-            self.status_bar.showMessage("☁️ Syncing collection with Turso cloud...", 0)
-            worker = SyncWorker(db_path=self.db_path, create_backup=create_backup, parent=None)
+            self.status_bar.showMessage("☁️ Checking Turso cloud sync...", 0)
+            worker = SyncWorker(db_path=self.db_path, force=force, create_backup=create_backup, parent=None)
             self._sync_worker = worker
+            worker.progress.connect(self._on_sync_progress)
             worker.success.connect(self._on_sync_success)
             worker.error.connect(self._on_sync_error)
             worker.finished.connect(lambda: self._on_sync_finished(worker))
             worker.start()
         else:
             try:
-                run_sync_cycle(self.db_path, force=False, create_backup=create_backup)
+                run_sync_cycle(self.db_path, force=force, create_backup=create_backup)
             except Exception as e:
                 logger.error("Error during cloud sync: %s", e)
 
+    def _on_sync_progress(self, stage: str, current: int, total: int) -> None:
+        if total > 0:
+            pct = int((current / total) * 100)
+            stage_name = stage.replace("_", " ")
+            self.status_bar.showMessage(f"☁️ Syncing {stage_name} to cloud... {pct}% ({current}/{total})", 0)
+        else:
+            self.status_bar.showMessage(f"☁️ Syncing {stage} to cloud...", 0)
+
     def _on_sync_success(self, res: SyncResult) -> None:
-        msg = f"☁️ Turso cloud sync complete ({res.stats.get('tracks', 0)} tracks, {res.stats.get('playlists', 0)} playlists synced)."
+        if "no changes detected" in res.message or "up to date" in res.message:
+            msg = "☁️ Turso cloud is up to date."
+        else:
+            msg = f"☁️ Turso cloud sync complete ({res.stats.get('tracks', 0)} tracks, {res.stats.get('playlists', 0)} playlists synced)."
         if res.applied_events > 0:
             msg += f" Ingested {res.applied_events} change(s) from mobile."
             self.load_database(self.db_path)
