@@ -1,7 +1,8 @@
 """Background worker threads for non-blocking database operations."""
 
+import threading
 from typing import Any, Callable, Dict, List, Optional
-from PySide6.QtCore import QThread, Signal
+from PySide6.QtCore import QObject, QThread, Signal
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
@@ -38,11 +39,16 @@ from rekordbox_collection_manager.utils import (
 )
 
 
-def stop_worker(worker: Optional[QThread], wait_ms: int = 50) -> None:
-    """Safely stop a background QThread worker without terminating it mid-operation.
+_RETIRED_WORKERS: set = set()
+
+
+def stop_worker(worker: Optional[Any], wait_ms: int = 50) -> None:
+    """Safely stop a background worker without terminating it mid-operation.
 
     Disconnects common completion signals so subsequent emissions are ignored,
-    requests thread exit, and waits briefly for clean termination.
+    requests thread exit/interruption, and waits briefly for clean termination.
+    Keeps a strong reference to any worker still executing until its 'finished'
+    signal fires, preventing Python GC from destroying active C++ QThread objects.
     """
     if not worker:
         return
@@ -56,9 +62,65 @@ def stop_worker(worker: Optional[QThread], wait_ms: int = 50) -> None:
                     sig.disconnect()
                 except Exception:
                     pass
-    if worker.isRunning():
-        worker.quit()
-        worker.wait(wait_ms)
+
+    # Support daemon QObject workers with custom stop() method (e.g. SyncWorker, BackupWorker)
+    if hasattr(worker, "stop"):
+        try:
+            worker.stop()
+        except Exception:
+            pass
+
+    is_running = False
+    if hasattr(worker, "isRunning"):
+        try:
+            is_running = worker.isRunning()
+        except Exception:
+            is_running = False
+
+    if is_running:
+        _RETIRED_WORKERS.add(worker)
+        try:
+            worker.setParent(None)
+        except Exception:
+            pass
+        try:
+            worker.finished.connect(lambda: _RETIRED_WORKERS.discard(worker))
+        except Exception:
+            pass
+        if hasattr(worker, "requestInterruption"):
+            worker.requestInterruption()
+        if hasattr(worker, "quit"):
+            worker.quit()
+        if hasattr(worker, "wait"):
+            worker.wait(wait_ms)
+
+
+def wait_for_retired_workers(timeout_ms: int = 1000) -> None:
+    """Wait for any active background workers to finish before process termination."""
+    remaining = list(_RETIRED_WORKERS)
+    if not remaining:
+        return
+    per_worker = max(20, timeout_ms // len(remaining))
+    for worker in remaining:
+        try:
+            if hasattr(worker, "stop"):
+                worker.stop()
+            is_running = False
+            if hasattr(worker, "isRunning"):
+                try:
+                    is_running = worker.isRunning()
+                except Exception:
+                    pass
+            if is_running:
+                if hasattr(worker, "requestInterruption"):
+                    worker.requestInterruption()
+                if hasattr(worker, "quit"):
+                    worker.quit()
+                if hasattr(worker, "wait"):
+                    worker.wait(per_worker)
+        except Exception:
+            pass
+    _RETIRED_WORKERS.clear()
 
 
 class DatabaseLoaderWorker(QThread):
@@ -73,11 +135,19 @@ class DatabaseLoaderWorker(QThread):
 
     def run(self) -> None:
         try:
+            if self.isInterruptionRequested():
+                return
             resolved_path = resolve_db_path(self.db_path, allow_prompt=False)
+            if self.isInterruptionRequested():
+                return
             engine, _ = open_database(resolved_path)
+            if self.isInterruptionRequested():
+                return
 
             history_table = detect_history_table(engine)
             history_records = fetch_history_records(engine, history_table, include_deleted=True)
+            if self.isInterruptionRequested():
+                return
 
             # Count total tracks (excluding deleted and streaming tracks)
             total_tracks = 0
@@ -92,9 +162,12 @@ class DatabaseLoaderWorker(QThread):
             except Exception:
                 total_tracks = 0
 
+            if self.isInterruptionRequested():
+                return
             self.success.emit(engine, resolved_path, history_records, total_tracks, history_table)
         except Exception as e:
-            self.error.emit(str(e))
+            if not self.isInterruptionRequested():
+                self.error.emit(str(e))
 
 
 class TrackSearchWorker(QThread):
@@ -125,6 +198,8 @@ class TrackSearchWorker(QThread):
 
     def run(self) -> None:
         try:
+            if self.isInterruptionRequested():
+                return
             records = search_tracks(
                 self.engine,
                 self.query,
@@ -134,9 +209,12 @@ class TrackSearchWorker(QThread):
                 play_count_filter=self.play_count_filter,
                 exclude_streaming=self.exclude_streaming,
             )
+            if self.isInterruptionRequested():
+                return
             self.success.emit(self.query, records)
         except Exception as e:
-            self.error.emit(str(e))
+            if not self.isInterruptionRequested():
+                self.error.emit(str(e))
 
 
 class HistoryBatchSaveWorker(QThread):
@@ -159,12 +237,17 @@ class HistoryBatchSaveWorker(QThread):
 
     def run(self) -> None:
         try:
+            if self.isInterruptionRequested():
+                return
             stats = batch_update_history_records(
                 self.engine, self.updates, auto_realign=self.auto_realign
             )
+            if self.isInterruptionRequested():
+                return
             self.success.emit(stats)
         except Exception as e:
-            self.error.emit(str(e))
+            if not self.isInterruptionRequested():
+                self.error.emit(str(e))
 
 
 class HistoryRealignWorker(QThread):
@@ -179,10 +262,15 @@ class HistoryRealignWorker(QThread):
 
     def run(self) -> None:
         try:
+            if self.isInterruptionRequested():
+                return
             stats = realign_history_order(self.engine)
+            if self.isInterruptionRequested():
+                return
             self.success.emit(stats)
         except Exception as e:
-            self.error.emit(str(e))
+            if not self.isInterruptionRequested():
+                self.error.emit(str(e))
 
 
 class PlayCountUpdateWorker(QThread):
@@ -207,6 +295,8 @@ class PlayCountUpdateWorker(QThread):
 
     def run(self) -> None:
         try:
+            if self.isInterruptionRequested():
+                return
             if self.absolute is not None:
                 old_count, new_count = set_track_play_count(
                     self.engine, self.track_id, self.absolute
@@ -217,9 +307,12 @@ class PlayCountUpdateWorker(QThread):
                 )
             else:
                 return
+            if self.isInterruptionRequested():
+                return
             self.success.emit(self.track_id, old_count, new_count)
         except Exception as e:
-            self.error.emit(self.track_id, str(e))
+            if not self.isInterruptionRequested():
+                self.error.emit(self.track_id, str(e))
 
 
 class PlayCountBatchSaveWorker(QThread):
@@ -240,10 +333,15 @@ class PlayCountBatchSaveWorker(QThread):
 
     def run(self) -> None:
         try:
+            if self.isInterruptionRequested():
+                return
             updated_count = batch_update_track_play_counts(self.engine, self.updates)
+            if self.isInterruptionRequested():
+                return
             self.success.emit(updated_count)
         except Exception as e:
-            self.error.emit(str(e))
+            if not self.isInterruptionRequested():
+                self.error.emit(str(e))
 
 
 class HistorySessionDetailWorker(QThread):
@@ -264,10 +362,15 @@ class HistorySessionDetailWorker(QThread):
 
     def run(self) -> None:
         try:
+            if self.isInterruptionRequested():
+                return
             data = fetch_session_tracks(self.engine, self.history_id)
+            if self.isInterruptionRequested():
+                return
             self.success.emit(data)
         except Exception as e:
-            self.error.emit(str(e))
+            if not self.isInterruptionRequested():
+                self.error.emit(str(e))
 
 
 class TrackDetailWorker(QThread):
@@ -290,14 +393,19 @@ class TrackDetailWorker(QThread):
 
     def run(self) -> None:
         try:
+            if self.isInterruptionRequested():
+                return
             data = fetch_track_full_details(
                 self.engine,
                 self.content_id,
                 db_path=self.db_path,
             )
+            if self.isInterruptionRequested():
+                return
             self.success.emit(data)
         except Exception as e:
-            self.error.emit(str(e))
+            if not self.isInterruptionRequested():
+                self.error.emit(str(e))
 
 
 class AudioInspectWorker(QThread):
@@ -312,12 +420,17 @@ class AudioInspectWorker(QThread):
 
     def run(self) -> None:
         try:
+            if self.isInterruptionRequested():
+                return
             from rekordbox_collection_manager.replace_file import inspect_audio_file
 
             info = inspect_audio_file(self.file_path)
+            if self.isInterruptionRequested():
+                return
             self.success.emit(info)
         except Exception as e:
-            self.error.emit(str(e))
+            if not self.isInterruptionRequested():
+                self.error.emit(str(e))
 
 
 class TrackReplaceWorker(QThread):
@@ -342,6 +455,8 @@ class TrackReplaceWorker(QThread):
 
     def run(self) -> None:
         try:
+            if self.isInterruptionRequested():
+                return
             from rekordbox_collection_manager.replace_file import replace_track_audio_file
 
             res = replace_track_audio_file(
@@ -350,9 +465,12 @@ class TrackReplaceWorker(QThread):
                 self.new_file_path,
                 options=self.options,
             )
+            if self.isInterruptionRequested():
+                return
             self.success.emit(res)
         except Exception as e:
-            self.error.emit(str(e))
+            if not self.isInterruptionRequested():
+                self.error.emit(str(e))
 
 
 class TrackMergeWorker(QThread):
@@ -377,6 +495,8 @@ class TrackMergeWorker(QThread):
 
     def run(self) -> None:
         try:
+            if self.isInterruptionRequested():
+                return
             from rekordbox_collection_manager.replace_file import merge_imported_tracks
 
             res = merge_imported_tracks(
@@ -385,16 +505,20 @@ class TrackMergeWorker(QThread):
                 self.target_content_id,
                 options=self.options,
             )
+            if self.isInterruptionRequested():
+                return
             self.success.emit(res)
         except Exception as e:
-            self.error.emit(str(e))
+            if not self.isInterruptionRequested():
+                self.error.emit(str(e))
 
 
-class BackupWorker(QThread):
+class BackupWorker(QObject):
     """Worker to create database backups in background without blocking UI."""
 
     success = Signal(dict)
     error = Signal(str)
+    finished = Signal()
 
     def __init__(
         self,
@@ -405,8 +529,35 @@ class BackupWorker(QThread):
         super().__init__(parent)
         self.db_path = db_path
         self.backup_dir = backup_dir
+        self._thread: Optional[threading.Thread] = None
+        self._stop_event = threading.Event()
+
+    def start(self) -> None:
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
 
     def run(self) -> None:
+        """Execute directly in the caller's thread (useful for testing)."""
+        self._run()
+
+    def isRunning(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
+    def isInterruptionRequested(self) -> bool:
+        return self._stop_event.is_set()
+
+    def requestInterruption(self) -> None:
+        self._stop_event.set()
+
+    def quit(self) -> None:
+        self.requestInterruption()
+
+    def wait(self, timeout_ms: int = 0) -> None:
+        if self._thread and self._thread.is_alive():
+            timeout_sec = timeout_ms / 1000.0 if timeout_ms > 0 else None
+            self._thread.join(timeout=timeout_sec)
+
+    def _run(self) -> None:
         try:
             from rekordbox_collection_manager.backup_restore import create_database_backup
 
@@ -414,6 +565,8 @@ class BackupWorker(QThread):
             self.success.emit(res)
         except Exception as e:
             self.error.emit(str(e))
+        finally:
+            self.finished.emit()
 
 
 class RestoreWorker(QThread):
@@ -455,13 +608,18 @@ class HistoryDeleteWorker(QThread):
 
     def run(self) -> None:
         try:
+            if self.isInterruptionRequested():
+                return
             ok = soft_delete_history_session(self.engine, self.history_id)
+            if self.isInterruptionRequested():
+                return
             if ok:
                 self.success.emit(self.history_id)
             else:
                 self.error.emit(self.history_id, f"Session {self.history_id} could not be deleted.")
         except Exception as e:
-            self.error.emit(self.history_id, str(e))
+            if not self.isInterruptionRequested():
+                self.error.emit(self.history_id, str(e))
 
 
 class HistoryRestoreWorker(QThread):
@@ -477,13 +635,18 @@ class HistoryRestoreWorker(QThread):
 
     def run(self) -> None:
         try:
+            if self.isInterruptionRequested():
+                return
             ok = restore_history_session(self.engine, self.history_id)
+            if self.isInterruptionRequested():
+                return
             if ok:
                 self.success.emit(self.history_id)
             else:
                 self.error.emit(self.history_id, f"Session {self.history_id} could not be restored.")
         except Exception as e:
-            self.error.emit(self.history_id, str(e))
+            if not self.isInterruptionRequested():
+                self.error.emit(self.history_id, str(e))
 
 
 class PlaylistLoaderWorker(QThread):
@@ -504,10 +667,15 @@ class PlaylistLoaderWorker(QThread):
 
     def run(self) -> None:
         try:
+            if self.isInterruptionRequested():
+                return
             tree = fetch_playlists_tree(self.engine, include_deleted=self.include_deleted)
+            if self.isInterruptionRequested():
+                return
             self.success.emit(tree)
         except Exception as e:
-            self.error.emit(str(e))
+            if not self.isInterruptionRequested():
+                self.error.emit(str(e))
 
 class CategoryTracksWorker(QThread):
     """Base worker to query and populate category tracks (playlists, tags, etc.) asynchronously."""
@@ -539,6 +707,8 @@ class CategoryTracksWorker(QThread):
 
     def run(self) -> None:
         try:
+            if self.isInterruptionRequested():
+                return
             tracks = self.fetch_fn(
                 self.engine,
                 self.category_id,
@@ -548,9 +718,12 @@ class CategoryTracksWorker(QThread):
                 sort_order=self.sort_order,
                 exclude_streaming=self.exclude_streaming,
             )
+            if self.isInterruptionRequested():
+                return
             self.success.emit(self.category_id, tracks)
         except Exception as e:
-            self.error.emit(str(e))
+            if not self.isInterruptionRequested():
+                self.error.emit(str(e))
 
 
 class PlaylistTracksWorker(CategoryTracksWorker):
@@ -601,14 +774,19 @@ class TagsTreeLoaderWorker(QThread):
 
     def run(self) -> None:
         try:
+            if self.isInterruptionRequested():
+                return
             tree = fetch_tags_tree(
                 self.engine,
                 include_deleted=self.include_deleted,
                 category_names=self.category_names,
             )
+            if self.isInterruptionRequested():
+                return
             self.success.emit(tree)
         except Exception as e:
-            self.error.emit(str(e))
+            if not self.isInterruptionRequested():
+                self.error.emit(str(e))
 
 
 class TagSortWorker(QThread):
@@ -631,12 +809,17 @@ class TagSortWorker(QThread):
 
     def run(self) -> None:
         try:
+            if self.isInterruptionRequested():
+                return
             count = sort_tags_in_folder(
                 self.engine, self.folder_id, descending=self.descending
             )
+            if self.isInterruptionRequested():
+                return
             self.success.emit(count)
         except Exception as e:
-            self.error.emit(str(e))
+            if not self.isInterruptionRequested():
+                self.error.emit(str(e))
 
 
 class TagTracksWorker(CategoryTracksWorker):
@@ -667,11 +850,16 @@ class TagTracksWorker(CategoryTracksWorker):
         self.tag_id = tag_id
 
 
-class SyncWorker(QThread):
-    """Background worker to run Turso cloud sync without freezing the GUI."""
+class SyncWorker(QObject):
+    """Background worker to run Turso cloud sync without freezing the GUI.
+
+    Executes via a daemon thread with Qt Signal bridges, avoiding C++ QThread
+    destruction assertions on application exit while HTTP network calls are in flight.
+    """
 
     success = Signal(object)  # SyncResult
     error = Signal(str)
+    finished = Signal()
 
     def __init__(
         self,
@@ -684,19 +872,52 @@ class SyncWorker(QThread):
         self.db_path = db_path
         self.force = force
         self.create_backup = create_backup
+        self._thread: Optional[threading.Thread] = None
+        self._stop_event = threading.Event()
+
+    def start(self) -> None:
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
 
     def run(self) -> None:
+        """Execute directly in the caller's thread (useful for testing)."""
+        self._run()
+
+    def isRunning(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
+    def isInterruptionRequested(self) -> bool:
+        return self._stop_event.is_set()
+
+    def requestInterruption(self) -> None:
+        self._stop_event.set()
+
+    def quit(self) -> None:
+        self.requestInterruption()
+
+    def wait(self, timeout_ms: int = 0) -> None:
+        if self._thread and self._thread.is_alive():
+            timeout_sec = timeout_ms / 1000.0 if timeout_ms > 0 else None
+            self._thread.join(timeout=timeout_sec)
+
+    def _run(self) -> None:
         try:
             from rekordbox_collection_manager.turso_sync import run_sync_cycle
             res = run_sync_cycle(
                 db_path=self.db_path,
                 force=self.force,
                 create_backup=self.create_backup,
+                cancel_fn=self.isInterruptionRequested,
             )
+            if self.isInterruptionRequested():
+                return
             if res.success:
                 self.success.emit(res)
             else:
                 self.error.emit(res.message)
         except Exception as e:
-            self.error.emit(str(e))
+            if not self.isInterruptionRequested():
+                self.error.emit(str(e))
+        finally:
+            self.finished.emit()
 

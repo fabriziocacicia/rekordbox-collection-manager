@@ -288,11 +288,24 @@ def perform_restore(
 def _sync_copy(src: Path, dst: Path) -> None:
     """Copy contents of directory src into directory dst."""
     if shutil.which("rsync"):
-        subprocess.run(
-            ["rsync", "-aI", f"{src}/", f"{dst}/"],
-            check=True,
+        proc = subprocess.run(
+            [
+                "rsync",
+                "-aI",
+                "--exclude=*.sock",
+                "--exclude=*.lock",
+                "--exclude=.DS_Store",
+                "--exclude=*.tmp",
+                f"{src}/",
+                f"{dst}/",
+            ],
             capture_output=True,
+            text=True,
         )
+        # Exit code 23 = partial transfer due to error (e.g. locks/permissions on transient files)
+        # Exit code 24 = partial transfer due to vanished source files
+        if proc.returncode not in (0, 23, 24):
+            proc.check_returncode()
     else:
         for item in src.iterdir():
             target = dst / item.name
@@ -305,11 +318,23 @@ def _sync_copy(src: Path, dst: Path) -> None:
 def _sync_replace(src: Path, dst: Path) -> None:
     """Synchronize contents of src into dst, deleting files in dst not in src."""
     if shutil.which("rsync"):
-        subprocess.run(
-            ["rsync", "-aI", "--delete", f"{src}/", f"{dst}/"],
-            check=True,
+        proc = subprocess.run(
+            [
+                "rsync",
+                "-aI",
+                "--delete",
+                "--exclude=*.sock",
+                "--exclude=*.lock",
+                "--exclude=.DS_Store",
+                "--exclude=*.tmp",
+                f"{src}/",
+                f"{dst}/",
+            ],
             capture_output=True,
+            text=True,
         )
+        if proc.returncode not in (0, 23, 24):
+            proc.check_returncode()
     else:
         for existing in dst.iterdir():
             if existing.is_file() or existing.is_symlink():

@@ -57,6 +57,8 @@ from rekordbox_collection_manager.gui.workers import (
     BackupWorker,
     DatabaseLoaderWorker,
     SyncWorker,
+    stop_worker,
+    wait_for_retired_workers,
 )
 from rekordbox_collection_manager.turso_sync import (
     SyncResult,
@@ -562,10 +564,9 @@ class MainWindow(QMainWindow):
         self.db_label.setToolTip("Connecting to Rekordbox database...")
 
         if self._db_loader and self._db_loader.isRunning():
-            self._db_loader.quit()
-            self._db_loader.wait(500)
+            stop_worker(self._db_loader, wait_ms=200)
 
-        loader = DatabaseLoaderWorker(db_path, parent=self)
+        loader = DatabaseLoaderWorker(db_path, parent=None)
         self._db_loader = loader
         loader.success.connect(self._on_db_loaded)
         loader.error.connect(self._on_db_error)
@@ -824,7 +825,7 @@ class MainWindow(QMainWindow):
                 return
 
             self.status_bar.showMessage("☁️ Syncing collection with Turso cloud...", 0)
-            worker = SyncWorker(db_path=self.db_path, create_backup=create_backup, parent=self)
+            worker = SyncWorker(db_path=self.db_path, create_backup=create_backup, parent=None)
             self._sync_worker = worker
             worker.success.connect(self._on_sync_success)
             worker.error.connect(self._on_sync_error)
@@ -854,23 +855,63 @@ class MainWindow(QMainWindow):
             self.trigger_sync(background=True, create_backup=False)
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        """Safely terminate active background workers and perform final cloud sync before closing."""
-        if self._db_loader and self._db_loader.isRunning():
-            self._db_loader.quit()
-            self._db_loader.wait(1000)
-        if self._backup_worker and self._backup_worker.isRunning():
-            self._backup_worker.wait(2000)
+        """Safely terminate active background workers before closing."""
+        if hasattr(self, "safety_timer"):
+            self.safety_timer.stop()
 
-        # Trigger Turso cloud sync upon closing custom manager
-        if is_turso_configured() and self.db_path and not is_rekordbox_running():
-            if self._sync_worker and self._sync_worker.isRunning():
-                self.status_bar.showMessage("Completing active cloud sync before exit...")
-                self._sync_worker.wait(10000)
-            else:
-                self.status_bar.showMessage("Syncing collection with Turso cloud before closing...")
-                try:
-                    run_sync_cycle(self.db_path, force=False, create_backup=True)
-                except Exception as e:
-                    logger.error("Error during closing cloud sync: %s", e)
+        # Stop background workers on all child views
+        views = [
+            getattr(self, "tags_view", None),
+            getattr(self, "playlists_view", None),
+            getattr(self, "tracks_view", None),
+            getattr(self, "history_view", None),
+            getattr(self, "play_count_view", None),
+            getattr(self, "replace_file_view", None),
+        ]
+        for v in views:
+            if v is not None:
+                if hasattr(v, "cleanup"):
+                    try:
+                        v.cleanup()
+                    except Exception:
+                        pass
+                for attr in (
+                    "active_loader_worker",
+                    "active_tracks_worker",
+                    "active_sort_worker",
+                    "active_worker",
+                    "active_history_worker",
+                    "active_search_worker",
+                    "active_batch_worker",
+                    "search_worker",
+                    "inspect_worker",
+                    "replace_worker",
+                    "merge_worker",
+                ):
+                    w = getattr(v, attr, None)
+                    if w is not None:
+                        stop_worker(w, wait_ms=50)
 
+                detail = getattr(v, "detail_view", None) or getattr(v, "track_detail_view", None)
+                if detail is not None:
+                    if hasattr(detail, "cleanup"):
+                        try:
+                            detail.cleanup()
+                        except Exception:
+                            pass
+                    w = getattr(detail, "active_worker", None)
+                    if w is not None:
+                        stop_worker(w, wait_ms=50)
+
+        if self._db_loader:
+            stop_worker(self._db_loader, wait_ms=50)
+            self._db_loader = None
+        if self._backup_worker:
+            stop_worker(self._backup_worker, wait_ms=50)
+            self._backup_worker = None
+        if self._sync_worker:
+            stop_worker(self._sync_worker, wait_ms=50)
+            self._sync_worker = None
+
+        wait_for_retired_workers(timeout_ms=500)
         super().closeEvent(event)

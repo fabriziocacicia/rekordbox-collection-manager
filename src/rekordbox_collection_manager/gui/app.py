@@ -62,7 +62,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     # Update macOS App menu title
     update_macos_menu_title("Rekordbox Collection Manager")
 
-    return app.exec()
+    ret = app.exec()
+    from rekordbox_collection_manager.gui.workers import wait_for_retired_workers
+    wait_for_retired_workers(timeout_ms=1000)
+    return ret
 
 
 if __name__ == "__main__":

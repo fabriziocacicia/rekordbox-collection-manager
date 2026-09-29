@@ -174,7 +174,7 @@ def test_main_window_sync_triggers(tmp_path):
         window._initial_sync_done = False
         with patch.object(window, "trigger_sync") as mock_trigger:
             window._on_db_loaded(
-                engine=MagicMock(),
+                engine=create_engine("sqlite:///:memory:"),
                 path=str(fake_db),
                 history_records=[],
                 total_tracks=10,
@@ -183,11 +183,9 @@ def test_main_window_sync_triggers(tmp_path):
             assert window._initial_sync_done is True
             mock_trigger.assert_called_once_with(background=True, create_backup=True)
 
-        # Test closeEvent runs sync cycle
+        # Test closeEvent terminates active workers cleanly
         from PySide6.QtGui import QCloseEvent
-        with patch("rekordbox_collection_manager.gui.main_window.run_sync_cycle") as mock_run_sync:
-            window.closeEvent(QCloseEvent())
-            mock_run_sync.assert_called_once_with(str(fake_db), force=False, create_backup=True)
+        window.closeEvent(QCloseEvent())
 
 
 def test_apply_changelog_events_play_count_and_reorder(tmp_path):

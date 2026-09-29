@@ -1684,3 +1684,15 @@ class HistoryView(QWidget):
         worker.error.connect(on_error)
         worker.start()
 
+    def cleanup(self) -> None:
+        """Stop background history workers and timers cleanly."""
+        if hasattr(self, "search_debounce_timer"):
+            self.search_debounce_timer.stop()
+        for attr in ("active_worker", "active_history_worker"):
+            w = getattr(self, attr, None)
+            if w:
+                stop_worker(w, wait_ms=100)
+                setattr(self, attr, None)
+        if hasattr(self, "detail_view") and hasattr(self.detail_view, "cleanup"):
+            self.detail_view.cleanup()
+

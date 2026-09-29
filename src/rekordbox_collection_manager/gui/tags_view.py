@@ -444,7 +444,8 @@ class TagsView(QWidget):
             node = item.data(0, Qt.ItemDataRole.UserRole)
             if node and node.get("attribute") != 1:  # Not a category folder
                 self.tree.setCurrentItem(item)
-                self.load_tag(node)
+                if not self.current_tag or self.current_tag.get("id") != node.get("id"):
+                    self.load_tag(node)
                 break
             it += 1
 
@@ -460,7 +461,8 @@ class TagsView(QWidget):
             item.setExpanded(not item.isExpanded())
             self._show_folder_summary(node)
         else:
-            self.load_tag(node)
+            if not self.current_tag or self.current_tag.get("id") != node.get("id"):
+                self.load_tag(node)
 
     def _on_tree_current_item_changed(
         self, current: Optional[QTreeWidgetItem], previous: Optional[QTreeWidgetItem]
@@ -588,8 +590,10 @@ class TagsView(QWidget):
             f"Failed to sort tags in folder '{folder_name}':\n{err_msg}",
         )
 
-    def load_tag(self, tag_dict: Dict[str, Any]) -> None:
+    def load_tag(self, tag_dict: Dict[str, Any], force_reload: bool = False) -> None:
         """Switch to and load the specified tag's tracks."""
+        if not force_reload and self.current_tag and self.current_tag.get("id") == tag_dict.get("id"):
+            return
         self.current_tag = tag_dict
         name = tag_dict.get("name", "Untitled")
 
@@ -839,3 +843,15 @@ class TagsView(QWidget):
     def reset_to_list(self) -> None:
         """Reset view stack to tracks table."""
         self.stack.setCurrentIndex(0)
+
+    def cleanup(self) -> None:
+        """Stop background tag workers and timers cleanly."""
+        if hasattr(self, "track_search_debounce_timer"):
+            self.track_search_debounce_timer.stop()
+        for attr in ("active_loader_worker", "active_tracks_worker", "active_sort_worker", "active_worker"):
+            w = getattr(self, attr, None)
+            if w:
+                stop_worker(w, wait_ms=100)
+                setattr(self, attr, None)
+        if hasattr(self, "detail_view") and hasattr(self.detail_view, "cleanup"):
+            self.detail_view.cleanup()

@@ -1468,4 +1468,10 @@ class HistoryDetailView(QWidget):
             return
         super().keyPressEvent(event)
 
+    def cleanup(self) -> None:
+        """Stop background history session detail worker cleanly."""
+        if getattr(self, "active_worker", None):
+            stop_worker(self.active_worker, wait_ms=100)
+            self.active_worker = None
+
 

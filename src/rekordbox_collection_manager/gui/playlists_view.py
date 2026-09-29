@@ -440,7 +440,8 @@ class PlaylistsView(QWidget):
             node = item.data(0, Qt.ItemDataRole.UserRole)
             if node and node.get("attribute") != 1:  # Not a bare folder
                 self.tree.setCurrentItem(item)
-                self.load_playlist(node)
+                if not self.current_playlist or self.current_playlist.get("id") != node.get("id"):
+                    self.load_playlist(node)
                 break
             it += 1
 
@@ -456,7 +457,8 @@ class PlaylistsView(QWidget):
             item.setExpanded(not item.isExpanded())
             self._show_folder_summary(node)
         else:
-            self.load_playlist(node)
+            if not self.current_playlist or self.current_playlist.get("id") != node.get("id"):
+                self.load_playlist(node)
 
     def _on_tree_current_item_changed(
         self, current: Optional[QTreeWidgetItem], previous: Optional[QTreeWidgetItem]
@@ -477,8 +479,10 @@ class PlaylistsView(QWidget):
         self.table.set_tracks([])
         self.status_label.setText("Select a playlist inside this folder to view its tracks.")
 
-    def load_playlist(self, playlist_dict: Dict[str, Any]) -> None:
+    def load_playlist(self, playlist_dict: Dict[str, Any], force_reload: bool = False) -> None:
         """Switch to and load the specified playlist's tracks."""
+        if not force_reload and self.current_playlist and self.current_playlist.get("id") == playlist_dict.get("id"):
+            return
         self.current_playlist = playlist_dict
         attr = playlist_dict.get("attribute", 0)
         name = playlist_dict.get("name", "Untitled")
@@ -707,3 +711,15 @@ class PlaylistsView(QWidget):
     def reset_to_list(self) -> None:
         """Reset view stack to tracks table."""
         self.stack.setCurrentIndex(0)
+
+    def cleanup(self) -> None:
+        """Stop background playlist workers and timers cleanly."""
+        if hasattr(self, "track_search_debounce_timer"):
+            self.track_search_debounce_timer.stop()
+        for attr in ("active_loader_worker", "active_tracks_worker", "active_worker"):
+            w = getattr(self, attr, None)
+            if w:
+                stop_worker(w, wait_ms=100)
+                setattr(self, attr, None)
+        if hasattr(self, "detail_view") and hasattr(self.detail_view, "cleanup"):
+            self.detail_view.cleanup()

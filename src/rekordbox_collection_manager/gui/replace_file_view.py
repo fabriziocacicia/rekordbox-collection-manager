@@ -1235,3 +1235,11 @@ class ReplaceFileView(QWidget):
         self.btn_execute_merge.setEnabled(True)
         self.merge_status_label.setText(f"❌ Error: {err}")
         QMessageBox.critical(self, "Merge Error", f"Failed to merge tracks:\n\n{err}")
+
+    def cleanup(self) -> None:
+        """Stop background replacement workers and timers cleanly."""
+        for attr in ("search_worker", "inspect_worker", "replace_worker", "merge_worker"):
+            w = getattr(self, attr, None)
+            if w:
+                stop_worker(w, wait_ms=100)
+                setattr(self, attr, None)

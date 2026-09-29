@@ -782,4 +782,16 @@ class PlayCountView(QWidget):
             else:
                 self.notify_status.emit(f"❌ File not found: {fp}")
 
+    def cleanup(self) -> None:
+        """Stop background play count workers and timers cleanly."""
+        if hasattr(self, "search_debounce_timer"):
+            self.search_debounce_timer.stop()
+        for attr in ("active_search_worker", "active_batch_worker"):
+            w = getattr(self, attr, None)
+            if w:
+                stop_worker(w, wait_ms=100)
+                setattr(self, attr, None)
+        if hasattr(self, "track_detail_view") and hasattr(self.track_detail_view, "cleanup"):
+            self.track_detail_view.cleanup()
+
 

@@ -371,3 +371,13 @@ class TracksView(QWidget):
         if 0 <= row < len(self.records):
             self._open_track_detail(self.records[row])
 
+    def cleanup(self) -> None:
+        """Stop background search workers and timers cleanly."""
+        if hasattr(self, "search_debounce_timer"):
+            self.search_debounce_timer.stop()
+        if getattr(self, "active_search_worker", None):
+            stop_worker(self.active_search_worker, wait_ms=100)
+            self.active_search_worker = None
+        if hasattr(self, "detail_view") and hasattr(self.detail_view, "cleanup"):
+            self.detail_view.cleanup()
+

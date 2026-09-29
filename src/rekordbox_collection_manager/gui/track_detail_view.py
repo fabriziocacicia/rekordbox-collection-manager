@@ -873,6 +873,8 @@ class TrackDetailView(QWidget):
         stop_worker(self.active_worker, wait_ms=500)
         self.active_worker = None
 
+    cleanup = _terminate_worker
+
     def _load_full_details_async(self) -> None:
         """Fetch complete metadata and history plays in background thread."""
         if not self.engine:
