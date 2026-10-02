@@ -8,6 +8,7 @@ and ingesting changelog events from Turso back into master.db.
 import json
 import logging
 import os
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
@@ -329,6 +330,23 @@ def init_turso_schema(client: TursoHttpClient) -> None:
             None,
         ),
         ("CREATE INDEX IF NOT EXISTS idx_events_status ON changelog_events(status, created_at);", None),
+        # 7. History sessions metadata (for mobile autocompletion & session records)
+        (
+            """
+            CREATE TABLE IF NOT EXISTS history_sessions (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                date_created TEXT,
+                location TEXT,
+                collaborators TEXT,
+                track_count INTEGER DEFAULT 0,
+                updated_at TEXT
+            );
+            """,
+            None,
+        ),
+        ("CREATE INDEX IF NOT EXISTS idx_hs_loc ON history_sessions(location);", None),
+        ("CREATE INDEX IF NOT EXISTS idx_hs_collab ON history_sessions(collaborators);", None),
     ]
     client.batch(statements)
 
@@ -678,6 +696,49 @@ def export_collection_to_turso(
                 if progress_cb:
                     progress_cb("track_tags", stats["track_tags"], total_tt)
 
+        # ----------------------------------------------------
+        # 6. Export History Sessions (Locations & Collaborators)
+        # ----------------------------------------------------
+        if "djmdHistory" in existing_tables:
+            hist_cols = {
+                r[1] for r in conn.exec_driver_sql("PRAGMA table_info(djmdHistory);").fetchall()
+            }
+            del_clause = (
+                "AND (rb_local_deleted = 0 OR rb_local_deleted IS NULL)"
+                if "rb_local_deleted" in hist_cols
+                else ""
+            )
+            updated_col = "updated_at" if "updated_at" in hist_cols else "''"
+            date_col = "DateCreated" if "DateCreated" in hist_cols else "''"
+            h_rows = conn.exec_driver_sql(
+                f"SELECT ID, Name, {date_col}, {updated_col} FROM djmdHistory WHERE (Attribute = 0 OR Attribute IS NULL) {del_clause};"
+            ).fetchall()
+
+            from rekordbox_collection_manager.utils import parse_history_name
+            history_batch = []
+            for hr in h_rows:
+                hid, hname, hdate, hupd = str(hr[0]), str(hr[1] or ""), str(hr[2] or ""), str(hr[3] or "")
+                _, hloc, hcollab = parse_history_name(hname)
+                t_count = 0
+                if "djmdSongHistory" in existing_tables:
+                    t_count = conn.exec_driver_sql(
+                        "SELECT COUNT(*) FROM djmdSongHistory WHERE HistoryID = :hid;", {"hid": hid}
+                    ).scalar() or 0
+                history_batch.append([hid, hname, hdate, hloc or None, hcollab or None, t_count, hupd])
+
+            if history_batch:
+                logger.info("Exporting %d history sessions to Turso...", len(history_batch))
+                hist_target_cols = ["id", "name", "date_created", "location", "collaborators", "track_count", "updated_at"]
+                batch_size = 100
+                for i in range(0, len(history_batch), batch_size):
+                    if cancel_fn and cancel_fn():
+                        logger.info("Turso export cancelled during history export.")
+                        return stats
+                    chunk = history_batch[i : i + batch_size]
+                    sql_insert, params = _build_multi_row_insert("history_sessions", hist_target_cols, chunk)
+                    client.execute(sql_insert, params)
+                stats["history_sessions"] = len(history_batch)
+
     return stats
 
 
@@ -860,6 +921,96 @@ def apply_changelog_events(engine: Engine, client: TursoHttpClient) -> int:
                             {"id": str(max_id + 1), "track": track_id, "tag": str(tid), "now": now_str},
                         )
 
+                elif action == "CREATE_HISTORY_SESSION":
+                    session_id = payload.get("session_id") or str(uuid.uuid4())
+                    session_name = payload.get("session_name")
+                    date_created = payload.get("date_created") or now_str
+                    increment_play_counts = payload.get("increment_play_counts", True)
+                    tracks = payload.get("tracks", [])
+
+                    if not session_name:
+                        session_name = f"HISTORY {date_created[:10]}"
+
+                    from rekordbox_collection_manager.utils import extract_year_month_from_name_or_date
+                    from rekordbox_collection_manager.rename_history import ensure_djmd_history_folders
+
+                    y, m = extract_year_month_from_name_or_date(session_name, date_created)
+                    if not y or not m:
+                        try:
+                            clean_dt = date_created.replace("Z", "+00:00").replace("T", " ")
+                            if len(clean_dt) >= 10:
+                                y = int(clean_dt[:4])
+                                m = int(clean_dt[5:7])
+                        except Exception:
+                            now_dt = datetime.now(timezone.utc)
+                            y, m = now_dt.year, now_dt.month
+
+                    history_cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(djmdHistory);").fetchall()}
+                    month_id = ensure_djmd_history_folders(conn, y, m, date_created, history_cols)
+
+                    existing = conn.exec_driver_sql("SELECT ID FROM djmdHistory WHERE ID = :id;", {"id": session_id}).fetchone()
+                    if not existing:
+                        target_id = session_id
+                        session_data = {
+                            "ID": target_id,
+                            "Name": session_name,
+                            "ParentID": month_id,
+                            "Attribute": 0,
+                            "DateCreated": date_created,
+                            "Seq": 999,
+                            "UUID": str(uuid.uuid4()) if "UUID" in history_cols else None,
+                            "rb_data_status": 0,
+                            "rb_local_data_status": 0,
+                            "rb_local_deleted": 0,
+                            "rb_local_synced": 1,
+                            "created_at": now_str,
+                            "updated_at": now_str,
+                        }
+                        ins_cols = [k for k in session_data if k in history_cols and session_data[k] is not None]
+                        col_names = ", ".join(ins_cols)
+                        placeholders = ", ".join(f":{k}" for k in ins_cols)
+                        conn.execute(
+                            text(f"INSERT INTO djmdHistory ({col_names}) VALUES ({placeholders})"),
+                            {k: session_data[k] for k in ins_cols},
+                        )
+                    else:
+                        target_id = session_id
+
+                    song_history_cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(djmdSongHistory);").fetchall()}
+                    content_cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(djmdContent);").fetchall()} if "djmdContent" in conn.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table';").fetchall()[0] else set()
+
+                    for t_item in tracks:
+                        track_id = str(t_item.get("track_id"))
+                        track_no = int(t_item.get("track_no", 1))
+                        played_at = t_item.get("played_at") or now_str
+
+                        max_sh_id = conn.exec_driver_sql("SELECT MAX(CAST(ID AS INTEGER)) FROM djmdSongHistory;").scalar() or 0
+                        new_sh_id = str(max_sh_id + 1)
+
+                        sh_data = {
+                            "ID": new_sh_id,
+                            "HistoryID": target_id,
+                            "ContentID": track_id,
+                            "TrackNo": track_no,
+                            "rb_data_status": 0,
+                            "rb_local_deleted": 0,
+                            "created_at": played_at,
+                            "updated_at": now_str,
+                        }
+                        sh_ins_cols = [k for k in sh_data if k in song_history_cols and sh_data[k] is not None]
+                        sh_col_names = ", ".join(sh_ins_cols)
+                        sh_placeholders = ", ".join(f":{k}" for k in sh_ins_cols)
+                        conn.execute(
+                            text(f"INSERT INTO djmdSongHistory ({sh_col_names}) VALUES ({sh_placeholders})"),
+                            {k: sh_data[k] for k in sh_ins_cols},
+                        )
+
+                        if increment_play_counts:
+                            conn.exec_driver_sql(
+                                "UPDATE djmdContent SET DJPlayCount = COALESCE(DJPlayCount, 0) + 1, updated_at = :now WHERE ID = :track_id;",
+                                {"now": now_str, "track_id": track_id},
+                            )
+
                 else:
                     raise ValueError(f"Unknown action: {action}")
 
@@ -869,6 +1020,12 @@ def apply_changelog_events(engine: Engine, client: TursoHttpClient) -> int:
             except Exception as e:
                 logger.error("Failed to apply event %s: %s", event_id, e)
                 _mark_event_status(client, event_id, "FAILED", str(e))
+
+    try:
+        from rekordbox_collection_manager.rename_history import realign_history_order
+        realign_history_order(engine)
+    except Exception as e:
+        logger.debug("History realignment after changelog: %s", e)
 
     return processed_count
 

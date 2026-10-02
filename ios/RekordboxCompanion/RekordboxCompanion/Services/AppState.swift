@@ -8,6 +8,13 @@ final class AppState {
     var tags: [Tag] = []
     var changelogEvents: [ChangelogEvent] = []
 
+    // Live Session Tracking
+    var activeSession: LiveSession?
+    var activeSessionTracks: [LiveSessionTrack] = []
+    var recentSessions: [LiveSession] = []
+    var pastLocations: [String] = []
+    var pastCollaborators: [String] = []
+
     var isSyncing: Bool = false
     var lastSyncDate: Date?
     var syncErrorMessage: String?
@@ -28,6 +35,16 @@ final class AppState {
         playlists = LocalDatabase.shared.getAllPlaylists()
         tags = LocalDatabase.shared.getAllTags()
         changelogEvents = LocalDatabase.shared.getAllChangelogEvents()
+
+        activeSession = LocalDatabase.shared.getActiveLiveSession()
+        if let current = activeSession {
+            activeSessionTracks = LocalDatabase.shared.getLiveSessionTracks(sessionId: current.id)
+        } else {
+            activeSessionTracks = []
+        }
+        recentSessions = LocalDatabase.shared.getRecentLiveSessions(limit: 10)
+        pastLocations = LocalDatabase.shared.getPastLocations()
+        pastCollaborators = LocalDatabase.shared.getPastCollaborators()
     }
 
     @MainActor
@@ -144,5 +161,59 @@ final class AppState {
         Task {
             _ = try? await TursoSyncService.shared.pushPendingEvents()
         }
+    }
+
+    // MARK: - Live Session Actions
+    func startLiveSession(name: String, dateCreated: String, location: String?, collaborators: String?, startedAt: Date = Date()) {
+        let session = LocalDatabase.shared.startLiveSession(
+            name: name,
+            dateCreated: dateCreated,
+            location: location,
+            collaborators: collaborators,
+            startedAt: startedAt
+        )
+        activeSession = session
+        activeSessionTracks = []
+        loadFromCache()
+    }
+
+    func addTrackToActiveSession(track: Track) {
+        guard let session = activeSession else { return }
+        if let lt = LocalDatabase.shared.addTrackToLiveSession(sessionId: session.id, trackId: track.id, playedAt: Date()) {
+            activeSessionTracks.append(lt)
+            activeSession?.trackCount = activeSessionTracks.count
+        }
+    }
+
+    func removeTrackFromActiveSession(liveTrackId: String) {
+        guard let session = activeSession else { return }
+        LocalDatabase.shared.removeTrackFromLiveSession(sessionId: session.id, liveTrackId: liveTrackId)
+        activeSessionTracks = LocalDatabase.shared.getLiveSessionTracks(sessionId: session.id)
+        activeSession?.trackCount = activeSessionTracks.count
+    }
+
+    func reorderActiveSession(orderedLiveTrackIds: [String]) {
+        guard let session = activeSession else { return }
+        LocalDatabase.shared.reorderLiveSessionTracks(sessionId: session.id, orderedLiveTrackIds: orderedLiveTrackIds)
+        activeSessionTracks = LocalDatabase.shared.getLiveSessionTracks(sessionId: session.id)
+    }
+
+    func endActiveSession(incrementPlayCounts: Bool) {
+        guard let session = activeSession else { return }
+        LocalDatabase.shared.endLiveSession(sessionId: session.id, incrementPlayCounts: incrementPlayCounts)
+        activeSession = nil
+        activeSessionTracks = []
+        loadFromCache()
+        Task {
+            _ = try? await TursoSyncService.shared.pushPendingEvents()
+        }
+    }
+
+    func discardActiveSession() {
+        guard let session = activeSession else { return }
+        LocalDatabase.shared.discardLiveSession(sessionId: session.id)
+        activeSession = nil
+        activeSessionTracks = []
+        loadFromCache()
     }
 }

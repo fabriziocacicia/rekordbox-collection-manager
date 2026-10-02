@@ -362,3 +362,109 @@ def test_sync_worker_progress_signal(tmp_path):
     assert len(progress_calls) == 2
     assert progress_calls[0] == ("tracks", 5, 10)
     assert progress_calls[1] == ("tracks", 10, 10)
+
+
+def test_apply_changelog_create_history_session(tmp_path):
+    import json
+    fake_db = tmp_path / "master.db"
+    engine = create_engine(f"sqlite:///{fake_db}")
+
+    with engine.begin() as conn:
+        conn.execute(text("""
+            CREATE TABLE djmdHistory (
+                ID VARCHAR(255) PRIMARY KEY,
+                Seq INTEGER,
+                Name VARCHAR(255),
+                Attribute INTEGER,
+                ParentID VARCHAR(255),
+                DateCreated VARCHAR(255),
+                UUID VARCHAR(255),
+                rb_data_status INTEGER DEFAULT 0,
+                rb_local_data_status INTEGER DEFAULT 0,
+                rb_local_deleted TINYINT(1) DEFAULT 0,
+                rb_local_synced TINYINT(1) DEFAULT 0,
+                created_at DATETIME,
+                updated_at DATETIME
+            );
+        """))
+        conn.execute(text("""
+            CREATE TABLE djmdSongHistory (
+                ID VARCHAR(255) PRIMARY KEY,
+                HistoryID VARCHAR(255),
+                ContentID VARCHAR(255),
+                TrackNo INTEGER,
+                rb_data_status INTEGER DEFAULT 0,
+                rb_local_deleted TINYINT(1) DEFAULT 0,
+                created_at DATETIME,
+                updated_at DATETIME
+            );
+        """))
+        conn.execute(text("""
+            CREATE TABLE djmdContent (
+                ID VARCHAR(255) PRIMARY KEY,
+                Title VARCHAR(255),
+                DJPlayCount INTEGER DEFAULT 5,
+                updated_at DATETIME,
+                rb_local_deleted TINYINT(1) DEFAULT 0
+            );
+        """))
+        conn.execute(text("INSERT INTO djmdContent (ID, Title, DJPlayCount) VALUES ('c1', 'Track 1', 3);"))
+        conn.execute(text("INSERT INTO djmdContent (ID, Title, DJPlayCount) VALUES ('c2', 'Track 2', 0);"))
+
+    mock_client = MagicMock()
+    payload = {
+        "session_id": "sess_test_101",
+        "session_name": "HISTORY 2026-10-02 @ Fabric w Alex",
+        "date_created": "2026-10-02 23:00:00",
+        "location": "Fabric",
+        "collaborators": "Alex",
+        "increment_play_counts": True,
+        "tracks": [
+            {"track_id": "c1", "track_no": 1, "played_at": "2026-10-02 23:05:00"},
+            {"track_id": "c2", "track_no": 2, "played_at": "2026-10-02 23:12:00"},
+        ]
+    }
+    event_row = ("evt_1", "CREATE_HISTORY_SESSION", json.dumps(payload), "2026-10-02T23:30:00Z")
+    mock_client.execute.return_value = TursoQueryResult(
+        cols=["id", "action", "payload", "created_at"],
+        rows=[event_row]
+    )
+
+    from rekordbox_collection_manager.turso_sync import apply_changelog_events
+    processed = apply_changelog_events(engine, mock_client)
+
+    assert processed == 1
+
+    with engine.connect() as conn:
+        # Check folders created
+        year_row = conn.execute(text("SELECT ID, ParentID, Attribute FROM djmdHistory WHERE ID = '2026';")).fetchone()
+        assert year_row is not None
+        assert year_row[1] == "root"
+        assert year_row[2] == 1
+
+        month_row = conn.execute(text("SELECT ID, ParentID, Attribute FROM djmdHistory WHERE ID = '202610';")).fetchone()
+        assert month_row is not None
+        assert month_row[1] == "2026"
+        assert month_row[2] == 1
+
+        # Check session created
+        sess_row = conn.execute(text("SELECT ID, Name, ParentID, Attribute FROM djmdHistory WHERE ID = 'sess_test_101';")).fetchone()
+        assert sess_row is not None
+        assert sess_row[1] == "HISTORY 2026-10-02 @ Fabric w Alex"
+        assert sess_row[2] == "202610"
+        assert sess_row[3] == 0
+
+        # Check tracks inserted in djmdSongHistory
+        songs = conn.execute(text("SELECT HistoryID, ContentID, TrackNo FROM djmdSongHistory WHERE HistoryID = 'sess_test_101' ORDER BY TrackNo ASC;")).fetchall()
+        assert len(songs) == 2
+        assert songs[0][1] == "c1"
+        assert songs[0][2] == 1
+        assert songs[1][1] == "c2"
+        assert songs[1][2] == 2
+
+        # Check play counts incremented
+        c1_count = conn.execute(text("SELECT DJPlayCount FROM djmdContent WHERE ID = 'c1';")).scalar()
+        c2_count = conn.execute(text("SELECT DJPlayCount FROM djmdContent WHERE ID = 'c2';")).scalar()
+        assert c1_count == 4  # 3 + 1
+        assert c2_count == 1  # 0 + 1
+

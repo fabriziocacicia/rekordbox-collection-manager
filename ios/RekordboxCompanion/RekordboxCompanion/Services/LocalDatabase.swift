@@ -97,8 +97,43 @@ final class LocalDatabase {
             processed_at TEXT,
             error_message TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS live_sessions (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            date_created TEXT NOT NULL,
+            location TEXT,
+            collaborators TEXT,
+            status TEXT NOT NULL DEFAULT 'ACTIVE',
+            started_at TEXT NOT NULL,
+            ended_at TEXT,
+            increment_play_counts INTEGER DEFAULT 1
+        );
+
+        CREATE TABLE IF NOT EXISTS live_session_tracks (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            track_id TEXT NOT NULL,
+            track_no INTEGER NOT NULL,
+            played_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_lst_session ON live_session_tracks(session_id);
+
+        CREATE TABLE IF NOT EXISTS history_sessions (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            date_created TEXT,
+            location TEXT,
+            collaborators TEXT,
+            track_count INTEGER DEFAULT 0,
+            updated_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_hs_loc ON history_sessions(location);
+        CREATE INDEX IF NOT EXISTS idx_hs_collab ON history_sessions(collaborators);
         """
         sqlite3_exec(db, sql, nil, nil, nil)
+        sqlite3_exec(db, "DELETE FROM live_sessions WHERE status = 'DISCARDED';", nil, nil, nil)
+        sqlite3_exec(db, "DELETE FROM live_session_tracks WHERE session_id NOT IN (SELECT id FROM live_sessions);", nil, nil, nil)
     }
 
     // MARK: - Upsert Functions
@@ -297,6 +332,51 @@ final class LocalDatabase {
         }
         sqlite3_finalize(stmt)
         return list
+    }
+
+    func getTrack(byId trackId: String) -> Track? {
+        let sql = """
+        SELECT id, title, artist, album, genre, bpm, key_name, rating, comment, color_id, dj_play_count, date_added, updated_at
+        FROM tracks
+        WHERE id = ?;
+        """
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
+        defer { sqlite3_finalize(stmt) }
+
+        sqlite3_bind_text(stmt, 1, (trackId as NSString).utf8String, -1, nil)
+        if sqlite3_step(stmt) == SQLITE_ROW {
+            let id = String(cString: sqlite3_column_text(stmt, 0))
+            let title = String(cString: sqlite3_column_text(stmt, 1))
+            let artist = sqlite3_column_text(stmt, 2).map { String(cString: $0) } ?? ""
+            let album = sqlite3_column_text(stmt, 3).map { String(cString: $0) } ?? ""
+            let genre = sqlite3_column_text(stmt, 4).map { String(cString: $0) } ?? ""
+            let bpm = sqlite3_column_double(stmt, 5)
+            let key = sqlite3_column_text(stmt, 6).map { String(cString: $0) } ?? ""
+            let rating = Int(sqlite3_column_int(stmt, 7))
+            let comment = sqlite3_column_text(stmt, 8).map { String(cString: $0) } ?? ""
+            let colorId = Int(sqlite3_column_int(stmt, 9))
+            let playCount = max(0, Int(sqlite3_column_int(stmt, 10)))
+            let dateAdded = sqlite3_column_text(stmt, 11).map { String(cString: $0) } ?? ""
+            let updatedAt = sqlite3_column_text(stmt, 12).map { String(cString: $0) } ?? ""
+
+            return Track(
+                id: id,
+                title: title,
+                artist: artist,
+                album: album,
+                genre: genre,
+                bpm: bpm,
+                keyName: key,
+                rating: rating,
+                comment: comment,
+                colorId: colorId,
+                djPlayCount: playCount,
+                dateAdded: dateAdded,
+                updatedAt: updatedAt
+            )
+        }
+        return nil
     }
 
     func getAllPlaylists() -> [Playlist] {
@@ -717,4 +797,526 @@ final class LocalDatabase {
         sqlite3_finalize(stmt)
         return id
     }
+
+    // MARK: - Live Session Operations
+    private var isoFormatter: ISO8601DateFormatter {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }
+
+    private var fallbackIsoFormatter: ISO8601DateFormatter {
+        ISO8601DateFormatter()
+    }
+
+    private func parseDate(_ string: String) -> Date {
+        if let d = isoFormatter.date(from: string) { return d }
+        if let d = fallbackIsoFormatter.date(from: string) { return d }
+        let df = DateFormatter()
+        df.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        if let d = df.date(from: string) { return d }
+        return Date()
+    }
+
+    func getActiveLiveSession() -> LiveSession? {
+        let sql = """
+        SELECT id, name, date_created, location, collaborators, status, started_at, ended_at, increment_play_counts
+        FROM live_sessions
+        WHERE status = 'ACTIVE'
+        ORDER BY started_at DESC
+        LIMIT 1;
+        """
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
+        defer { sqlite3_finalize(stmt) }
+
+        if sqlite3_step(stmt) == SQLITE_ROW {
+            let id = String(cString: sqlite3_column_text(stmt, 0))
+            let name = String(cString: sqlite3_column_text(stmt, 1))
+            let dateCreated = String(cString: sqlite3_column_text(stmt, 2))
+            let location = sqlite3_column_text(stmt, 3).map { String(cString: $0) }
+            let collaborators = sqlite3_column_text(stmt, 4).map { String(cString: $0) }
+            let statusRaw = String(cString: sqlite3_column_text(stmt, 5))
+            let startedAtStr = String(cString: sqlite3_column_text(stmt, 6))
+            let endedAtStr = sqlite3_column_text(stmt, 7).map { String(cString: $0) }
+            let incCounts = sqlite3_column_int(stmt, 8) != 0
+
+            let countSql = "SELECT count(*) FROM live_session_tracks WHERE session_id = ?;"
+            var countStmt: OpaquePointer?
+            var count = 0
+            if sqlite3_prepare_v2(db, countSql, -1, &countStmt, nil) == SQLITE_OK {
+                sqlite3_bind_text(countStmt, 1, (id as NSString).utf8String, -1, nil)
+                if sqlite3_step(countStmt) == SQLITE_ROW {
+                    count = Int(sqlite3_column_int(countStmt, 0))
+                }
+                sqlite3_finalize(countStmt)
+            }
+
+            return LiveSession(
+                id: id,
+                name: name,
+                dateCreated: dateCreated,
+                location: location,
+                collaborators: collaborators,
+                status: LiveSessionStatus(rawValue: statusRaw) ?? .active,
+                startedAt: parseDate(startedAtStr),
+                endedAt: endedAtStr.map { parseDate($0) },
+                incrementPlayCounts: incCounts,
+                trackCount: count
+            )
+        }
+        return nil
+    }
+
+    func getRecentLiveSessions(limit: Int = 10) -> [LiveSession] {
+        var list: [LiveSession] = []
+        let sql = """
+        SELECT id, name, date_created, location, collaborators, status, started_at, ended_at, increment_play_counts
+        FROM live_sessions
+        WHERE status = 'COMPLETED'
+        ORDER BY started_at DESC
+        LIMIT ?;
+        """
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+        defer { sqlite3_finalize(stmt) }
+
+        sqlite3_bind_int(stmt, 1, Int32(limit))
+
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            let id = String(cString: sqlite3_column_text(stmt, 0))
+            let name = String(cString: sqlite3_column_text(stmt, 1))
+            let dateCreated = String(cString: sqlite3_column_text(stmt, 2))
+            let location = sqlite3_column_text(stmt, 3).map { String(cString: $0) }
+            let collaborators = sqlite3_column_text(stmt, 4).map { String(cString: $0) }
+            let statusRaw = String(cString: sqlite3_column_text(stmt, 5))
+            let startedAtStr = String(cString: sqlite3_column_text(stmt, 6))
+            let endedAtStr = sqlite3_column_text(stmt, 7).map { String(cString: $0) }
+            let incCounts = sqlite3_column_int(stmt, 8) != 0
+
+            let countSql = "SELECT count(*) FROM live_session_tracks WHERE session_id = ?;"
+            var countStmt: OpaquePointer?
+            var count = 0
+            if sqlite3_prepare_v2(db, countSql, -1, &countStmt, nil) == SQLITE_OK {
+                sqlite3_bind_text(countStmt, 1, (id as NSString).utf8String, -1, nil)
+                if sqlite3_step(countStmt) == SQLITE_ROW {
+                    count = Int(sqlite3_column_int(countStmt, 0))
+                }
+                sqlite3_finalize(countStmt)
+            }
+
+            list.append(
+                LiveSession(
+                    id: id,
+                    name: name,
+                    dateCreated: dateCreated,
+                    location: location,
+                    collaborators: collaborators,
+                    status: LiveSessionStatus(rawValue: statusRaw) ?? .completed,
+                    startedAt: parseDate(startedAtStr),
+                    endedAt: endedAtStr.map { parseDate($0) },
+                    incrementPlayCounts: incCounts,
+                    trackCount: count
+                )
+            )
+        }
+        return list
+    }
+
+    func getLiveSessionTracks(sessionId: String) -> [LiveSessionTrack] {
+        var list: [LiveSessionTrack] = []
+        let sql = """
+        SELECT 
+            lst.id, lst.session_id, lst.track_id, lst.track_no, lst.played_at,
+            t.title, t.artist, t.album, t.genre, t.bpm, t.key_name, t.rating, t.comment, t.color_id, t.dj_play_count, t.date_added, t.updated_at
+        FROM live_session_tracks lst
+        LEFT JOIN tracks t ON lst.track_id = t.id
+        WHERE lst.session_id = ?
+        ORDER BY lst.track_no ASC;
+        """
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+        defer { sqlite3_finalize(stmt) }
+
+        sqlite3_bind_text(stmt, 1, (sessionId as NSString).utf8String, -1, nil)
+
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            let id = String(cString: sqlite3_column_text(stmt, 0))
+            let sessId = String(cString: sqlite3_column_text(stmt, 1))
+            let trackId = String(cString: sqlite3_column_text(stmt, 2))
+            let trackNo = Int(sqlite3_column_int(stmt, 3))
+            let playedAtStr = String(cString: sqlite3_column_text(stmt, 4))
+
+            var track: Track? = nil
+            if sqlite3_column_text(stmt, 5) != nil {
+                let title = String(cString: sqlite3_column_text(stmt, 5))
+                let artist = sqlite3_column_text(stmt, 6).map { String(cString: $0) } ?? ""
+                let album = sqlite3_column_text(stmt, 7).map { String(cString: $0) } ?? ""
+                let genre = sqlite3_column_text(stmt, 8).map { String(cString: $0) } ?? ""
+                let bpm = sqlite3_column_double(stmt, 9)
+                let keyName = sqlite3_column_text(stmt, 10).map { String(cString: $0) } ?? ""
+                let rating = Int(sqlite3_column_int(stmt, 11))
+                let comment = sqlite3_column_text(stmt, 12).map { String(cString: $0) } ?? ""
+                let colorId = Int(sqlite3_column_int(stmt, 13))
+                let djPlayCount = Int(sqlite3_column_int(stmt, 14))
+                let dateAdded = sqlite3_column_text(stmt, 15).map { String(cString: $0) } ?? ""
+                let updatedAt = sqlite3_column_text(stmt, 16).map { String(cString: $0) } ?? ""
+
+                track = Track(
+                    id: trackId,
+                    title: title,
+                    artist: artist,
+                    album: album,
+                    genre: genre,
+                    bpm: bpm,
+                    keyName: keyName,
+                    rating: rating,
+                    comment: comment,
+                    colorId: colorId,
+                    djPlayCount: djPlayCount,
+                    dateAdded: dateAdded,
+                    updatedAt: updatedAt
+                )
+            }
+
+            list.append(
+                LiveSessionTrack(
+                    id: id,
+                    sessionId: sessId,
+                    trackId: trackId,
+                    trackNo: trackNo,
+                    playedAt: parseDate(playedAtStr),
+                    track: track
+                )
+            )
+        }
+        return list
+    }
+
+    private let defaultLocations = [
+        "Velvet", "Chiringuito", "Controvento", "OZeta", "Rosa dei Venti", "Spiaggetta"
+    ]
+    private let defaultCollaborators = [
+        "Silvia", "Bacino", "Secco", "Genuardi", "PopFilters", "Pepito", "Buccheri", "Spataro", "TheAunt", "Totò Rizzo", "Salvo Rizzo"
+    ]
+
+    func getPastLocations() -> [String] {
+        var set = Set<String>()
+        var list: [String] = []
+
+        let sql = """
+        SELECT DISTINCT location FROM (
+            SELECT location, started_at AS dt FROM live_sessions WHERE status = 'COMPLETED' AND location IS NOT NULL AND location != ''
+            UNION ALL
+            SELECT location, date_created AS dt FROM history_sessions WHERE location IS NOT NULL AND location != ''
+        ) ORDER BY dt DESC LIMIT 50;
+        """
+        var stmt: OpaquePointer?
+        if sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK {
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                let loc = String(cString: sqlite3_column_text(stmt, 0)).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !loc.isEmpty && !set.contains(loc) {
+                    set.insert(loc)
+                    list.append(loc)
+                }
+            }
+            sqlite3_finalize(stmt)
+        }
+
+        // Include default seeds if not already present
+        for loc in defaultLocations {
+            if !set.contains(loc) {
+                set.insert(loc)
+                list.append(loc)
+            }
+        }
+        return list
+    }
+
+    func getPastCollaborators() -> [String] {
+        var set = Set<String>()
+        var list: [String] = []
+
+        let sql = """
+        SELECT DISTINCT collaborators FROM (
+            SELECT collaborators, started_at AS dt FROM live_sessions WHERE status = 'COMPLETED' AND collaborators IS NOT NULL AND collaborators != ''
+            UNION ALL
+            SELECT collaborators, date_created AS dt FROM history_sessions WHERE collaborators IS NOT NULL AND collaborators != ''
+        ) ORDER BY dt DESC LIMIT 50;
+        """
+        var stmt: OpaquePointer?
+        if sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK {
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                let collabs = String(cString: sqlite3_column_text(stmt, 0))
+                let parts = collabs.components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                for p in parts {
+                    if !p.isEmpty && !set.contains(p) {
+                        set.insert(p)
+                        list.append(p)
+                    }
+                }
+            }
+            sqlite3_finalize(stmt)
+        }
+
+        // Include default seeds if not already present
+        for col in defaultCollaborators {
+            if !set.contains(col) {
+                set.insert(col)
+                list.append(col)
+            }
+        }
+
+        return list
+    }
+
+    func upsertHistorySessions(_ historyList: [(id: String, name: String, dateCreated: String, location: String?, collaborators: String?, trackCount: Int, updatedAt: String)]) {
+        let sql = """
+        INSERT OR REPLACE INTO history_sessions (id, name, date_created, location, collaborators, track_count, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?);
+        """
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+        sqlite3_exec(db, "BEGIN TRANSACTION;", nil, nil, nil)
+        for h in historyList {
+            sqlite3_bind_text(stmt, 1, (h.id as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 2, (h.name as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 3, (h.dateCreated as NSString).utf8String, -1, nil)
+            if let loc = h.location {
+                sqlite3_bind_text(stmt, 4, (loc as NSString).utf8String, -1, nil)
+            } else {
+                sqlite3_bind_null(stmt, 4)
+            }
+            if let col = h.collaborators {
+                sqlite3_bind_text(stmt, 5, (col as NSString).utf8String, -1, nil)
+            } else {
+                sqlite3_bind_null(stmt, 5)
+            }
+            sqlite3_bind_int(stmt, 6, Int32(h.trackCount))
+            sqlite3_bind_text(stmt, 7, (h.updatedAt as NSString).utf8String, -1, nil)
+            sqlite3_step(stmt)
+            sqlite3_reset(stmt)
+        }
+        sqlite3_exec(db, "COMMIT;", nil, nil, nil)
+        sqlite3_finalize(stmt)
+    }
+
+    func startLiveSession(
+        name: String,
+        dateCreated: String,
+        location: String?,
+        collaborators: String?,
+        startedAt: Date = Date()
+    ) -> LiveSession {
+        let id = UUID().uuidString
+        let startedAtStr = ISO8601DateFormatter().string(from: startedAt)
+
+        let sql = """
+        INSERT INTO live_sessions (id, name, date_created, location, collaborators, status, started_at, increment_play_counts)
+        VALUES (?, ?, ?, ?, ?, 'ACTIVE', ?, 1);
+        """
+        var stmt: OpaquePointer?
+        if sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK {
+            sqlite3_bind_text(stmt, 1, (id as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 2, (name as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 3, (dateCreated as NSString).utf8String, -1, nil)
+            if let loc = location, !loc.isEmpty {
+                sqlite3_bind_text(stmt, 4, (loc as NSString).utf8String, -1, nil)
+            } else {
+                sqlite3_bind_null(stmt, 4)
+            }
+            if let col = collaborators, !col.isEmpty {
+                sqlite3_bind_text(stmt, 5, (col as NSString).utf8String, -1, nil)
+            } else {
+                sqlite3_bind_null(stmt, 5)
+            }
+            sqlite3_bind_text(stmt, 6, (startedAtStr as NSString).utf8String, -1, nil)
+            sqlite3_step(stmt)
+            sqlite3_finalize(stmt)
+        }
+
+        return LiveSession(
+            id: id,
+            name: name,
+            dateCreated: dateCreated,
+            location: location,
+            collaborators: collaborators,
+            status: .active,
+            startedAt: startedAt,
+            endedAt: nil,
+            incrementPlayCounts: true,
+            trackCount: 0
+        )
+    }
+
+    func addTrackToLiveSession(
+        sessionId: String,
+        trackId: String,
+        playedAt: Date = Date()
+    ) -> LiveSessionTrack? {
+        let maxSql = "SELECT COALESCE(MAX(track_no), 0) FROM live_session_tracks WHERE session_id = ?;"
+        var maxStmt: OpaquePointer?
+        var nextNo = 1
+        if sqlite3_prepare_v2(db, maxSql, -1, &maxStmt, nil) == SQLITE_OK {
+            sqlite3_bind_text(maxStmt, 1, (sessionId as NSString).utf8String, -1, nil)
+            if sqlite3_step(maxStmt) == SQLITE_ROW {
+                nextNo = Int(sqlite3_column_int(maxStmt, 0)) + 1
+            }
+            sqlite3_finalize(maxStmt)
+        }
+
+        let id = UUID().uuidString
+        let playedAtStr = ISO8601DateFormatter().string(from: playedAt)
+
+        let insSql = """
+        INSERT INTO live_session_tracks (id, session_id, track_id, track_no, played_at)
+        VALUES (?, ?, ?, ?, ?);
+        """
+        var insStmt: OpaquePointer?
+        if sqlite3_prepare_v2(db, insSql, -1, &insStmt, nil) == SQLITE_OK {
+            sqlite3_bind_text(insStmt, 1, (id as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(insStmt, 2, (sessionId as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(insStmt, 3, (trackId as NSString).utf8String, -1, nil)
+            sqlite3_bind_int(insStmt, 4, Int32(nextNo))
+            sqlite3_bind_text(insStmt, 5, (playedAtStr as NSString).utf8String, -1, nil)
+            sqlite3_step(insStmt)
+            sqlite3_finalize(insStmt)
+        }
+
+        let track = getTrack(byId: trackId)
+        return LiveSessionTrack(
+            id: id,
+            sessionId: sessionId,
+            trackId: trackId,
+            trackNo: nextNo,
+            playedAt: playedAt,
+            track: track
+        )
+    }
+
+    func removeTrackFromLiveSession(sessionId: String, liveTrackId: String) {
+        let delSql = "DELETE FROM live_session_tracks WHERE id = ? AND session_id = ?;"
+        var delStmt: OpaquePointer?
+        if sqlite3_prepare_v2(db, delSql, -1, &delStmt, nil) == SQLITE_OK {
+            sqlite3_bind_text(delStmt, 1, (liveTrackId as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(delStmt, 2, (sessionId as NSString).utf8String, -1, nil)
+            sqlite3_step(delStmt)
+            sqlite3_finalize(delStmt)
+        }
+
+        // Re-sequence remaining tracks: 1, 2, 3...
+        let remaining = getLiveSessionTracks(sessionId: sessionId)
+        reorderLiveSessionTracks(sessionId: sessionId, orderedLiveTrackIds: remaining.map { $0.id })
+    }
+
+    func reorderLiveSessionTracks(sessionId: String, orderedLiveTrackIds: [String]) {
+        sqlite3_exec(db, "BEGIN TRANSACTION;", nil, nil, nil)
+        let sql = "UPDATE live_session_tracks SET track_no = ? WHERE id = ? AND session_id = ?;"
+        var stmt: OpaquePointer?
+        if sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK {
+            for (idx, ltId) in orderedLiveTrackIds.enumerated() {
+                sqlite3_bind_int(stmt, 1, Int32(idx + 1))
+                sqlite3_bind_text(stmt, 2, (ltId as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(stmt, 3, (sessionId as NSString).utf8String, -1, nil)
+                sqlite3_step(stmt)
+                sqlite3_reset(stmt)
+            }
+            sqlite3_finalize(stmt)
+        }
+        sqlite3_exec(db, "COMMIT;", nil, nil, nil)
+    }
+
+    func endLiveSession(
+        sessionId: String,
+        incrementPlayCounts: Bool
+    ) {
+        let now = Date()
+        let nowStr = ISO8601DateFormatter().string(from: now)
+
+        let updateSql = """
+        UPDATE live_sessions
+        SET status = 'COMPLETED', ended_at = ?, increment_play_counts = ?
+        WHERE id = ?;
+        """
+        var updateStmt: OpaquePointer?
+        if sqlite3_prepare_v2(db, updateSql, -1, &updateStmt, nil) == SQLITE_OK {
+            sqlite3_bind_text(updateStmt, 1, (nowStr as NSString).utf8String, -1, nil)
+            sqlite3_bind_int(updateStmt, 2, incrementPlayCounts ? 1 : 0)
+            sqlite3_bind_text(updateStmt, 3, (sessionId as NSString).utf8String, -1, nil)
+            sqlite3_step(updateStmt)
+            sqlite3_finalize(updateStmt)
+        }
+
+        // Fetch session & tracks to create changelog event
+        let tracks = getLiveSessionTracks(sessionId: sessionId)
+
+        // Find session row
+        var sessionName = "HISTORY \(nowStr.prefix(10))"
+        var sessionDateCreated = nowStr
+        var sessionLocation = ""
+        var sessionCollaborators = ""
+
+        let fetchSql = "SELECT name, date_created, location, collaborators FROM live_sessions WHERE id = ?;"
+        var fetchStmt: OpaquePointer?
+        if sqlite3_prepare_v2(db, fetchSql, -1, &fetchStmt, nil) == SQLITE_OK {
+            sqlite3_bind_text(fetchStmt, 1, (sessionId as NSString).utf8String, -1, nil)
+            if sqlite3_step(fetchStmt) == SQLITE_ROW {
+                sessionName = String(cString: sqlite3_column_text(fetchStmt, 0))
+                sessionDateCreated = String(cString: sqlite3_column_text(fetchStmt, 1))
+                if let loc = sqlite3_column_text(fetchStmt, 2) { sessionLocation = String(cString: loc) }
+                if let col = sqlite3_column_text(fetchStmt, 3) { sessionCollaborators = String(cString: col) }
+            }
+            sqlite3_finalize(fetchStmt)
+        }
+
+        if incrementPlayCounts {
+            for t in tracks {
+                let incSql = "UPDATE tracks SET dj_play_count = dj_play_count + 1 WHERE id = ?;"
+                var incStmt: OpaquePointer?
+                if sqlite3_prepare_v2(db, incSql, -1, &incStmt, nil) == SQLITE_OK {
+                    sqlite3_bind_text(incStmt, 1, (t.trackId as NSString).utf8String, -1, nil)
+                    sqlite3_step(incStmt)
+                    sqlite3_finalize(incStmt)
+                }
+            }
+        }
+
+        let payloadTracks = tracks.map { t -> [String: Any] in
+            return [
+                "track_id": t.trackId,
+                "track_no": t.trackNo,
+                "played_at": ISO8601DateFormatter().string(from: t.playedAt)
+            ]
+        }
+
+        let payload: [String: Any] = [
+            "session_id": sessionId,
+            "session_name": sessionName,
+            "date_created": sessionDateCreated,
+            "location": sessionLocation,
+            "collaborators": sessionCollaborators,
+            "increment_play_counts": incrementPlayCounts,
+            "tracks": payloadTracks
+        ]
+
+        addChangelogEvent(action: "CREATE_HISTORY_SESSION", payload: payload)
+    }
+
+    func discardLiveSession(sessionId: String) {
+        let delTracks = "DELETE FROM live_session_tracks WHERE session_id = ?;"
+        var stmt1: OpaquePointer?
+        if sqlite3_prepare_v2(db, delTracks, -1, &stmt1, nil) == SQLITE_OK {
+            sqlite3_bind_text(stmt1, 1, (sessionId as NSString).utf8String, -1, nil)
+            sqlite3_step(stmt1)
+            sqlite3_finalize(stmt1)
+        }
+        let sql = "DELETE FROM live_sessions WHERE id = ?;"
+        var stmt2: OpaquePointer?
+        if sqlite3_prepare_v2(db, sql, -1, &stmt2, nil) == SQLITE_OK {
+            sqlite3_bind_text(stmt2, 1, (sessionId as NSString).utf8String, -1, nil)
+            sqlite3_step(stmt2)
+            sqlite3_finalize(stmt2)
+        }
+    }
 }
+

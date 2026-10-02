@@ -15,6 +15,12 @@ struct MainTabView: View {
                     Label("Playlists", systemImage: "folder")
                 }
 
+            LiveSetView()
+                .tabItem {
+                    Label("Live Set", systemImage: appState.activeSession != nil ? "record.circle.fill" : "record.circle")
+                }
+                .badge(appState.activeSession != nil ? "LIVE" : nil)
+
             TagsView()
                 .tabItem {
                     Label("MyTags", systemImage: "tag")

@@ -24,6 +24,8 @@
 		C8ADFC8555B456BF80D89BB9 /* TursoSyncService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45EB33DC443E58CE92FB66AD /* TursoSyncService.swift */; };
 		D365EC84CA4C5615826368D6 /* Tag.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE1579BD8A155488A69FCB6B /* Tag.swift */; };
 		FDFC3A1ACBED5C7D8458D965 /* Track.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9089C6898424573081429364 /* Track.swift */; };
+		A1B2C3D4E5F6A7B8C9D0E1F3 /* LiveSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E1F2 /* LiveSession.swift */; };
+		B2C3D4E5F6A7B8C9D0E1F2A4 /* LiveSetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2C3D4E5F6A7B8C9D0E1F2A3 /* LiveSetView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -45,6 +47,8 @@
 		DB3322F9D8B754AB87409B63 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		F235DFC2370750B2AD9D8986 /* LocalDatabase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LocalDatabase.swift; path = Services/LocalDatabase.swift; sourceTree = "<group>"; };
 		FEC6E67BEB5D5FB39F3F7EF4 /* RekordboxCompanionApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RekordboxCompanionApp.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6A7B8C9D0E1F2 /* LiveSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LiveSession.swift; path = Models/LiveSession.swift; sourceTree = "<group>"; };
+		B2C3D4E5F6A7B8C9D0E1F2A3 /* LiveSetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LiveSetView.swift; path = Views/LiveSetView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -85,6 +89,8 @@
 				B20030A0B3135D39BFA61FB4 /* TagsView.swift */,
 				7E453EB0E4325A9EA21617BE /* TrackDetailSheet.swift */,
 				566283224ED65A7DAF0F21ED /* TracksView.swift */,
+				A1B2C3D4E5F6A7B8C9D0E1F2 /* LiveSession.swift */,
+				B2C3D4E5F6A7B8C9D0E1F2A3 /* LiveSetView.swift */,
 				DB3322F9D8B754AB87409B63 /* Assets.xcassets */,
 			);
 			path = RekordboxCompanion;
@@ -182,6 +188,8 @@
 				239C845538295B0985310189 /* TagsView.swift in Sources */,
 				C77035E42E025683961C43F8 /* TrackDetailSheet.swift in Sources */,
 				87FAF107A0305BF8BACAC419 /* TracksView.swift in Sources */,
+				A1B2C3D4E5F6A7B8C9D0E1F3 /* LiveSession.swift in Sources */,
+				B2C3D4E5F6A7B8C9D0E1F2A4 /* LiveSetView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

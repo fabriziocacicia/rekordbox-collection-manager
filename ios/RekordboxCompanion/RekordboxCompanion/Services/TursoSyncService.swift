@@ -176,7 +176,40 @@ final class TursoSyncService {
         }
         LocalDatabase.shared.replaceTrackTags(ttList)
 
+        // 6. Safely Pull History Sessions
+        Task {
+            _ = try? await self.pullHistorySessions()
+        }
+
         return (tracks.count, playlists.count, tags.count)
+    }
+
+    func pullHistorySessions() async throws {
+        let req: [[String: Any]] = [
+            ["type": "execute", "stmt": ["sql": "CREATE TABLE IF NOT EXISTS history_sessions (id TEXT PRIMARY KEY, name TEXT NOT NULL, date_created TEXT, location TEXT, collaborators TEXT, track_count INTEGER DEFAULT 0, updated_at TEXT);"]],
+            ["type": "execute", "stmt": ["sql": "SELECT id, name, date_created, location, collaborators, track_count, updated_at FROM history_sessions;"]]
+        ]
+        let results = try await executePipeline(requests: req)
+        guard results.count >= 2,
+              let res = results[1]["response"] as? [String: Any],
+              let result = res["result"] as? [String: Any],
+              let rows = result["rows"] as? [[[String: Any]]] else { return }
+
+        var historyList: [(id: String, name: String, dateCreated: String, location: String?, collaborators: String?, trackCount: Int, updatedAt: String)] = []
+        for r in rows {
+            guard r.count >= 7 else { continue }
+            let id = r[0]["value"] as? String ?? ""
+            let name = r[1]["value"] as? String ?? ""
+            let dateCreated = r[2]["value"] as? String ?? ""
+            let location = r[3]["value"] as? String
+            let collaborators = r[4]["value"] as? String
+            let trackCount = Int(r[5]["value"] as? String ?? "") ?? (r[5]["value"] as? Int ?? 0)
+            let updatedAt = r[6]["value"] as? String ?? ""
+            historyList.append((id: id, name: name, dateCreated: dateCreated, location: location, collaborators: collaborators, trackCount: trackCount, updatedAt: updatedAt))
+        }
+        if !historyList.isEmpty {
+            LocalDatabase.shared.upsertHistorySessions(historyList)
+        }
     }
 
     // MARK: - Push Pending Events
