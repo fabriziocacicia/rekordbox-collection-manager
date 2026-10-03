@@ -161,13 +161,14 @@ ios/RekordboxCompanion/
     │   ├── TursoSyncService.swift   # Turso libSQL HTTP pipeline client
     │   └── AppState.swift           # App-wide state & sync coordinator
     └── Views/
-        ├── MainTabView.swift        # 4-Tab root navigation
+        ├── MainTabView.swift        # 5-Tab root navigation
         ├── TracksView.swift         # Search, filter, swipe actions, track details
         ├── TrackDetailSheet.swift   # Title, artist, rating, comments, MyTags editor
         ├── PlaylistsView.swift      # Folder & playlist browser, playlist creation
         ├── PlaylistDetailView.swift # Track reordering & removal
+        ├── LiveSetView.swift        # Mobile DJ live set tracker, venue tagging & history logging
         ├── TagsView.swift           # MyTag categories & tagged tracks
-        └── SyncQueueView.swift      # Real-time sync status, queue monitor, manual sync
+        └── SyncQueueView.swift      # Real-time sync status, queue monitor, manual sync & version
 ```
 
 ### Key Features & Desktop Parity
@@ -178,11 +179,12 @@ ios/RekordboxCompanion/
 - **Play Count Adjustment**: Quick stepper buttons (`[-]` and `[+]`) in track details and leading swipe gestures (`+1 Play`, `-1 Play` with a floor at 0) sync directly to `djmdContent.DJPlayCount`.
 - **Genre & Style Tag Categorization**: MyTags are strictly categorized into **Genre** and **Style** sections (matching desktop behavior, hiding Components and Situation) with live track counts per tag.
 - **Event-Sourced Cloud Sync**: Edits made on your iPhone (renaming tracks, star ratings, comments, tag assignments, play counts, playlist reordering) are logged into a local mutation queue and synced to Turso cloud via an HTTP pipeline (`TursoSyncService.swift`).
-- **4 Tabbed Interface**:
+- **5 Tabbed Interface**:
   1. **Tracks**: Full collection browser with multi-criteria sorting (Artist, Title, BPM, Rating, Play Count, Date Added), as-you-type search, star rating filters, key badges, swipe actions, and the `TrackDetailSheet` for editing.
   2. **Playlists**: Complete folder and playlist hierarchy navigation with live track count badges, drag-and-drop track reordering, and creation of new mobile playlists.
-  3. **MyTags**: Browse your collection grouped strictly by Genre and Style categories with track count badges.
-  4. **Sync & Queue**: Cloud connection health check, pending change counter, processed event audit history, and manual cloud sync trigger.
+  3. **Live Set**: Real-time mobile DJ set tracker. Log played tracks during a gig, track transitions, tag venues/dates, and sync completed sessions into Rekordbox history.
+  4. **MyTags**: Browse your collection grouped strictly by Genre and Style categories with track count badges.
+  5. **Sync & Queue**: Cloud connection health check, pending change counter, processed event audit history, dynamic version display, and manual cloud sync trigger.
 
 ### Building & Installing on iPhone
 
