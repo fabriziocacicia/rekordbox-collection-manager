@@ -60,7 +60,10 @@ final class AppState {
             // 2. Pull fresh collection from Turso
             _ = try await TursoSyncService.shared.pullLatestCollection()
 
-            // 3. Reload UI state from local database
+            // 3. Pull latest event statuses from Turso
+            try await TursoSyncService.shared.pullEventStatuses()
+
+            // 4. Reload UI state from local database
             loadFromCache()
             lastSyncDate = Date()
         } catch {
@@ -69,6 +72,29 @@ final class AppState {
         }
 
         isSyncing = false
+    }
+
+    private func triggerBackgroundPush() {
+        Task {
+            _ = try? await TursoSyncService.shared.pushPendingEvents()
+            _ = try? await TursoSyncService.shared.pullEventStatuses()
+            await MainActor.run {
+                self.loadFromCache()
+            }
+        }
+    }
+
+    func deleteChangelogEvents(at offsets: IndexSet) {
+        let idsToDelete = offsets.map { changelogEvents[$0].id }
+        for id in idsToDelete {
+            LocalDatabase.shared.deleteChangelogEvent(id: id)
+        }
+        loadFromCache()
+    }
+
+    func clearProcessedEvents() {
+        LocalDatabase.shared.clearProcessedChangelogEvents()
+        loadFromCache()
     }
 
     // MARK: - User Actions (Optimistic Update + Changelog Event)
@@ -92,9 +118,7 @@ final class AppState {
         loadFromCache()
 
         // 4. Background push
-        Task {
-            _ = try? await TursoSyncService.shared.pushPendingEvents()
-        }
+        triggerBackgroundPush()
     }
 
     func adjustPlayCount(track: Track, delta: Int) {
@@ -106,9 +130,7 @@ final class AppState {
         ]
         LocalDatabase.shared.addChangelogEvent(action: "UPDATE_PLAY_COUNT", payload: payload)
         loadFromCache()
-        Task {
-            _ = try? await TursoSyncService.shared.pushPendingEvents()
-        }
+        triggerBackgroundPush()
     }
 
     func reorderPlaylist(playlistId: String, trackIds: [String]) {
@@ -119,9 +141,7 @@ final class AppState {
         ]
         LocalDatabase.shared.addChangelogEvent(action: "UPDATE_PLAYLIST_ORDER", payload: payload)
         loadFromCache()
-        Task {
-            _ = try? await TursoSyncService.shared.pushPendingEvents()
-        }
+        triggerBackgroundPush()
     }
 
     func addTrackToPlaylist(trackId: String, playlistId: String) {
@@ -132,9 +152,7 @@ final class AppState {
         ]
         LocalDatabase.shared.addChangelogEvent(action: "ADD_TO_PLAYLIST", payload: payload)
         loadFromCache()
-        Task {
-            _ = try? await TursoSyncService.shared.pushPendingEvents()
-        }
+        triggerBackgroundPush()
     }
 
     func removeTrackFromPlaylist(trackId: String, playlistId: String) {
@@ -145,9 +163,7 @@ final class AppState {
         ]
         LocalDatabase.shared.addChangelogEvent(action: "REMOVE_FROM_PLAYLIST", payload: payload)
         loadFromCache()
-        Task {
-            _ = try? await TursoSyncService.shared.pushPendingEvents()
-        }
+        triggerBackgroundPush()
     }
 
     func createPlaylist(name: String, parentId: String?) {
@@ -158,9 +174,7 @@ final class AppState {
         }
         LocalDatabase.shared.addChangelogEvent(action: "CREATE_PLAYLIST", payload: payload)
         loadFromCache()
-        Task {
-            _ = try? await TursoSyncService.shared.pushPendingEvents()
-        }
+        triggerBackgroundPush()
     }
 
     // MARK: - Live Session Actions
@@ -204,9 +218,7 @@ final class AppState {
         activeSession = nil
         activeSessionTracks = []
         loadFromCache()
-        Task {
-            _ = try? await TursoSyncService.shared.pushPendingEvents()
-        }
+        triggerBackgroundPush()
     }
 
     func discardActiveSession() {

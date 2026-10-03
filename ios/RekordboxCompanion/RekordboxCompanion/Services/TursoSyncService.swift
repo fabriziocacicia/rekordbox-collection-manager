@@ -176,9 +176,10 @@ final class TursoSyncService {
         }
         LocalDatabase.shared.replaceTrackTags(ttList)
 
-        // 6. Safely Pull History Sessions
+        // 6. Safely Pull History Sessions & Event Statuses
         Task {
             _ = try? await self.pullHistorySessions()
+            _ = try? await self.pullEventStatuses()
         }
 
         return (tracks.count, playlists.count, tags.count)
@@ -235,6 +236,39 @@ final class TursoSyncService {
 
         _ = try await executePipeline(requests: requests)
         return pending.count
+    }
+
+    // MARK: - Pull Changelog Event Statuses
+    func pullEventStatuses() async throws {
+        let requests: [[String: Any]] = [
+            ["type": "execute", "stmt": ["sql": "SELECT id, action, payload, status, created_at, processed_at, error_message FROM changelog_events ORDER BY created_at DESC LIMIT 50;"]]
+        ]
+        let results = try await executePipeline(requests: requests)
+        guard let res = results.first?["response"] as? [String: Any],
+              let result = res["result"] as? [String: Any],
+              let rows = result["rows"] as? [[[String: Any]]] else { return }
+
+        for r in rows {
+            guard r.count >= 7 else { continue }
+            let id = r[0]["value"] as? String ?? ""
+            let action = r[1]["value"] as? String ?? ""
+            let payload = r[2]["value"] as? String ?? ""
+            let status = r[3]["value"] as? String ?? ""
+            let createdAt = r[4]["value"] as? String ?? ""
+            let processedAt = r[5]["value"] as? String
+            let errorMsg = r[6]["value"] as? String
+
+            guard !id.isEmpty, !status.isEmpty else { continue }
+            LocalDatabase.shared.upsertChangelogEvent(
+                id: id,
+                action: action,
+                payload: payload,
+                status: status,
+                createdAt: createdAt,
+                processedAt: processedAt,
+                errorMessage: errorMsg
+            )
+        }
     }
 
     // MARK: - Fetch Status

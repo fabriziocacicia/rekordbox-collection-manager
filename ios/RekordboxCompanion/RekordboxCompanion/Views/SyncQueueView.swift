@@ -66,7 +66,7 @@ struct SyncQueueView: View {
                     }
                 }
 
-                Section("Changelog Queue") {
+                Section {
                     if appState.changelogEvents.isEmpty {
                         Text("No events recorded yet.")
                             .foregroundStyle(.secondary)
@@ -83,8 +83,8 @@ struct SyncQueueView: View {
                                         .fontWeight(.bold)
                                         .padding(.horizontal, 6)
                                         .padding(.vertical, 2)
-                                        .background(event.isPending ? Color.orange.opacity(0.2) : Color.green.opacity(0.2))
-                                        .foregroundStyle(event.isPending ? .orange : .green)
+                                        .background(event.statusColor.opacity(0.15))
+                                        .foregroundStyle(event.statusColor)
                                         .clipShape(Capsule())
                                 }
 
@@ -93,11 +93,40 @@ struct SyncQueueView: View {
                                     .foregroundStyle(.secondary)
                                     .lineLimit(2)
 
-                                Text(event.formattedDate)
-                                    .font(.caption2)
-                                    .foregroundStyle(.tertiary)
+                                HStack {
+                                    Text("Created: \(event.formattedDate)")
+                                        .font(.caption2)
+                                        .foregroundStyle(.tertiary)
+                                    if let applied = event.formattedProcessedDate {
+                                        Spacer()
+                                        Text("Applied: \(applied)")
+                                            .font(.caption2)
+                                            .foregroundStyle(.green)
+                                    }
+                                }
+
+                                if let err = event.errorMessage, !err.isEmpty {
+                                    Text("Error: \(err)")
+                                        .font(.caption2)
+                                        .foregroundStyle(.red)
+                                }
                             }
                             .padding(.vertical, 4)
+                        }
+                        .onDelete { offsets in
+                            appState.deleteChangelogEvents(at: offsets)
+                        }
+                    }
+                } header: {
+                    HStack {
+                        Text("Changelog Queue")
+                        Spacer()
+                        if appState.changelogEvents.contains(where: { !$0.isPending }) {
+                            Button("Clear Completed") {
+                                appState.clearProcessedEvents()
+                            }
+                            .font(.caption)
+                            .textCase(.none)
                         }
                     }
                 }

@@ -669,19 +669,76 @@ final class LocalDatabase {
         return list
     }
 
-    func updateEventStatus(id: String, status: String, errorMessage: String? = nil) {
-        let sql = "UPDATE changelog_events SET status = ?, error_message = ? WHERE id = ?;"
+    func updateEventStatus(id: String, status: String, processedAt: String? = nil, errorMessage: String? = nil) {
+        let sql = "UPDATE changelog_events SET status = ?, processed_at = ?, error_message = ? WHERE id = ?;"
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
         sqlite3_bind_text(stmt, 1, (status as NSString).utf8String, -1, nil)
-        if let err = errorMessage {
-            sqlite3_bind_text(stmt, 2, (err as NSString).utf8String, -1, nil)
+        if let pat = processedAt {
+            sqlite3_bind_text(stmt, 2, (pat as NSString).utf8String, -1, nil)
         } else {
             sqlite3_bind_null(stmt, 2)
         }
-        sqlite3_bind_text(stmt, 3, (id as NSString).utf8String, -1, nil)
+        if let err = errorMessage {
+            sqlite3_bind_text(stmt, 3, (err as NSString).utf8String, -1, nil)
+        } else {
+            sqlite3_bind_null(stmt, 3)
+        }
+        sqlite3_bind_text(stmt, 4, (id as NSString).utf8String, -1, nil)
         sqlite3_step(stmt)
         sqlite3_finalize(stmt)
+    }
+
+    func upsertChangelogEvent(
+        id: String,
+        action: String,
+        payload: String,
+        status: String,
+        createdAt: String,
+        processedAt: String? = nil,
+        errorMessage: String? = nil
+    ) {
+        let sql = """
+        INSERT INTO changelog_events (id, action, payload, status, created_at, processed_at, error_message)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            status = excluded.status,
+            processed_at = excluded.processed_at,
+            error_message = excluded.error_message;
+        """
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+        sqlite3_bind_text(stmt, 1, (id as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(stmt, 2, (action as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(stmt, 3, (payload as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(stmt, 4, (status as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(stmt, 5, (createdAt as NSString).utf8String, -1, nil)
+        if let pat = processedAt {
+            sqlite3_bind_text(stmt, 6, (pat as NSString).utf8String, -1, nil)
+        } else {
+            sqlite3_bind_null(stmt, 6)
+        }
+        if let err = errorMessage {
+            sqlite3_bind_text(stmt, 7, (err as NSString).utf8String, -1, nil)
+        } else {
+            sqlite3_bind_null(stmt, 7)
+        }
+        sqlite3_step(stmt)
+        sqlite3_finalize(stmt)
+    }
+
+    func deleteChangelogEvent(id: String) {
+        let sql = "DELETE FROM changelog_events WHERE id = ?;"
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+        sqlite3_bind_text(stmt, 1, (id as NSString).utf8String, -1, nil)
+        sqlite3_step(stmt)
+        sqlite3_finalize(stmt)
+    }
+
+    func clearProcessedChangelogEvents() {
+        let sql = "DELETE FROM changelog_events WHERE status IN ('PROCESSED', 'FAILED');"
+        sqlite3_exec(db, sql, nil, nil, nil)
     }
 
     // MARK: - Optimistic Local Modifications
