@@ -47,6 +47,7 @@ flowchart TD
 - [2. Rekordbox Companion iOS App](#2-rekordbox-companion-ios-app)
   - [Key Features](#key-features)
   - [Building & Installing on iPhone](#building--installing-on-iphone)
+  - [App Versioning & SemVer CLI](#app-versioning--semver-cli)
 - [3. Rekordbox Sync Daemon (`rekordbox-daemon`)](#3-rekordbox-sync-daemon-rekordbox-daemon)
   - [Zero-Polling Cocoa Observer](#zero-polling-cocoa-observer)
   - [Configuration (`.env`)](#configuration-env)
@@ -199,6 +200,46 @@ ios/RekordboxCompanion/
 4. **Cloud Credentials**:
    - The app comes pre-configured with your Turso database URL and auth token in `TursoConfig.swift`.
    - Credentials can also be viewed or overridden directly inside the app under **Sync & Queue > Settings**.
+
+### App Versioning & SemVer CLI
+
+The companion app follows **Semantic Versioning** (`MAJOR.MINOR.PATCH`) mapped directly to Apple's native build settings:
+- **Marketing Version (`MARKETING_VERSION` / `CFBundleShortVersionString`)**: SemVer string (`0.1.0`) shown on the App Store, TestFlight, and dynamically rendered in the app footer.
+- **Build Number (`CURRENT_PROJECT_VERSION` / `CFBundleVersion`)**: Monotonically increasing build integer (`1, 2, 3...`) required for TestFlight/App Store uploads.
+
+A dedicated CLI script at [`scripts/ios_version.py`](scripts/ios_version.py) manages version bumps atomically across both `Debug` and `Release` build configurations in `project.pbxproj`:
+
+```bash
+# Check current version and build number
+./scripts/ios_version.py
+# 📱 Rekordbox Companion iOS:
+#    Marketing Version (SemVer): 0.1.0
+#    Build Number (Internal):    1
+
+# Bump PATCH: 0.1.0 -> 0.1.1 (build incremented: 1 -> 2)
+./scripts/ios_version.py patch
+
+# Bump MINOR: 0.1.0 -> 0.2.0 (build incremented: 1 -> 2)
+./scripts/ios_version.py minor
+
+# Bump MAJOR: 0.1.0 -> 1.0.0 (build incremented: 1 -> 2)
+./scripts/ios_version.py major
+
+# Bump only the internal build number (keeps SemVer, increments build)
+./scripts/ios_version.py build
+
+# Set an explicit SemVer version
+./scripts/ios_version.py set 0.2.0
+
+# Preview changes without modifying project files
+./scripts/ios_version.py patch --dry-run
+
+# Bump version, auto-commit to git, and create annotated tag 'ios-v0.1.1'
+./scripts/ios_version.py patch --commit --tag
+```
+
+> **Why a dedicated CLI instead of Apple's `agvtool`?**
+> Apple's built-in `agvtool` (from 2001/2017) has known parsing bugs with modern Xcode projects that use `GENERATE_INFOPLIST_FILE = YES`. It fails searching for `.../../YES` and silently leaves `MARKETING_VERSION` untouched in `project.pbxproj`. The `scripts/ios_version.py` script replaces it with a fast, safe, atomic SemVer manager.
 
 ---
 
