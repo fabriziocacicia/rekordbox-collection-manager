@@ -307,7 +307,7 @@ class TagsView(QWidget):
         """Refresh sidebar tag tree when tag chips are added or removed."""
         self._load_tags_tree()
 
-    def _load_tags_tree(self) -> None:
+    def _load_tags_tree(self, force_reload_selected: bool = False) -> None:
         """Fetch Genre & Style tags hierarchy in background thread."""
         if not self.engine:
             return
@@ -321,19 +321,45 @@ class TagsView(QWidget):
             category_names=("Genre", "Style"),
             parent=self,
         )
-        self.active_loader_worker.success.connect(self._on_tree_loaded)
+        self.active_loader_worker.success.connect(
+            lambda tree_data: self._on_tree_loaded(tree_data, force_reload_selected=force_reload_selected)
+        )
         self.active_loader_worker.error.connect(self._on_tree_error)
         self.active_loader_worker.start()
 
-    def _on_tree_loaded(self, tree_data: List[Dict[str, Any]]) -> None:
+    def _on_tree_loaded(
+        self, tree_data: List[Dict[str, Any]], force_reload_selected: bool = False
+    ) -> None:
+        # Preserve expanded folder IDs before clearing tree
+        expanded_ids = set()
+        it = QTreeWidgetItemIterator(self.tree)
+        while it.value():
+            item = it.value()
+            node = item.data(0, Qt.ItemDataRole.UserRole)
+            if node and item.isExpanded() and node.get("id"):
+                expanded_ids.add(str(node.get("id")))
+            it += 1
+
+        selected_id = str(self.current_tag.get("id")) if self.current_tag else None
+
         self.tags_tree_data = tree_data
         total_count = self._count_total_tags(tree_data)
         self.tree_header_label.setText(f"TAGS ({total_count})")
         self._populate_tree()
 
+        # Restore expanded folders
+        if expanded_ids:
+            it = QTreeWidgetItemIterator(self.tree)
+            while it.value():
+                item = it.value()
+                node = item.data(0, Qt.ItemDataRole.UserRole)
+                if node and str(node.get("id")) in expanded_ids:
+                    item.setExpanded(True)
+                it += 1
+
         # If a tag was previously selected or deep-linked, restore it; otherwise select first standard tag
-        if self.current_tag:
-            found = self.open_tag_by_id_or_name(self.current_tag.get("id", ""))
+        if selected_id:
+            found = self.open_tag_by_id_or_name(selected_id, force_reload=force_reload_selected)
             if not found:
                 self._select_first_tag()
         else:
@@ -703,9 +729,42 @@ class TagsView(QWidget):
                 f"Showing {cnt} tracks matching '{query}' in '{name}' ({duration_str})"
             )
         else:
+            self._update_tag_item_count(tag_id, cnt)
             self.status_label.setText(
                 f"Showing {cnt} tracks in '{name}' ({duration_str})"
             )
+
+    def _update_tag_item_count(self, tag_id: str, count: int) -> None:
+        """Update track count badge in tree and cached data for a specific tag."""
+        target_tid = str(tag_id).strip()
+
+        def update_node_data(nodes: List[Dict[str, Any]]) -> bool:
+            for n in nodes:
+                if str(n.get("id")).strip() == target_tid:
+                    n["track_count"] = count
+                    return True
+                if n.get("children") and update_node_data(n["children"]):
+                    return True
+            return False
+
+        update_node_data(self.tags_tree_data)
+        if self.current_tag and str(self.current_tag.get("id")).strip() == target_tid:
+            self.current_tag["track_count"] = count
+
+        it = QTreeWidgetItemIterator(self.tree)
+        while it.value():
+            item = it.value()
+            node = item.data(0, Qt.ItemDataRole.UserRole)
+            if node and str(node.get("id")).strip() == target_tid:
+                node["track_count"] = count
+                attr = node.get("attribute", 0)
+                name = node.get("name", "Untitled")
+                cnt_str = f"({count})" if count > 0 else "(0)"
+                if attr != 1:
+                    item.setText(0, f"🏷️ {name}  {cnt_str}")
+                    item.setToolTip(0, f"Tag: {name}\nTracks: {count}")
+                break
+            it += 1
 
     def _on_tracks_error(self, err_msg: str) -> None:
         self.status_label.setText(f"❌ Error loading tag tracks: {err_msg}")
@@ -776,7 +835,7 @@ class TagsView(QWidget):
     # ==========================================================================
     # Public Deep-Linking Interface
     # ==========================================================================
-    def open_tag_by_id_or_name(self, tag_id_or_name: str) -> bool:
+    def open_tag_by_id_or_name(self, tag_id_or_name: str, force_reload: bool = False) -> bool:
         """Find and select tag by ID or Name, expanding parent categories.
 
         Handles integer signed/unsigned conversions to guarantee matches.
@@ -835,10 +894,16 @@ class TagsView(QWidget):
                 p = p.parent()
 
             self.tree.setCurrentItem(target_item)
-            self.load_tag(target_node)
+            self.load_tag(target_node, force_reload=force_reload)
             return True
 
         return False
+
+    def refresh(self, force_reload_tracks: bool = True) -> None:
+        """Reload the tags tree and refresh currently selected tag tracks."""
+        if not self.engine:
+            return
+        self._load_tags_tree(force_reload_selected=force_reload_tracks)
 
     def reset_to_list(self) -> None:
         """Reset view stack to tracks table."""

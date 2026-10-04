@@ -436,6 +436,15 @@ class MainWindow(QMainWindow):
                 self.tags_view.reset_to_list()
             elif page_id == 4 and hasattr(self.play_count_view, "reset_to_list"):
                 self.play_count_view.reset_to_list()
+
+        # When navigating to or clicking Playlists, refresh hierarchy & counts from database
+        if page_id == 2 and hasattr(self, "playlists_view"):
+            self.playlists_view.refresh(force_reload_tracks=True)
+            if is_turso_configured() and not is_rekordbox_running():
+                self.trigger_sync(background=True, create_backup=False)
+        elif page_id == 3 and hasattr(self, "tags_view"):
+            self.tags_view.refresh(force_reload_tracks=True)
+
         self.stacked_widget.setCurrentIndex(page_id)
 
     def open_history_session(self, history_id: str) -> None:
@@ -450,14 +459,14 @@ class MainWindow(QMainWindow):
         if self.nav_buttons and len(self.nav_buttons) > 2:
             self.nav_buttons[2].setChecked(True)
         self.stacked_widget.setCurrentIndex(2)
-        self.playlists_view.open_playlist_by_id_or_name(playlist_name_or_id)
+        self.playlists_view.open_playlist_by_id_or_name(playlist_name_or_id, force_reload=True)
 
     def open_tag(self, tag_name_or_id: str) -> None:
         """Switch navigation to Tags tab and select the requested tag."""
         if self.nav_buttons and len(self.nav_buttons) > 3:
             self.nav_buttons[3].setChecked(True)
         self.stacked_widget.setCurrentIndex(3)
-        self.tags_view.open_tag_by_id_or_name(tag_name_or_id)
+        self.tags_view.open_tag_by_id_or_name(tag_name_or_id, force_reload=True)
 
     def open_replace_file_for_track(self, track_data: Dict[str, Any]) -> None:
         """Switch navigation to Replace File tab and preselect track."""

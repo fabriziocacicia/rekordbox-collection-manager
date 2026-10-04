@@ -298,7 +298,7 @@ class PlaylistsView(QWidget):
         """Refresh sidebar playlist tree when playlist chips are added or removed."""
         self._load_playlists_tree()
 
-    def _load_playlists_tree(self) -> None:
+    def _load_playlists_tree(self, force_reload_selected: bool = False) -> None:
         """Fetch all playlists and folders in background thread."""
         if not self.engine:
             return
@@ -309,19 +309,45 @@ class PlaylistsView(QWidget):
         self.active_loader_worker = PlaylistLoaderWorker(
             self.engine, include_deleted=self.show_deleted, parent=self
         )
-        self.active_loader_worker.success.connect(self._on_tree_loaded)
+        self.active_loader_worker.success.connect(
+            lambda tree_data: self._on_tree_loaded(tree_data, force_reload_selected=force_reload_selected)
+        )
         self.active_loader_worker.error.connect(self._on_tree_error)
         self.active_loader_worker.start()
 
-    def _on_tree_loaded(self, tree_data: List[Dict[str, Any]]) -> None:
+    def _on_tree_loaded(
+        self, tree_data: List[Dict[str, Any]], force_reload_selected: bool = False
+    ) -> None:
+        # Preserve expanded folder IDs before clearing tree
+        expanded_ids = set()
+        it = QTreeWidgetItemIterator(self.tree)
+        while it.value():
+            item = it.value()
+            node = item.data(0, Qt.ItemDataRole.UserRole)
+            if node and item.isExpanded() and node.get("id"):
+                expanded_ids.add(str(node.get("id")))
+            it += 1
+
+        selected_id = str(self.current_playlist.get("id")) if self.current_playlist else None
+
         self.playlists_tree_data = tree_data
         total_count = self._count_total_playlists(tree_data)
         self.tree_header_label.setText(f"PLAYLISTS ({total_count})")
         self._populate_tree()
 
+        # Restore expanded folders
+        if expanded_ids:
+            it = QTreeWidgetItemIterator(self.tree)
+            while it.value():
+                item = it.value()
+                node = item.data(0, Qt.ItemDataRole.UserRole)
+                if node and str(node.get("id")) in expanded_ids:
+                    item.setExpanded(True)
+                it += 1
+
         # If a playlist was previously selected or deep-linked, restore it; otherwise select first standard playlist
-        if self.current_playlist:
-            found = self.open_playlist_by_id_or_name(self.current_playlist["id"])
+        if selected_id:
+            found = self.open_playlist_by_id_or_name(selected_id, force_reload=force_reload_selected)
             if not found:
                 self._select_first_playlist()
         else:
@@ -597,9 +623,43 @@ class PlaylistsView(QWidget):
                 f"Showing {cnt} tracks matching '{query}' in '{name}' ({duration_str})"
             )
         else:
+            self._update_playlist_item_count(playlist_id, cnt)
             self.status_label.setText(
                 f"Showing {cnt} tracks in '{name}' ({duration_str})"
             )
+
+    def _update_playlist_item_count(self, playlist_id: str, count: int) -> None:
+        """Update track count badge in tree and cached data for a specific playlist."""
+        def update_node_data(nodes: List[Dict[str, Any]]) -> bool:
+            for n in nodes:
+                if str(n.get("id")) == str(playlist_id):
+                    n["track_count"] = count
+                    return True
+                if n.get("children") and update_node_data(n["children"]):
+                    return True
+            return False
+
+        update_node_data(self.playlists_tree_data)
+        if self.current_playlist and str(self.current_playlist.get("id")) == str(playlist_id):
+            self.current_playlist["track_count"] = count
+
+        it = QTreeWidgetItemIterator(self.tree)
+        while it.value():
+            item = it.value()
+            node = item.data(0, Qt.ItemDataRole.UserRole)
+            if node and str(node.get("id")) == str(playlist_id):
+                node["track_count"] = count
+                attr = node.get("attribute", 0)
+                name = node.get("name", "Untitled")
+                cnt_str = f"({count})" if count > 0 else "(0)"
+                if attr == 4:
+                    item.setText(0, f"⚡ {name}  {cnt_str}")
+                    item.setToolTip(0, f"Smart Playlist: {name}\nTracks: {count}")
+                elif attr != 1:
+                    item.setText(0, f"📑 {name}  {cnt_str}")
+                    item.setToolTip(0, f"Playlist: {name}\nTracks: {count}")
+                break
+            it += 1
 
     def _on_tracks_error(self, err_msg: str) -> None:
         self.status_label.setText(f"❌ Error loading playlist tracks: {err_msg}")
@@ -670,7 +730,9 @@ class PlaylistsView(QWidget):
     # ==========================================================================
     # Public Deep-Linking Interface
     # ==========================================================================
-    def open_playlist_by_id_or_name(self, playlist_id_or_name: str) -> bool:
+    def open_playlist_by_id_or_name(
+        self, playlist_id_or_name: str, force_reload: bool = False
+    ) -> bool:
         """Find and select playlist by ID or Name, expanding parent folders.
 
         Returns True if playlist was found and opened; False otherwise.
@@ -703,10 +765,16 @@ class PlaylistsView(QWidget):
                 p = p.parent()
 
             self.tree.setCurrentItem(target_item)
-            self.load_playlist(target_node)
+            self.load_playlist(target_node, force_reload=force_reload)
             return True
 
         return False
+
+    def refresh(self, force_reload_tracks: bool = True) -> None:
+        """Reload the playlist tree and refresh currently selected playlist tracks."""
+        if not self.engine:
+            return
+        self._load_playlists_tree(force_reload_selected=force_reload_tracks)
 
     def reset_to_list(self) -> None:
         """Reset view stack to tracks table."""

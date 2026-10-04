@@ -64,17 +64,48 @@ def fetch_tags_tree(
                     "PRAGMA table_info(djmdSongMyTag);"
                 ).fetchall()
             }
+            c_cols = {
+                r[1]
+                for r in conn.exec_driver_sql(
+                    "PRAGMA table_info(djmdContent);"
+                ).fetchall()
+            } if "djmdContent" in existing_tables else set()
+
             smt_del = (
-                "WHERE (rb_local_deleted = 0 OR rb_local_deleted IS NULL)"
+                "AND (smt.rb_local_deleted = 0 OR smt.rb_local_deleted IS NULL)"
                 if "rb_local_deleted" in smt_cols
                 else ""
             )
-            count_sql = f"""
-                SELECT MyTagID, count(*) 
-                FROM djmdSongMyTag 
-                {smt_del}
-                GROUP BY MyTagID;
-            """
+            c_del = (
+                "AND (c.rb_local_deleted = 0 OR c.rb_local_deleted IS NULL)"
+                if "rb_local_deleted" in c_cols
+                else ""
+            )
+            streaming_filter = build_exclude_streaming_clause(c_cols, table_alias="c")
+
+            if "djmdContent" in existing_tables:
+                count_sql = f"""
+                    SELECT smt.MyTagID, count(smt.ContentID) 
+                    FROM djmdSongMyTag smt
+                    JOIN djmdContent c ON smt.ContentID = c.ID
+                    WHERE 1=1
+                      {smt_del}
+                      {c_del}
+                      {streaming_filter}
+                    GROUP BY smt.MyTagID;
+                """
+            else:
+                del_clause = (
+                    "WHERE (rb_local_deleted = 0 OR rb_local_deleted IS NULL)"
+                    if "rb_local_deleted" in smt_cols
+                    else ""
+                )
+                count_sql = f"""
+                    SELECT MyTagID, count(*) 
+                    FROM djmdSongMyTag 
+                    {del_clause}
+                    GROUP BY MyTagID;
+                """
             for row in conn.execute(text(count_sql)).fetchall():
                 if row[0] is not None:
                     raw_id = str(row[0])

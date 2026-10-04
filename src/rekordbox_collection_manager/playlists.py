@@ -204,6 +204,15 @@ def fetch_playlists_tree(
             for r in conn.exec_driver_sql("PRAGMA table_info(djmdPlaylist);").fetchall()
         }
 
+        c_cols = set()
+        if "djmdContent" in existing_tables:
+            c_cols = {
+                r[1]
+                for r in conn.exec_driver_sql("PRAGMA table_info(djmdContent);").fetchall()
+            }
+        c_del = "AND (c.rb_local_deleted = 0 OR c.rb_local_deleted IS NULL)" if "rb_local_deleted" in c_cols else ""
+        streaming_filter = build_exclude_streaming_clause(c_cols, table_alias="c")
+
         # Check for djmdSongPlaylist to count tracks
         track_counts: Dict[str, int] = {}
         if "djmdSongPlaylist" in existing_tables:
@@ -214,16 +223,33 @@ def fetch_playlists_tree(
                 ).fetchall()
             }
             sp_del = (
-                "WHERE (rb_local_deleted = 0 OR rb_local_deleted IS NULL)"
+                "AND (sp.rb_local_deleted = 0 OR sp.rb_local_deleted IS NULL)"
                 if "rb_local_deleted" in sp_cols
                 else ""
             )
-            count_sql = f"""
-                SELECT PlaylistID, count(*) 
-                FROM djmdSongPlaylist 
-                {sp_del}
-                GROUP BY PlaylistID;
-            """
+            if "djmdContent" in existing_tables:
+                count_sql = f"""
+                    SELECT sp.PlaylistID, count(sp.ContentID) 
+                    FROM djmdSongPlaylist sp
+                    JOIN djmdContent c ON sp.ContentID = c.ID
+                    WHERE 1=1
+                      {sp_del}
+                      {c_del}
+                      {streaming_filter}
+                    GROUP BY sp.PlaylistID;
+                """
+            else:
+                sp_del_where = (
+                    "WHERE (rb_local_deleted = 0 OR rb_local_deleted IS NULL)"
+                    if "rb_local_deleted" in sp_cols
+                    else ""
+                )
+                count_sql = f"""
+                    SELECT PlaylistID, count(*) 
+                    FROM djmdSongPlaylist 
+                    {sp_del_where}
+                    GROUP BY PlaylistID;
+                """
             for row in conn.execute(text(count_sql)).fetchall():
                 if row[0] is not None:
                     track_counts[str(row[0])] = int(row[1])
@@ -263,12 +289,6 @@ def fetch_playlists_tree(
         all_nodes: Dict[str, Dict[str, Any]] = {}
         items_list: List[Dict[str, Any]] = []
 
-        c_cols = set()
-        if "djmdContent" in existing_tables:
-            c_cols = {
-                r[1]
-                for r in conn.exec_driver_sql("PRAGMA table_info(djmdContent);").fetchall()
-            }
         artist_name_expr = (
             "COALESCE(a.Name, c.SrcArtistName, 'Unknown Artist')"
             if "djmdArtist" in existing_tables
@@ -281,7 +301,6 @@ def fetch_playlists_tree(
         join_al = "LEFT JOIN djmdAlbum al ON c.AlbumID = al.ID" if "djmdAlbum" in existing_tables else ""
         join_g = "LEFT JOIN djmdGenre g ON c.GenreID = g.ID" if "djmdGenre" in existing_tables else ""
         join_k = "LEFT JOIN djmdKey k ON c.KeyID = k.ID" if "djmdKey" in existing_tables else ""
-        c_del = "AND (c.rb_local_deleted = 0 OR c.rb_local_deleted IS NULL)" if "rb_local_deleted" in c_cols else ""
 
         for r in rows:
             pl_id = str(r[0])
@@ -311,7 +330,8 @@ def fetch_playlists_tree(
                         {join_g}
                         {join_k}
                         WHERE {clause}
-                          {c_del};
+                          {c_del}
+                          {streaming_filter};
                     """
                     cnt = conn.execute(text(cnt_sql), p_dict).scalar()
                     track_counts[pl_id] = int(cnt or 0)

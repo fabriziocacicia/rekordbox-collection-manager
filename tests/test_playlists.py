@@ -160,6 +160,20 @@ class TestPlaylistsBackend(unittest.TestCase):
         smart_node = next(n for n in tree if n["id"] == "pl_smart")
         self.assertEqual(smart_node["track_count"], 2)
 
+    def test_fetch_playlists_tree_excludes_deleted_content_and_streaming(self):
+        with self.engine.begin() as conn:
+            # Add a deleted track to Afro House
+            conn.exec_driver_sql("INSERT INTO djmdContent (ID, Title, FolderPath, rb_local_deleted) VALUES ('t_del', 'Deleted Track', '/path', 1);")
+            conn.exec_driver_sql("INSERT INTO djmdSongPlaylist (ID, PlaylistID, ContentID, TrackNo) VALUES ('sp_del', 'pl_afro', 't_del', 99);")
+            # Add a streaming track to Afro House (e.g. Beatport streaming URI)
+            conn.exec_driver_sql("INSERT INTO djmdContent (ID, Title, FolderPath, FileType, rb_local_deleted) VALUES ('t_stream', 'Stream Track', 'beatport:track/123', 25, 0);")
+            conn.exec_driver_sql("INSERT INTO djmdSongPlaylist (ID, PlaylistID, ContentID, TrackNo) VALUES ('sp_stream', 'pl_afro', 't_stream', 100);")
+
+        tree = fetch_playlists_tree(self.engine, include_deleted=False)
+        folder = next(n for n in tree if n["id"] == "fld_house")
+        afro_node = next(n for n in folder["children"] if n["id"] == "pl_afro")
+        self.assertEqual(afro_node["track_count"], 2)
+
     def test_parse_smartlist_to_sql_my_tag(self):
         xml_str = '<NODE LogicalOperator="1"><CONDITION PropertyName="myTag" Operator="8" ValueUnit="" ValueLeft="-1971334219" ValueRight=""/></NODE>'
         clause, params = parse_smartlist_to_sql(xml_str)
@@ -307,6 +321,27 @@ class TestPlaylistsGUI(unittest.TestCase):
         first_chip.clicked.emit(first_chip.text)
         self.assertEqual(clicked_playlists, ["Afro House"])
 
+    def test_update_playlist_item_count(self):
+        tree_data = [
+            {
+                "id": "pl_1",
+                "name": "Warm Deep House",
+                "attribute": 0,
+                "parent_id": None,
+                "track_count": 1,
+                "children": [],
+            }
+        ]
+        self.view._on_tree_loaded(tree_data)
+        item = self.view.tree.topLevelItem(0)
+        self.assertIn("(1)", item.text(0))
+
+        # Update count to 3
+        self.view._update_playlist_item_count("pl_1", 3)
+        self.assertIn("(3)", item.text(0))
+        self.assertIn("Tracks: 3", item.toolTip(0))
+        self.assertEqual(self.view.playlists_tree_data[0]["track_count"], 3)
+
     def test_main_window_open_playlist_navigation(self):
         with patch.object(MainWindow, "load_database"), patch.object(MainWindow, "_check_rekordbox_status"):
             win = MainWindow(initial_db_path=None)
@@ -320,6 +355,17 @@ class TestPlaylistsGUI(unittest.TestCase):
                 win.open_playlist("Afro House")
                 self.assertEqual(win.stacked_widget.currentIndex(), 2)
                 self.assertTrue(win.btn_playlists.isChecked())
+            finally:
+                win.safety_timer.stop()
+                win.close()
+
+    def test_main_window_nav_click_refreshes_playlists(self):
+        with patch.object(MainWindow, "load_database"), patch.object(MainWindow, "_check_rekordbox_status"):
+            win = MainWindow(initial_db_path=None)
+            try:
+                with patch.object(win.playlists_view, "refresh") as mock_refresh:
+                    win._on_nav_clicked(2)
+                    mock_refresh.assert_called_once_with(force_reload_tracks=True)
             finally:
                 win.safety_timer.stop()
                 win.close()
