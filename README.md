@@ -44,6 +44,7 @@ flowchart TD
 - [1. Desktop Application (`rekordbox-manager` / `rekordbox-gui`)](#1-desktop-application-rekordbox-manager--rekordbox-gui)
   - [Views & Features](#views--features)
   - [Launching the Desktop App](#launching-the-desktop-app)
+  - [Desktop App Versioning & SemVer CLI](#desktop-app-versioning--semver-cli)
 - [2. Rekordbox Companion iOS App](#2-rekordbox-companion-ios-app)
   - [Key Features](#key-features)
   - [Building & Installing on iPhone](#building--installing-on-iphone)
@@ -137,6 +138,37 @@ uv run rekordbox-gui
 
 # Launch with custom database (e.g. USB exportLibrary.db)
 uv run rekordbox-manager -d /Volumes/USB/PIONEER/exportLibrary.db
+```
+
+### Desktop App Versioning & SemVer CLI
+
+The desktop application follows **Semantic Versioning** (`MAJOR.MINOR.PATCH`) stored in [`pyproject.toml`](pyproject.toml) and synchronized with [`uv.lock`](uv.lock).
+
+A dedicated CLI script at [`scripts/desktop_version.py`](scripts/desktop_version.py) manages version bumps, syncs the lockfile, and automates Git commits and tags:
+
+```bash
+# Check current desktop version
+./scripts/desktop_version.py
+# 💻 Rekordbox Collection Manager Desktop:
+#    Version (SemVer): 0.9.0
+
+# Bump PATCH: 0.9.0 -> 0.9.1
+./scripts/desktop_version.py patch
+
+# Bump MINOR: 0.9.0 -> 0.10.0
+./scripts/desktop_version.py minor
+
+# Bump MAJOR: 0.9.0 -> 1.0.0
+./scripts/desktop_version.py major
+
+# Set an explicit SemVer version
+./scripts/desktop_version.py set 1.0.0
+
+# Preview changes without modifying project files
+./scripts/desktop_version.py patch --dry-run
+
+# Bump version, sync uv.lock, auto-commit to git, and create annotated tag 'v0.9.1'
+./scripts/desktop_version.py patch --commit --tag
 ```
 
 ---
