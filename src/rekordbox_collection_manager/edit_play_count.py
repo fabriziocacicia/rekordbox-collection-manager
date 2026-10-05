@@ -12,6 +12,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from rekordbox_collection_manager.utils import (
+    _resolve_tag_matching_ids,
     build_exclude_streaming_clause,
     build_track_record,
     detect_content_table,
@@ -141,26 +142,72 @@ def search_tracks(
             has_playlist = "djmdSongPlaylist" in existing_tables and "djmdPlaylist" in existing_tables
 
             if has_my_tag:
-                tag_expr = """(
-                    SELECT GROUP_CONCAT(t.Name, '|||')
-                    FROM djmdSongMyTag smt
-                    JOIN djmdMyTag t ON smt.MyTagID = t.ID
-                    WHERE smt.ContentID = c.ID
-                      AND (smt.rb_local_deleted = 0 OR smt.rb_local_deleted IS NULL)
-                      AND (t.rb_local_deleted = 0 OR t.rb_local_deleted IS NULL)
+                tag_cols = {
+                    r[1] for r in conn.exec_driver_sql("PRAGMA table_info(djmdMyTag);").fetchall()
+                }
+                smt_cols = {
+                    r[1] for r in conn.exec_driver_sql("PRAGMA table_info(djmdSongMyTag);").fetchall()
+                }
+                tag_del = (
+                    "AND (t.rb_local_deleted = 0 OR t.rb_local_deleted IS NULL)"
+                    if "rb_local_deleted" in tag_cols
+                    else ""
+                )
+                smt_del = (
+                    "AND (smt.rb_local_deleted = 0 OR smt.rb_local_deleted IS NULL)"
+                    if "rb_local_deleted" in smt_cols
+                    else ""
+                )
+                tag_seq = "t.Seq ASC, " if "Seq" in tag_cols else ""
+                tag_expr = f"""(
+                    SELECT GROUP_CONCAT(Name, '|||')
+                    FROM (
+                        SELECT DISTINCT t.Name
+                        FROM djmdSongMyTag smt
+                        JOIN djmdMyTag t ON smt.MyTagID = t.ID
+                        WHERE smt.ContentID = c.ID
+                          {smt_del}
+                          {tag_del}
+                        ORDER BY {tag_seq}lower(t.Name) ASC
+                    )
                 ) AS TagNames"""
             else:
                 tag_expr = "NULL AS TagNames"
 
             if has_playlist:
-                playlist_expr = """(
-                    SELECT GROUP_CONCAT(p.Name, '|||')
-                    FROM djmdSongPlaylist sp
-                    JOIN djmdPlaylist p ON sp.PlaylistID = p.ID
-                    WHERE sp.ContentID = c.ID
-                      AND p.Attribute = 0
-                      AND (p.rb_local_deleted = 0 OR p.rb_local_deleted IS NULL)
-                      AND (sp.rb_local_deleted = 0 OR sp.rb_local_deleted IS NULL)
+                p_cols = {
+                    r[1] for r in conn.exec_driver_sql("PRAGMA table_info(djmdPlaylist);").fetchall()
+                }
+                sp_cols = {
+                    r[1] for r in conn.exec_driver_sql("PRAGMA table_info(djmdSongPlaylist);").fetchall()
+                }
+                p_del = (
+                    "AND (p.rb_local_deleted = 0 OR p.rb_local_deleted IS NULL)"
+                    if "rb_local_deleted" in p_cols
+                    else ""
+                )
+                sp_del = (
+                    "AND (sp.rb_local_deleted = 0 OR sp.rb_local_deleted IS NULL)"
+                    if "rb_local_deleted" in sp_cols
+                    else ""
+                )
+                p_attr = (
+                    "AND p.Attribute = 0"
+                    if "Attribute" in p_cols
+                    else ""
+                )
+                playlist_expr = f"""(
+                    SELECT GROUP_CONCAT(Name, '|||')
+                    FROM (
+                        SELECT DISTINCT p.Name
+                        FROM djmdSongPlaylist sp
+                        JOIN djmdPlaylist p ON sp.PlaylistID = p.ID
+                        WHERE sp.ContentID = c.ID
+                          {p_attr}
+                          {p_del}
+                          {sp_del}
+                        ORDER BY lower(p.Name) ASC
+                    )
                 ) AS PlaylistNames"""
             else:
                 playlist_expr = "NULL AS PlaylistNames"
@@ -690,14 +737,20 @@ def add_track_to_tag(
         tag_id = str(tag_row[0])
         content_id_str = str(content_id)
 
-        # Check existing association in djmdSongMyTag
+        # Check existing association in djmdSongMyTag (matching signed/unsigned representations)
         has_rb_del = "rb_local_deleted" in smt_cols
+        matching_tids = _resolve_tag_matching_ids(tag_id)
+        placeholders = ", ".join(f":tid_{i}" for i in range(len(matching_tids)))
+        params: Dict[str, Any] = {f"tid_{i}": tid for i, tid in enumerate(matching_tids)}
+        params["c_id"] = content_id_str
+
         check_sql = (
             "SELECT ID"
             + (", rb_local_deleted" if has_rb_del else "")
-            + " FROM djmdSongMyTag WHERE MyTagID = :tag_id AND ContentID = :c_id LIMIT 1;"
+            + f" FROM djmdSongMyTag WHERE MyTagID IN ({placeholders}) AND ContentID = :c_id"
+            + " ORDER BY (CASE WHEN rb_local_deleted = 0 OR rb_local_deleted IS NULL THEN 0 ELSE 1 END) ASC LIMIT 1;"
         )
-        existing = conn.execute(text(check_sql), {"tag_id": tag_id, "c_id": content_id_str}).fetchone()
+        existing = conn.execute(text(check_sql), params).fetchone()
 
         if existing:
             entry_id = str(existing[0])
@@ -708,7 +761,7 @@ def add_track_to_tag(
                     return True
                 # Reactivate soft-deleted row
                 update_parts = ["rb_local_deleted = 0"]
-                params: Dict[str, Any] = {"id": entry_id}
+                params = {"id": entry_id}
                 if "updated_at" in smt_cols:
                     update_parts.append("updated_at = :now")
                     params["now"] = now_utc
@@ -788,21 +841,25 @@ def remove_track_from_tag(
         tag_id = str(tag_row[0])
         content_id_str = str(content_id)
 
+        matching_tids = _resolve_tag_matching_ids(tag_id)
+        placeholders = ", ".join(f":tid_{i}" for i in range(len(matching_tids)))
+        params: Dict[str, Any] = {f"tid_{i}": tid for i, tid in enumerate(matching_tids)}
+        params["c_id"] = content_id_str
+
         if "rb_local_deleted" in smt_cols:
             update_parts = ["rb_local_deleted = 1"]
-            params: Dict[str, Any] = {"tag_id": tag_id, "c_id": content_id_str}
             if "updated_at" in smt_cols:
                 update_parts.append("updated_at = :now")
                 params["now"] = now_utc
             sql = (
                 f"UPDATE djmdSongMyTag SET {', '.join(update_parts)} "
-                "WHERE MyTagID = :tag_id AND ContentID = :c_id AND (rb_local_deleted = 0 OR rb_local_deleted IS NULL);"
+                f"WHERE MyTagID IN ({placeholders}) AND ContentID = :c_id AND (rb_local_deleted = 0 OR rb_local_deleted IS NULL);"
             )
             res = conn.execute(text(sql), params)
             return (res.rowcount or 0) > 0
         else:
-            del_sql = "DELETE FROM djmdSongMyTag WHERE MyTagID = :tag_id AND ContentID = :c_id;"
-            res = conn.execute(text(del_sql), {"tag_id": tag_id, "c_id": content_id_str})
+            del_sql = f"DELETE FROM djmdSongMyTag WHERE MyTagID IN ({placeholders}) AND ContentID = :c_id;"
+            res = conn.execute(text(del_sql), params)
             return (res.rowcount or 0) > 0
 
 

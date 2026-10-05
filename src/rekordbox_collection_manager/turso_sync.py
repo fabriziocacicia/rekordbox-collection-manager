@@ -677,7 +677,8 @@ def export_collection_to_turso(
                 JOIN djmdContent c ON smt.ContentID = c.ID
                 WHERE (smt.rb_local_deleted = 0 OR smt.rb_local_deleted IS NULL)
                   AND (c.rb_local_deleted = 0 OR c.rb_local_deleted IS NULL)
-                  {smt_streaming};
+                  {smt_streaming}
+                GROUP BY smt.ContentID, smt.MyTagID;
             """
             smt_rows = conn.exec_driver_sql(sql).fetchall()
             total_tt = len(smt_rows)
@@ -898,7 +899,7 @@ def apply_changelog_events(engine: Engine, client: TursoHttpClient) -> int:
 
                 elif action == "SET_TRACK_TAGS":
                     track_id = payload.get("track_id")
-                    tag_ids = payload.get("tag_ids", [])
+                    tag_ids = list(dict.fromkeys(payload.get("tag_ids", [])))
                     if not track_id:
                         raise ValueError("Missing 'track_id'")
 
@@ -912,14 +913,24 @@ def apply_changelog_events(engine: Engine, client: TursoHttpClient) -> int:
                     )
 
                     for tid in tag_ids:
-                        max_id = conn.exec_driver_sql("SELECT MAX(CAST(ID AS INTEGER)) FROM djmdSongMyTag;").scalar() or 0
-                        conn.exec_driver_sql(
-                            """
-                            INSERT INTO djmdSongMyTag (ID, ContentID, MyTagID, created_at, updated_at, rb_local_deleted)
-                            VALUES (:id, :track, :tag, :now, :now, 0);
-                            """,
-                            {"id": str(max_id + 1), "track": track_id, "tag": str(tid), "now": now_str},
-                        )
+                        existing_row = conn.exec_driver_sql(
+                            "SELECT ID FROM djmdSongMyTag WHERE ContentID = :track AND MyTagID = :tag LIMIT 1;",
+                            {"track": track_id, "tag": str(tid)},
+                        ).fetchone()
+                        if existing_row:
+                            conn.exec_driver_sql(
+                                "UPDATE djmdSongMyTag SET rb_local_deleted = 0, updated_at = :now WHERE ID = :id;",
+                                {"id": str(existing_row[0]), "now": now_str},
+                            )
+                        else:
+                            new_id = str(uuid.uuid4())
+                            conn.exec_driver_sql(
+                                """
+                                INSERT INTO djmdSongMyTag (ID, ContentID, MyTagID, created_at, updated_at, rb_local_deleted)
+                                VALUES (:id, :track, :tag, :now, :now, 0);
+                                """,
+                                {"id": new_id, "track": track_id, "tag": str(tid), "now": now_str},
+                            )
 
                 elif action == "CREATE_HISTORY_SESSION":
                     session_id = payload.get("session_id") or str(uuid.uuid4())

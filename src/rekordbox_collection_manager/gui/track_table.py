@@ -316,6 +316,8 @@ class ChipBadgeDelegate(QStyledItemDelegate):
 
         if isinstance(items, str):
             items = [items]
+        elif isinstance(items, (list, tuple)):
+            items = list(dict.fromkeys(items))
 
         chip_h = 20
         y = option.rect.y() + (option.rect.height() - chip_h) // 2
@@ -970,7 +972,7 @@ class TracksTableModel(QAbstractTableModel):
 
     def update_track_playlists(self, row_idx: int, playlists: List[str]) -> None:
         if 0 <= row_idx < len(self.records):
-            self.records[row_idx]["playlists"] = list(playlists)
+            self.records[row_idx]["playlists"] = list(dict.fromkeys(playlists))
             if TrackColumn.PLAYLISTS in self.config.columns:
                 col_idx = self.config.columns.index(TrackColumn.PLAYLISTS)
                 idx = self.index(row_idx, col_idx)
@@ -986,7 +988,7 @@ class TracksTableModel(QAbstractTableModel):
 
     def update_track_tags(self, row_idx: int, tags: List[str]) -> None:
         if 0 <= row_idx < len(self.records):
-            self.records[row_idx]["tags"] = list(tags)
+            self.records[row_idx]["tags"] = list(dict.fromkeys(tags))
             if TrackColumn.TAGS in self.config.columns:
                 col_idx = self.config.columns.index(TrackColumn.TAGS)
                 idx = self.index(row_idx, col_idx)
@@ -1185,7 +1187,7 @@ class TracksTableModel(QAbstractTableModel):
 
         # 11. TAGS
         elif col_name == TrackColumn.TAGS:
-            tags = t.get("tags") or []
+            tags = list(dict.fromkeys(t.get("tags") or []))
             if role == Qt.ItemDataRole.DisplayRole:
                 return ", ".join(tags) if tags else "—"
             elif role == Qt.ItemDataRole.UserRole:
@@ -1195,7 +1197,7 @@ class TracksTableModel(QAbstractTableModel):
 
         # 12. PLAYLISTS
         elif col_name == TrackColumn.PLAYLISTS:
-            playlists = t.get("playlists") or []
+            playlists = list(dict.fromkeys(t.get("playlists") or []))
             if role == Qt.ItemDataRole.DisplayRole:
                 return ", ".join(playlists) if playlists else "—"
             elif role == Qt.ItemDataRole.UserRole:

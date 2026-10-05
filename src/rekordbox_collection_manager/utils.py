@@ -115,6 +115,24 @@ def get_rekordbox_timestamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3] + " +00:00"
 
 
+def resolve_tag_matching_ids(raw_tag_id: Any) -> List[str]:
+    """Resolve signed and unsigned 32-bit representations of a tag ID."""
+    tag_str = str(raw_tag_id).strip()
+    try:
+        v_int = int(tag_str)
+        ids = [str(v_int)]
+        if v_int < 0:
+            ids.append(str(v_int + (1 << 32)))
+        elif v_int >= (1 << 31):
+            ids.append(str(v_int - (1 << 32)))
+        return list(dict.fromkeys(ids))
+    except (ValueError, TypeError):
+        return [tag_str] if tag_str else []
+
+
+_resolve_tag_matching_ids = resolve_tag_matching_ids
+
+
 def get_default_master_db_path() -> Optional[str]:
     """Get the path to the Rekordbox master.db on this system."""
     try:
@@ -958,10 +976,10 @@ def build_track_record(
     dur_str = format_duration(duration_sec)
 
     raw_tags = row.get("TagNames")
-    tags_list = [t.strip() for t in raw_tags.split("|||") if t.strip()] if raw_tags else []
+    tags_list = list(dict.fromkeys(t.strip() for t in raw_tags.split("|||") if t.strip())) if raw_tags else []
 
     raw_playlists = row.get("PlaylistNames")
-    playlists_list = [p.strip() for p in raw_playlists.split("|||") if p.strip()] if raw_playlists else []
+    playlists_list = list(dict.fromkeys(p.strip() for p in raw_playlists.split("|||") if p.strip())) if raw_playlists else []
 
     raw_fn = row.get("FileNameL") or ""
     raw_fp = row.get("FolderPath") or ""

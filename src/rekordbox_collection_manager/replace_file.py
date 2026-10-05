@@ -21,6 +21,7 @@ from sqlalchemy.engine import Engine
 from rekordbox_collection_manager.utils import (
     EXTENSION_TO_FILE_TYPE,
     FILE_TYPE_TO_NAME,
+    _resolve_tag_matching_ids,
     ensure_rekordbox_not_running,
     format_duration,
     get_rekordbox_timestamp,
@@ -555,25 +556,29 @@ def merge_imported_tracks(
                 )
 
         # 5. Transfer tags
-        tgt_tags = {
-            r[0]
-            for r in conn.execute(
-                text("SELECT MyTagID FROM djmdSongMyTag WHERE ContentID = :id;"),
-                {"id": str(target_content_id)},
-            ).fetchall()
-        }
+        tgt_tags: Set[str] = set()
+        for r in conn.execute(
+            text("SELECT MyTagID FROM djmdSongMyTag WHERE ContentID = :id;"),
+            {"id": str(target_content_id)},
+        ).fetchall():
+            if r[0] is not None:
+                for mid in _resolve_tag_matching_ids(r[0]):
+                    tgt_tags.add(mid)
+
         src_tag_rows = conn.execute(
             text("SELECT ID, MyTagID FROM djmdSongMyTag WHERE ContentID = :id;"),
             {"id": str(source_content_id)},
         ).fetchall()
         tags_transferred = 0
         for tag_entry_id, tag_id in src_tag_rows:
-            if tag_id not in tgt_tags:
+            tag_id_str = str(tag_id) if tag_id is not None else ""
+            if tag_id_str and not any(mid in tgt_tags for mid in _resolve_tag_matching_ids(tag_id_str)):
                 conn.execute(
                     text("UPDATE djmdSongMyTag SET ContentID = :target_id WHERE ID = :entry_id;"),
                     {"target_id": str(target_content_id), "entry_id": tag_entry_id},
                 )
-                tgt_tags.add(tag_id)
+                for mid in _resolve_tag_matching_ids(tag_id_str):
+                    tgt_tags.add(mid)
                 tags_transferred += 1
             else:
                 conn.execute(

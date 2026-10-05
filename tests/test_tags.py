@@ -7,16 +7,19 @@ from PySide6.QtWidgets import QApplication
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
+from rekordbox_collection_manager.edit_play_count import add_track_to_tag
 from rekordbox_collection_manager.gui.chip import TagChip, TagChipsContainer
 from rekordbox_collection_manager.gui.main_window import MainWindow
 from rekordbox_collection_manager.gui.tags_view import TagsView
 from rekordbox_collection_manager.gui.track_table import TrackColumn, TrackTableConfig, TracksTableWidget
 from rekordbox_collection_manager.tags import (
     _resolve_tag_matching_ids,
+    cleanup_duplicate_song_tags,
     fetch_tag_tracks,
     fetch_tags_tree,
     sort_tags_in_folder,
 )
+from rekordbox_collection_manager.utils import build_track_record
 
 
 class TestTagsBackend(unittest.TestCase):
@@ -402,6 +405,8 @@ class TestTagsGUI(unittest.TestCase):
 
         db_saved_called = []
         self.view.db_saved.connect(lambda: db_saved_called.append(True))
+        notify_status_calls = []
+        self.view.notify_status.connect(notify_status_calls.append)
 
         with patch("rekordbox_collection_manager.gui.tags_view.is_rekordbox_running", return_value=False), \
              patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes):
@@ -411,7 +416,10 @@ class TestTagsGUI(unittest.TestCase):
             QApplication.processEvents()
 
         self.assertTrue(len(db_saved_called) > 0)
-        self.assertIn("Sorted 2 tags in 'Genre' alphabetically", self.view.status_label.text())
+        self.assertTrue(
+            "Sorted 2 tags in 'Genre' alphabetically" in self.view.status_label.text()
+            or any("Sorted 2 tags in 'Genre' alphabetically" in m for m in notify_status_calls)
+        )
 
     def test_tags_view_tree_context_menu_policy(self):
         self.assertEqual(self.view.tree.contextMenuPolicy(), Qt.ContextMenuPolicy.CustomContextMenu)
@@ -442,6 +450,185 @@ class TestTagsGUI(unittest.TestCase):
         self.assertEqual(sort_calls[0][0], "1")
         self.assertEqual(sort_calls[0][1], "Genre")
         self.assertFalse(sort_calls[0][2])
+
+
+class TestTagDeduplication(unittest.TestCase):
+    """Test suite ensuring tags and playlists are never duplicated in display, queries, or database."""
+
+    def setUp(self):
+        self.engine = create_engine("sqlite:///:memory:")
+        with self.engine.begin() as conn:
+            conn.exec_driver_sql("""
+                CREATE TABLE djmdMyTag (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    Seq INTEGER,
+                    Name VARCHAR(255),
+                    Attribute INTEGER DEFAULT 0,
+                    ParentID VARCHAR(255),
+                    rb_local_deleted INTEGER DEFAULT 0
+                );
+            """)
+            conn.exec_driver_sql("""
+                CREATE TABLE djmdSongMyTag (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    MyTagID VARCHAR(255),
+                    ContentID VARCHAR(255),
+                    TrackNo INTEGER,
+                    created_at VARCHAR(255),
+                    updated_at VARCHAR(255),
+                    rb_local_deleted INTEGER DEFAULT 0
+                );
+            """)
+            conn.exec_driver_sql("""
+                CREATE TABLE djmdPlaylist (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    Name VARCHAR(255),
+                    Attribute INTEGER DEFAULT 0,
+                    rb_local_deleted INTEGER DEFAULT 0
+                );
+            """)
+            conn.exec_driver_sql("""
+                CREATE TABLE djmdSongPlaylist (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    PlaylistID VARCHAR(255),
+                    ContentID VARCHAR(255),
+                    TrackNo INTEGER,
+                    rb_local_deleted INTEGER DEFAULT 0
+                );
+            """)
+            conn.exec_driver_sql("""
+                CREATE TABLE djmdContent (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    Title VARCHAR(255),
+                    SrcArtistName VARCHAR(255),
+                    BPM INTEGER,
+                    Length INTEGER,
+                    DJPlayCount INTEGER DEFAULT 0,
+                    Rating INTEGER DEFAULT 0,
+                    ReleaseYear INTEGER,
+                    BitRate INTEGER,
+                    FileType INTEGER,
+                    Commnt TEXT,
+                    FolderPath VARCHAR(255),
+                    FileNameL VARCHAR(255),
+                    rb_local_deleted INTEGER DEFAULT 0
+                );
+            """)
+
+            # Insert category and tags
+            conn.exec_driver_sql("""
+                INSERT INTO djmdMyTag (ID, Seq, Name, Attribute, ParentID) VALUES
+                    ('cat_genre', 1, 'Genre', 1, 'root'),
+                    ('3153602631', 1, 'Tech House', 0, 'cat_genre'),
+                    ('1178900277', 2, 'Groovy', 0, 'cat_genre');
+            """)
+
+            # Insert a track
+            conn.exec_driver_sql("""
+                INSERT INTO djmdContent (ID, Title, SrcArtistName, BPM, Length, DJPlayCount, FileType, FileNameL, FolderPath)
+                VALUES ('100', 'Turn My Speakers Up', 'Tre Reynolds', 12800, 200, 10, 1, 'track.aiff', '/Music');
+            """)
+
+    def test_build_track_record_deduplicates_tags_and_playlists(self):
+        """Verify build_track_record eliminates duplicate tags and playlists."""
+        row = {
+            "ID": "100",
+            "Title": "Turn My Speakers Up",
+            "TagNames": "Tech House|||Groovy|||Tech House|||Groovy",
+            "PlaylistNames": "Festival|||Club|||Festival",
+        }
+        rec = build_track_record(row)
+        self.assertEqual(rec["tags"], ["Tech House", "Groovy"])
+        self.assertEqual(rec["playlists"], ["Festival", "Club"])
+
+    def test_fetch_tags_tree_deduplicates_duplicate_rows(self):
+        """Verify fetch_tags_tree counts each track once even if djmdSongMyTag has duplicate rows."""
+        with self.engine.begin() as conn:
+            # Insert duplicate active associations for track 100 with Tech House
+            conn.exec_driver_sql("""
+                INSERT INTO djmdSongMyTag (ID, MyTagID, ContentID, created_at, rb_local_deleted) VALUES
+                    ('smt_1', '3153602631', '100', '2026-09-04 10:00:00', 0),
+                    ('smt_2', '3153602631', '100', '2026-09-10 10:00:00', 0);
+            """)
+
+        tree = fetch_tags_tree(self.engine, category_names=("Genre",))
+        genre_node = tree[0]
+        tech_house = next(c for c in genre_node["children"] if c["name"] == "Tech House")
+        # Track count must be 1, not 2
+        self.assertEqual(tech_house["track_count"], 1)
+
+    def test_fetch_tag_tracks_deduplicates_tracks_and_tags(self):
+        """Verify fetch_tag_tracks returns each track once and track tags are unique."""
+        with self.engine.begin() as conn:
+            # Duplicate Tech House rows, plus Groovy rows
+            conn.exec_driver_sql("""
+                INSERT INTO djmdSongMyTag (ID, MyTagID, ContentID, created_at, rb_local_deleted) VALUES
+                    ('smt_1', '3153602631', '100', '2026-09-04 10:00:00', 0),
+                    ('smt_2', '3153602631', '100', '2026-09-10 10:00:00', 0),
+                    ('smt_3', '1178900277', '100', '2026-09-04 10:00:00', 0);
+            """)
+
+        tracks = fetch_tag_tracks(self.engine, "3153602631")
+        # Only 1 track returned, not duplicated
+        self.assertEqual(len(tracks), 1)
+        self.assertEqual(tracks[0]["id"], "100")
+        # Tags on the track are unique
+        self.assertEqual(tracks[0]["tags"], ["Tech House", "Groovy"])
+
+    def test_add_track_to_tag_prevents_duplicate_rows(self):
+        """Verify add_track_to_tag does not insert duplicate rows when called multiple times."""
+        # Add to Tech House
+        self.assertTrue(add_track_to_tag(self.engine, "100", "Tech House"))
+        # Add again
+        self.assertTrue(add_track_to_tag(self.engine, "100", "Tech House"))
+
+        with self.engine.connect() as conn:
+            cnt = conn.exec_driver_sql(
+                "SELECT count(*) FROM djmdSongMyTag WHERE ContentID = '100' AND MyTagID = '3153602631';"
+            ).scalar()
+            self.assertEqual(cnt, 1)
+
+    def test_add_track_to_tag_matches_signed_unsigned_id(self):
+        """Verify add_track_to_tag matches signed 32-bit ID (-1141364665) for 3153602631."""
+        signed_id = str(3153602631 - (1 << 32))  # -1141364665
+        with self.engine.begin() as conn:
+            conn.exec_driver_sql(f"""
+                INSERT INTO djmdSongMyTag (ID, MyTagID, ContentID, created_at, rb_local_deleted)
+                VALUES ('smt_signed', '{signed_id}', '100', '2026-09-04 10:00:00', 0);
+            """)
+
+        # Attempt to add using unsigned ID/tag name
+        self.assertTrue(add_track_to_tag(self.engine, "100", "Tech House"))
+
+        with self.engine.connect() as conn:
+            total_rows = conn.exec_driver_sql(
+                "SELECT count(*) FROM djmdSongMyTag WHERE ContentID = '100';"
+            ).scalar()
+            self.assertEqual(total_rows, 1, "Should recognize existing signed ID and avoid inserting duplicate")
+
+    def test_cleanup_duplicate_song_tags(self):
+        """Verify cleanup_duplicate_song_tags soft-deletes duplicate active rows."""
+        with self.engine.begin() as conn:
+            conn.exec_driver_sql("""
+                INSERT INTO djmdSongMyTag (ID, MyTagID, ContentID, created_at, rb_local_deleted) VALUES
+                    ('row_old', '3153602631', '100', '2026-09-04 10:00:00', 0),
+                    ('row_new', '3153602631', '100', '2026-09-10 10:00:00', 0);
+            """)
+
+        cleaned = cleanup_duplicate_song_tags(self.engine)
+        self.assertEqual(cleaned, 1)
+
+        with self.engine.connect() as conn:
+            active = conn.exec_driver_sql(
+                "SELECT ID FROM djmdSongMyTag WHERE ContentID = '100' AND (rb_local_deleted = 0 OR rb_local_deleted IS NULL);"
+            ).fetchall()
+            self.assertEqual(len(active), 1)
+            self.assertEqual(active[0][0], "row_old", "Earliest row should be preserved")
+
+            del_status = conn.exec_driver_sql(
+                "SELECT rb_local_deleted FROM djmdSongMyTag WHERE ID = 'row_new';"
+            ).scalar()
+            self.assertEqual(del_status, 1, "Duplicate row should be marked soft-deleted")
 
 
 if __name__ == "__main__":

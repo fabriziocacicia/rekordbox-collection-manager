@@ -476,26 +476,68 @@ def fetch_playlist_tracks(
         )
 
         if has_my_tag:
-            tag_expr = """(
-                SELECT GROUP_CONCAT(t.Name, '|||')
-                FROM djmdSongMyTag smt
-                JOIN djmdMyTag t ON smt.MyTagID = t.ID
-                WHERE smt.ContentID = c.ID
-                  AND (smt.rb_local_deleted = 0 OR smt.rb_local_deleted IS NULL)
-                  AND (t.rb_local_deleted = 0 OR t.rb_local_deleted IS NULL)
+            tag_cols = {
+                r[1] for r in conn.exec_driver_sql("PRAGMA table_info(djmdMyTag);").fetchall()
+            }
+            smt_cols = {
+                r[1] for r in conn.exec_driver_sql("PRAGMA table_info(djmdSongMyTag);").fetchall()
+            }
+            tag_del = (
+                "AND (t.rb_local_deleted = 0 OR t.rb_local_deleted IS NULL)"
+                if "rb_local_deleted" in tag_cols
+                else ""
+            )
+            smt_del = (
+                "AND (smt.rb_local_deleted = 0 OR smt.rb_local_deleted IS NULL)"
+                if "rb_local_deleted" in smt_cols
+                else ""
+            )
+            tag_seq = "t.Seq ASC, " if "Seq" in tag_cols else ""
+            tag_expr = f"""(
+                SELECT GROUP_CONCAT(Name, '|||')
+                FROM (
+                    SELECT DISTINCT t.Name
+                    FROM djmdSongMyTag smt
+                    JOIN djmdMyTag t ON smt.MyTagID = t.ID
+                    WHERE smt.ContentID = c.ID
+                      {smt_del}
+                      {tag_del}
+                    ORDER BY {tag_seq}lower(t.Name) ASC
+                )
             ) AS TagNames"""
         else:
             tag_expr = "NULL AS TagNames"
 
         if has_playlist:
-            playlist_expr = """(
-                SELECT GROUP_CONCAT(p.Name, '|||')
-                FROM djmdSongPlaylist osp
-                JOIN djmdPlaylist p ON osp.PlaylistID = p.ID
-                WHERE osp.ContentID = c.ID
-                  AND p.Attribute = 0
-                  AND (p.rb_local_deleted = 0 OR p.rb_local_deleted IS NULL)
-                  AND (osp.rb_local_deleted = 0 OR osp.rb_local_deleted IS NULL)
+            p_cols = {
+                r[1] for r in conn.exec_driver_sql("PRAGMA table_info(djmdPlaylist);").fetchall()
+            }
+            osp_cols = {
+                r[1] for r in conn.exec_driver_sql("PRAGMA table_info(djmdSongPlaylist);").fetchall()
+            }
+            p_del = (
+                "AND (p.rb_local_deleted = 0 OR p.rb_local_deleted IS NULL)"
+                if "rb_local_deleted" in p_cols
+                else ""
+            )
+            osp_del = (
+                "AND (osp.rb_local_deleted = 0 OR osp.rb_local_deleted IS NULL)"
+                if "rb_local_deleted" in osp_cols
+                else ""
+            )
+            p_attr = "AND p.Attribute = 0" if "Attribute" in p_cols else ""
+            playlist_expr = f"""(
+                SELECT GROUP_CONCAT(Name, '|||')
+                FROM (
+                    SELECT DISTINCT p.Name
+                    FROM djmdSongPlaylist osp
+                    JOIN djmdPlaylist p ON osp.PlaylistID = p.ID
+                    WHERE osp.ContentID = c.ID
+                      {p_attr}
+                      {p_del}
+                      {osp_del}
+                    ORDER BY lower(p.Name) ASC
+                )
             ) AS PlaylistNames"""
         else:
             playlist_expr = "NULL AS PlaylistNames"

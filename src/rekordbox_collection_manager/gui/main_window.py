@@ -629,6 +629,14 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
+        # Clean up duplicate tag associations if Rekordbox is not running
+        if not is_rekordbox_running():
+            try:
+                from rekordbox_collection_manager.tags import cleanup_duplicate_song_tags
+                cleanup_duplicate_song_tags(engine)
+            except Exception:
+                pass
+
         # Populate Views
         self.history_view.set_data(engine, history_records, db_path=path)
         self.tracks_view.set_engine(engine, total_tracks=total_tracks, db_path=path)

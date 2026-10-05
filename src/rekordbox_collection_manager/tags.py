@@ -9,25 +9,12 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from rekordbox_collection_manager.utils import (
+    _resolve_tag_matching_ids,
     build_exclude_streaming_clause,
     build_track_record,
     get_rekordbox_timestamp,
+    resolve_tag_matching_ids,
 )
-
-
-def _resolve_tag_matching_ids(raw_tag_id: Any) -> List[str]:
-    """Resolve signed and unsigned 32-bit representations of a tag ID."""
-    tag_str = str(raw_tag_id).strip()
-    try:
-        v_int = int(tag_str)
-        ids = [str(v_int)]
-        if v_int < 0:
-            ids.append(str(v_int + (1 << 32)))
-        elif v_int >= (1 << 31):
-            ids.append(str(v_int - (1 << 32)))
-        return list(dict.fromkeys(ids))
-    except (ValueError, TypeError):
-        return [tag_str] if tag_str else []
 
 
 def fetch_tags_tree(
@@ -84,15 +71,15 @@ def fetch_tags_tree(
             streaming_filter = build_exclude_streaming_clause(c_cols, table_alias="c")
 
             if "djmdContent" in existing_tables:
-                count_sql = f"""
-                    SELECT smt.MyTagID, count(smt.ContentID) 
+                tag_rows_sql = f"""
+                    SELECT smt.MyTagID, smt.ContentID 
                     FROM djmdSongMyTag smt
                     JOIN djmdContent c ON smt.ContentID = c.ID
                     WHERE 1=1
                       {smt_del}
                       {c_del}
                       {streaming_filter}
-                    GROUP BY smt.MyTagID;
+                    GROUP BY smt.MyTagID, smt.ContentID;
                 """
             else:
                 del_clause = (
@@ -100,18 +87,22 @@ def fetch_tags_tree(
                     if "rb_local_deleted" in smt_cols
                     else ""
                 )
-                count_sql = f"""
-                    SELECT MyTagID, count(*) 
+                tag_rows_sql = f"""
+                    SELECT MyTagID, ContentID 
                     FROM djmdSongMyTag 
                     {del_clause}
-                    GROUP BY MyTagID;
+                    GROUP BY MyTagID, ContentID;
                 """
-            for row in conn.execute(text(count_sql)).fetchall():
-                if row[0] is not None:
+            tag_tracks_map: Dict[str, Set[str]] = {}
+            for row in conn.execute(text(tag_rows_sql)).fetchall():
+                if row[0] is not None and row[1] is not None:
                     raw_id = str(row[0])
-                    cnt = int(row[1])
+                    cid = str(row[1])
                     for tid in _resolve_tag_matching_ids(raw_id):
-                        track_counts[tid] = track_counts.get(tid, 0) + cnt
+                        if tid not in tag_tracks_map:
+                            tag_tracks_map[tid] = set()
+                        tag_tracks_map[tid].add(cid)
+            track_counts = {tid: len(cids) for tid, cids in tag_tracks_map.items()}
 
         # 2. Query category roots matching category_names
         del_filter = (
@@ -293,26 +284,68 @@ def fetch_tag_tracks(
         )
 
         if has_my_tag:
-            tag_expr = """(
-                SELECT GROUP_CONCAT(t.Name, '|||')
-                FROM djmdSongMyTag osmt
-                JOIN djmdMyTag t ON osmt.MyTagID = t.ID
-                WHERE osmt.ContentID = c.ID
-                  AND (osmt.rb_local_deleted = 0 OR osmt.rb_local_deleted IS NULL)
-                  AND (t.rb_local_deleted = 0 OR t.rb_local_deleted IS NULL)
+            tag_cols = {
+                r[1]
+                for r in conn.exec_driver_sql("PRAGMA table_info(djmdMyTag);").fetchall()
+            }
+            tag_del = (
+                "AND (t.rb_local_deleted = 0 OR t.rb_local_deleted IS NULL)"
+                if "rb_local_deleted" in tag_cols
+                else ""
+            )
+            osmt_del = (
+                "AND (osmt.rb_local_deleted = 0 OR osmt.rb_local_deleted IS NULL)"
+                if "rb_local_deleted" in smt_cols
+                else ""
+            )
+            tag_seq = "t.Seq ASC, " if "Seq" in tag_cols else ""
+            tag_expr = f"""(
+                SELECT GROUP_CONCAT(Name, '|||')
+                FROM (
+                    SELECT DISTINCT t.Name
+                    FROM djmdSongMyTag osmt
+                    JOIN djmdMyTag t ON osmt.MyTagID = t.ID
+                    WHERE osmt.ContentID = c.ID
+                      {osmt_del}
+                      {tag_del}
+                    ORDER BY {tag_seq}lower(t.Name) ASC
+                )
             ) AS TagNames"""
         else:
             tag_expr = "NULL AS TagNames"
 
         if has_playlist:
-            playlist_expr = """(
-                SELECT GROUP_CONCAT(p.Name, '|||')
-                FROM djmdSongPlaylist osp
-                JOIN djmdPlaylist p ON osp.PlaylistID = p.ID
-                WHERE osp.ContentID = c.ID
-                  AND p.Attribute = 0
-                  AND (p.rb_local_deleted = 0 OR p.rb_local_deleted IS NULL)
-                  AND (osp.rb_local_deleted = 0 OR osp.rb_local_deleted IS NULL)
+            p_cols = {
+                r[1]
+                for r in conn.exec_driver_sql("PRAGMA table_info(djmdPlaylist);").fetchall()
+            } if "djmdPlaylist" in existing_tables else set()
+            osp_cols = {
+                r[1]
+                for r in conn.exec_driver_sql("PRAGMA table_info(djmdSongPlaylist);").fetchall()
+            } if "djmdSongPlaylist" in existing_tables else set()
+            p_del = (
+                "AND (p.rb_local_deleted = 0 OR p.rb_local_deleted IS NULL)"
+                if "rb_local_deleted" in p_cols
+                else ""
+            )
+            osp_del = (
+                "AND (osp.rb_local_deleted = 0 OR osp.rb_local_deleted IS NULL)"
+                if "rb_local_deleted" in osp_cols
+                else ""
+            )
+            p_attr = "AND p.Attribute = 0" if "Attribute" in p_cols else ""
+            playlist_expr = f"""(
+                SELECT GROUP_CONCAT(Name, '|||')
+                FROM (
+                    SELECT DISTINCT p.Name
+                    FROM djmdSongPlaylist osp
+                    JOIN djmdPlaylist p ON osp.PlaylistID = p.ID
+                    WHERE osp.ContentID = c.ID
+                      {p_attr}
+                      {p_del}
+                      {osp_del}
+                    ORDER BY lower(p.Name) ASC
+                )
             ) AS PlaylistNames"""
         else:
             playlist_expr = "NULL AS PlaylistNames"
@@ -401,6 +434,7 @@ def fetch_tag_tracks(
               {c_del}
               {streaming_filter}
               {search_clause}
+            GROUP BY c.ID
             ORDER BY {order_clause}
             {limit_clause};
         """
@@ -488,3 +522,82 @@ def sort_tags_in_folder(
             conn.execute(text(update_sql), params)
 
         return len(rows)
+
+
+def cleanup_duplicate_song_tags(engine: Engine) -> int:
+    """Find and clean up duplicate active associations in djmdSongMyTag.
+
+    If multiple active rows exist for the same track and tag (including matching
+    signed/unsigned 32-bit ID representations), keeps the earliest row and marks
+    subsequent duplicate rows as soft-deleted (rb_local_deleted = 1), or deletes
+    them if the rb_local_deleted column is not present.
+
+    Returns the number of resolved duplicate rows.
+    """
+    now_utc = get_rekordbox_timestamp()
+    with engine.begin() as conn:
+        existing_tables = {
+            r[0]
+            for r in conn.exec_driver_sql(
+                "SELECT name FROM sqlite_master WHERE type='table';"
+            ).fetchall()
+        }
+        if "djmdSongMyTag" not in existing_tables:
+            return 0
+
+        smt_cols = {
+            r[1]
+            for r in conn.exec_driver_sql("PRAGMA table_info(djmdSongMyTag);").fetchall()
+        }
+        has_rb_del = "rb_local_deleted" in smt_cols
+        has_updated_at = "updated_at" in smt_cols
+
+        del_filter = (
+            "WHERE (rb_local_deleted = 0 OR rb_local_deleted IS NULL)"
+            if has_rb_del
+            else ""
+        )
+
+        rows = conn.exec_driver_sql(
+            f"SELECT ID, ContentID, MyTagID FROM djmdSongMyTag {del_filter} ORDER BY created_at ASC, ID ASC;"
+        ).fetchall()
+
+        seen_track_tags: Set[Tuple[str, str]] = set()
+        duplicate_ids: List[str] = []
+
+        for row_id, content_id, my_tag_id in rows:
+            if not content_id or not my_tag_id:
+                continue
+            cid_str = str(content_id)
+            matching_tids = _resolve_tag_matching_ids(my_tag_id)
+            already_seen = any((cid_str, tid) in seen_track_tags for tid in matching_tids)
+            if already_seen:
+                duplicate_ids.append(str(row_id))
+            else:
+                for tid in matching_tids:
+                    seen_track_tags.add((cid_str, tid))
+
+        if not duplicate_ids:
+            return 0
+
+        # Mark duplicates as soft-deleted or DELETE them
+        if has_rb_del:
+            for d_id in duplicate_ids:
+                if has_updated_at:
+                    conn.exec_driver_sql(
+                        "UPDATE djmdSongMyTag SET rb_local_deleted = 1, updated_at = :now WHERE ID = :id;",
+                        {"now": now_utc, "id": d_id},
+                    )
+                else:
+                    conn.exec_driver_sql(
+                        "UPDATE djmdSongMyTag SET rb_local_deleted = 1 WHERE ID = :id;",
+                        {"id": d_id},
+                    )
+        else:
+            for d_id in duplicate_ids:
+                conn.exec_driver_sql(
+                    "DELETE FROM djmdSongMyTag WHERE ID = :id;",
+                    {"id": d_id},
+                )
+
+        return len(duplicate_ids)
