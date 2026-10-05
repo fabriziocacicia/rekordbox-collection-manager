@@ -372,14 +372,14 @@ class TestTagsGUI(unittest.TestCase):
         with patch.object(MainWindow, "load_database"), patch.object(MainWindow, "_check_rekordbox_status"):
             win = MainWindow(initial_db_path=None)
             try:
-                # Nav setup has 7 tabs and index 3 is Tags
+                # Nav setup has 7 tabs and index 2 is Tags
                 self.assertEqual(len(win.nav_items), 7)
-                self.assertEqual(win.nav_items[3]["title"], "Tags")
+                self.assertEqual(win.nav_items[2]["title"], "Tags")
                 self.assertEqual(win.btn_tags.toolTip(), "Tags")
 
                 # Trigger open_tag
                 win.open_tag("Melodic Techno")
-                self.assertEqual(win.stacked_widget.currentIndex(), 3)
+                self.assertEqual(win.stacked_widget.currentIndex(), 2)
                 self.assertTrue(win.btn_tags.isChecked())
             finally:
                 win.safety_timer.stop()

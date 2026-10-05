@@ -71,16 +71,6 @@ flowchart TD
 - Continuously inspects whether the official Rekordbox desktop process is running.
 - Safely disables write transactions when Rekordbox is open to protect SQLite journals (`master.db-wal` / `master.db-shm`) from corruption or concurrent lock errors.
 
-#### 🕒 History Sessions View
-- **Full Hierarchy Loading**: Browses years, months, and individual DJ history playlists without sluggish pagination.
-- **Chronological Tree Ordering**: Automatically realigns Rekordbox `djmdHistory.Seq` so months are strictly chronological (January to December) instead of alphabetical, and sessions are sorted from day 01 to day 31.
-- **In-Place Editing**: Quick editing of session dates and custom names with `● Staged` visual diff indicators.
-- **One-Click Tools**: Auto-extract dates from naming conventions, realign sequence numbers, and execute atomic batch commits.
-- **Session Inspector & History Details**:
-  - View full tracklists with cue times and duration.
-  - **Played With Chips**: Shows transition context (which track was played immediately before or after).
-  - **DJ Location Tagging**: Assign or autocomplete venue and gig locations to entire sessions or specific tracks.
-
 #### 🎵 Tracks View & Track Detail Inspector
 - **Instant Search**: As-you-type search across Title, Artist, Album, Key, Genre, and Filename.
 - **Multi-Column Sorting**: Sort by BPM, Key, Star Rating, Play Count, Date Added, or Bitrate.
@@ -99,6 +89,16 @@ flowchart TD
 - Visual manager for Pioneer Rekordbox **MyTags**.
 - Organized by user categories (Genre, Components, Situation, Custom).
 - Click any tag to immediately inspect all collection tracks assigned to it.
+
+#### 🕒 History Sessions View
+- **Full Hierarchy Loading**: Browses years, months, and individual DJ history playlists without sluggish pagination.
+- **Chronological Tree Ordering**: Automatically realigns Rekordbox `djmdHistory.Seq` so months are strictly chronological (January to December) instead of alphabetical, and sessions are sorted from day 01 to day 31.
+- **In-Place Editing**: Quick editing of session dates and custom names with `● Staged` visual diff indicators.
+- **One-Click Tools**: Auto-extract dates from naming conventions, realign sequence numbers, and execute atomic batch commits.
+- **Session Inspector & History Details**:
+  - View full tracklists with cue times and duration.
+  - **Played With Chips**: Shows transition context (which track was played immediately before or after).
+  - **DJ Location Tagging**: Assign or autocomplete venue and gig locations to entire sessions or specific tracks.
 
 #### 🔢 Play Count Manager View
 - In-line numeric play count editing with dedicated `[-]` and `[+]` quick stepper buttons on every row.

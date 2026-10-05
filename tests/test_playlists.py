@@ -346,14 +346,14 @@ class TestPlaylistsGUI(unittest.TestCase):
         with patch.object(MainWindow, "load_database"), patch.object(MainWindow, "_check_rekordbox_status"):
             win = MainWindow(initial_db_path=None)
             try:
-                # Verify initial nav setup has 7 tabs and index 2 is Playlists
+                # Verify initial nav setup has 7 tabs and index 1 is Playlists
                 self.assertEqual(len(win.nav_items), 7)
-                self.assertEqual(win.nav_items[2]["title"], "Playlists")
+                self.assertEqual(win.nav_items[1]["title"], "Playlists")
                 self.assertEqual(win.btn_playlists.toolTip(), "Playlists")
 
                 # Trigger open_playlist
                 win.open_playlist("Afro House")
-                self.assertEqual(win.stacked_widget.currentIndex(), 2)
+                self.assertEqual(win.stacked_widget.currentIndex(), 1)
                 self.assertTrue(win.btn_playlists.isChecked())
             finally:
                 win.safety_timer.stop()
@@ -364,7 +364,7 @@ class TestPlaylistsGUI(unittest.TestCase):
             win = MainWindow(initial_db_path=None)
             try:
                 with patch.object(win.playlists_view, "refresh") as mock_refresh:
-                    win._on_nav_clicked(2)
+                    win._on_nav_clicked(1)
                     mock_refresh.assert_called_once_with(force_reload_tracks=True)
             finally:
                 win.safety_timer.stop()

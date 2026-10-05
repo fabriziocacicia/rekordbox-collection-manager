@@ -149,23 +149,23 @@ class MainWindow(QMainWindow):
         self.nav_items = [
             {
                 "id": 0,
-                "icon": "🕒",
-                "title": "History Sessions",
-            },
-            {
-                "id": 1,
                 "icon": "🎵",
                 "title": "Tracks",
             },
             {
-                "id": 2,
+                "id": 1,
                 "icon": "📁",
                 "title": "Playlists",
             },
             {
-                "id": 3,
+                "id": 2,
                 "icon": "🏷️",
                 "title": "Tags",
+            },
+            {
+                "id": 3,
+                "icon": "🕒",
+                "title": "History Sessions",
             },
             {
                 "id": 4,
@@ -325,10 +325,10 @@ class MainWindow(QMainWindow):
             sidebar_layout.addWidget(btn)
             self.nav_buttons.append(btn)
 
-        self.btn_history = self.nav_buttons[0]
-        self.btn_tracks = self.nav_buttons[1]
-        self.btn_playlists = self.nav_buttons[2]
-        self.btn_tags = self.nav_buttons[3]
+        self.btn_tracks = self.nav_buttons[0]
+        self.btn_playlists = self.nav_buttons[1]
+        self.btn_tags = self.nav_buttons[2]
+        self.btn_history = self.nav_buttons[3]
         self.btn_play_count = self.nav_buttons[4]
         self.btn_replace_file = self.nav_buttons[5]
         self.btn_info = self.nav_buttons[6]
@@ -355,13 +355,6 @@ class MainWindow(QMainWindow):
         # Stacked Pages
         self.stacked_widget = QStackedWidget()
 
-        self.history_view = HistoryView(self)
-        self.history_view.notify_status.connect(self._show_status_message)
-        self.history_view.request_reload.connect(lambda: self.load_database(self.db_path))
-        self.history_view.open_playlist_requested.connect(self.open_playlist)
-        self.history_view.open_tag_requested.connect(self.open_tag)
-        self.stacked_widget.addWidget(self.history_view)
-
         self.tracks_view = TracksView(self)
         self.tracks_view.notify_status.connect(self._show_status_message)
         self.tracks_view.open_history_session_requested.connect(self.open_history_session)
@@ -385,6 +378,13 @@ class MainWindow(QMainWindow):
         self.tags_view.replace_file_requested.connect(self.open_replace_file_for_track)
         self.stacked_widget.addWidget(self.tags_view)
 
+        self.history_view = HistoryView(self)
+        self.history_view.notify_status.connect(self._show_status_message)
+        self.history_view.request_reload.connect(lambda: self.load_database(self.db_path))
+        self.history_view.open_playlist_requested.connect(self.open_playlist)
+        self.history_view.open_tag_requested.connect(self.open_tag)
+        self.stacked_widget.addWidget(self.history_view)
+
         self.play_count_view = PlayCountView(self)
         self.play_count_view.notify_status.connect(self._show_status_message)
         self.play_count_view.open_history_session_requested.connect(self.open_history_session)
@@ -402,10 +402,10 @@ class MainWindow(QMainWindow):
         self.play_count_view.replace_file_requested.connect(self.open_replace_file_for_track)
 
         # Database save signals -> trigger cloud sync
-        self.history_view.db_saved.connect(self._on_db_saved)
         self.tracks_view.db_saved.connect(self._on_db_saved)
         self.playlists_view.db_saved.connect(self._on_db_saved)
         self.tags_view.db_saved.connect(self._on_db_saved)
+        self.history_view.db_saved.connect(self._on_db_saved)
         self.play_count_view.db_saved.connect(self._on_db_saved)
         self.replace_file_view.db_saved.connect(self._on_db_saved)
 
@@ -426,46 +426,46 @@ class MainWindow(QMainWindow):
     def _on_nav_clicked(self, page_id: int) -> None:
         curr = self.stacked_widget.currentIndex()
         if page_id == curr:
-            if page_id == 0 and hasattr(self.history_view, "reset_to_list"):
-                self.history_view.reset_to_list()
-            elif page_id == 1 and hasattr(self.tracks_view, "reset_to_list"):
+            if page_id == 0 and hasattr(self.tracks_view, "reset_to_list"):
                 self.tracks_view.reset_to_list()
-            elif page_id == 2 and hasattr(self.playlists_view, "reset_to_list"):
+            elif page_id == 1 and hasattr(self.playlists_view, "reset_to_list"):
                 self.playlists_view.reset_to_list()
-            elif page_id == 3 and hasattr(self.tags_view, "reset_to_list"):
+            elif page_id == 2 and hasattr(self.tags_view, "reset_to_list"):
                 self.tags_view.reset_to_list()
+            elif page_id == 3 and hasattr(self.history_view, "reset_to_list"):
+                self.history_view.reset_to_list()
             elif page_id == 4 and hasattr(self.play_count_view, "reset_to_list"):
                 self.play_count_view.reset_to_list()
 
         # When navigating to or clicking Playlists, refresh hierarchy & counts from database
-        if page_id == 2 and hasattr(self, "playlists_view"):
+        if page_id == 1 and hasattr(self, "playlists_view"):
             self.playlists_view.refresh(force_reload_tracks=True)
             if is_turso_configured() and not is_rekordbox_running():
                 self.trigger_sync(background=True, create_backup=False)
-        elif page_id == 3 and hasattr(self, "tags_view"):
+        elif page_id == 2 and hasattr(self, "tags_view"):
             self.tags_view.refresh(force_reload_tracks=True)
 
         self.stacked_widget.setCurrentIndex(page_id)
 
     def open_history_session(self, history_id: str) -> None:
         """Switch navigation to History tab and open the requested history session."""
-        if self.nav_buttons and len(self.nav_buttons) > 0:
-            self.nav_buttons[0].setChecked(True)
-        self.stacked_widget.setCurrentIndex(0)
+        if self.nav_buttons and len(self.nav_buttons) > 3:
+            self.nav_buttons[3].setChecked(True)
+        self.stacked_widget.setCurrentIndex(3)
         self.history_view.open_session_by_id(history_id)
 
     def open_playlist(self, playlist_name_or_id: str) -> None:
         """Switch navigation to Playlists tab and select the requested playlist."""
-        if self.nav_buttons and len(self.nav_buttons) > 2:
-            self.nav_buttons[2].setChecked(True)
-        self.stacked_widget.setCurrentIndex(2)
+        if self.nav_buttons and len(self.nav_buttons) > 1:
+            self.nav_buttons[1].setChecked(True)
+        self.stacked_widget.setCurrentIndex(1)
         self.playlists_view.open_playlist_by_id_or_name(playlist_name_or_id, force_reload=True)
 
     def open_tag(self, tag_name_or_id: str) -> None:
         """Switch navigation to Tags tab and select the requested tag."""
-        if self.nav_buttons and len(self.nav_buttons) > 3:
-            self.nav_buttons[3].setChecked(True)
-        self.stacked_widget.setCurrentIndex(3)
+        if self.nav_buttons and len(self.nav_buttons) > 2:
+            self.nav_buttons[2].setChecked(True)
+        self.stacked_widget.setCurrentIndex(2)
         self.tags_view.open_tag_by_id_or_name(tag_name_or_id, force_reload=True)
 
     def open_replace_file_for_track(self, track_data: Dict[str, Any]) -> None:
