@@ -130,7 +130,6 @@ DEFAULT_HISTORY_COLUMNS: List[str] = [
     TrackColumn.KEY,
     TrackColumn.BPM,
     TrackColumn.TIME,
-    TrackColumn.PLAYS,
     TrackColumn.BITRATE,
     TrackColumn.FILE_TYPE,
     TrackColumn.TAGS,

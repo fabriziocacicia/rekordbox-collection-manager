@@ -600,7 +600,8 @@ class TestHistoryDetailView(unittest.TestCase):
         self.assertIn("127.0", self.detail_view.kpi_bpm.val_lbl.text())
         self.assertIn("130.0", self.detail_view.kpi_bpm.val_lbl.text())
         self.assertEqual(self.detail_view.table.rowCount(), 2)
-        self.assertEqual(self.detail_view.table.columnCount(), 14)
+        self.assertEqual(self.detail_view.table.columnCount(), 13)
+        self.assertNotIn("Plays", self.detail_view.table.config.columns)
 
         # Check column 1 (Title)
         self.assertEqual(self.detail_view.table.item(0, 1).text(), "Glue")
@@ -613,8 +614,8 @@ class TestHistoryDetailView(unittest.TestCase):
         self.assertEqual(self.detail_view.table.item(0, 4).text(), "Am")
         self.assertEqual(self.detail_view.table.item(1, 4).text(), "Fm")
 
-        # Check column 8 (Bitrate)
-        self.assertEqual(self.detail_view.table.item(0, 8).text(), "320 kbps")
+        # Check column 7 (Bitrate, shifted from 8 since Plays column was removed)
+        self.assertEqual(self.detail_view.table.item(0, 7).text(), "320 kbps")
 
     def test_detail_view_filtering(self):
         self.detail_view._on_data_loaded(self.mock_data)
@@ -1420,6 +1421,7 @@ class TestTracksTableWidget(unittest.TestCase):
     def test_table_history_mode(self):
         from rekordbox_collection_manager.gui.track_table import (
             DEFAULT_HISTORY_COLUMNS,
+            TrackColumn,
             TrackTableConfig,
             TracksTableWidget,
         )
@@ -1430,7 +1432,8 @@ class TestTracksTableWidget(unittest.TestCase):
             sorting_mode="client",
         )
         table = TracksTableWidget(config=cfg)
-        self.assertEqual(table.columnCount(), 14)
+        self.assertEqual(table.columnCount(), 13)
+        self.assertNotIn(TrackColumn.PLAYS, cfg.columns)
         self.assertTrue(table.isSortingEnabled())
 
         table.set_tracks(self.mock_tracks)
