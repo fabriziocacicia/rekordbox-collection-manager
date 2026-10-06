@@ -717,6 +717,10 @@ class PlayCountView(QWidget):
         if not self.engine or not track:
             return
 
+        if self.staged_edits:
+            if not self.confirm_unsaved_changes():
+                return
+
         track_id = track.get("id") or track.get("content_id")
         curr_idx = 0
         for idx, r in enumerate(self.records):
@@ -737,6 +741,29 @@ class PlayCountView(QWidget):
     def _on_back_from_detail(self) -> None:
         """Return to play count editor table view."""
         self.stack.setCurrentIndex(0)
+
+    def confirm_unsaved_changes(self) -> bool:
+        """Prompt user if there are unsaved play count modifications or detail modifications."""
+        if self.stack.currentIndex() == 1:
+            return self.track_detail_view._confirm_unsaved_changes()
+        if self.staged_edits:
+            reply = QMessageBox.question(
+                self,
+                "Unsaved Modifications",
+                "You have unsaved play count modifications. Do you want to save them before leaving?",
+                QMessageBox.StandardButton.Save
+                | QMessageBox.StandardButton.Discard
+                | QMessageBox.StandardButton.Cancel,
+            )
+            if reply == QMessageBox.StandardButton.Save:
+                self._on_save_clicked()
+                return len(self.staged_edits) == 0
+            elif reply == QMessageBox.StandardButton.Discard:
+                self._on_discard_clicked()
+                return True
+            else:
+                return False
+        return True
 
     def _on_detail_track_changed(self, idx: int, track: Dict[str, Any]) -> None:
         """Select and scroll to track in table when detail view navigates."""

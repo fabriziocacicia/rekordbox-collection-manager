@@ -424,6 +424,7 @@ class HistoryView(QWidget):
         self.detail_view.discard_session_requested.connect(self._on_detail_discard_session)
         self.detail_view.location_added.connect(self.register_new_location)
         self.detail_view.dj_added.connect(self.register_new_dj)
+        self.detail_view.db_saved.connect(self.db_saved.emit)
         self.stack.addWidget(self.detail_view)
 
         # ----------------------------------------------------------------------
@@ -957,12 +958,16 @@ class HistoryView(QWidget):
 
     def _on_back_from_detail(self) -> None:
         """Return from detail view to main sessions list."""
+        if not self.detail_view.confirm_unsaved_changes():
+            return
         self.stack.setCurrentIndex(0)
         self.current_detail_id = None
 
     def _open_track_detail(self, track: Dict[str, Any], track_idx: int) -> None:
         """Open TrackDetailView for a track within the active history session."""
         if not self.engine or not track:
+            return
+        if not self.detail_view.confirm_unsaved_changes():
             return
         session_name = self.detail_view.session_data.get("name") or "Session"
         btn_label = (
@@ -986,7 +991,16 @@ class HistoryView(QWidget):
 
     def _on_track_detail_changed(self, idx: int, track: Dict[str, Any]) -> None:
         """Select track in history detail view table when navigating in track detail view."""
+        self.detail_view.table.sync_saved_track(track)
         self.detail_view.select_track_at_index(idx)
+
+    def confirm_unsaved_changes(self) -> bool:
+        """Prompt user if there are unsaved changes in track detail view or session detail view."""
+        if self.stack.currentIndex() == 2:
+            return self.track_detail_view._confirm_unsaved_changes()
+        elif self.stack.currentIndex() == 1:
+            return self.detail_view.confirm_unsaved_changes()
+        return True
 
     def reset_to_list(self) -> None:
         """Reset view to history sessions list."""

@@ -1907,6 +1907,123 @@ class TestTableChipInteractions(unittest.TestCase):
         self.assertEqual(idx.data(Qt.ItemDataRole.UserRole), ["Melodic", "Deep House", "Progressive"])
         self.assertIn("Progressive", idx.data(Qt.ItemDataRole.DisplayRole))
 
+    def test_stage_chip_addition_and_summary(self):
+        self.assertFalse(self.table.has_staged_changes())
+        self.assertFalse(self.table.bottom_bar.isVisible())
+
+        # Stage adding a tag
+        self.table._on_chip_item_added(0, "tags", "Techno")
+        self.assertTrue(self.table.has_staged_changes())
+        self.assertTrue(self.table.bottom_bar.isVisible())
+        self.assertIn("Techno", self.table.records[0]["tags"])
+
+        summary = self.table.get_staged_summary()
+        self.assertIn("Breathe", summary)
+        self.assertIn("Tags: +1 added", summary)
+        self.assertIn("Unsaved modifications", self.table.staged_status_label.text())
+
+        # Stage adding a playlist
+        self.table._on_chip_item_added(0, "playlists", "Club Hits")
+        self.assertIn("Club Hits", self.table.records[0]["playlists"])
+        summary = self.table.get_staged_summary()
+        self.assertIn("Playlists: +1 added", summary)
+
+    def test_stage_chip_deletion_and_revert(self):
+        # Stage deleting a tag
+        self.table._on_chip_item_deleted(0, "tags", "Melodic")
+        self.assertNotIn("Melodic", self.table.records[0]["tags"])
+        self.assertTrue(self.table.has_staged_changes())
+
+        # Adding it back should revert back to original state
+        self.table._on_chip_item_added(0, "tags", "Melodic")
+        self.assertFalse(self.table.has_staged_changes())
+        self.assertFalse(self.table.bottom_bar.isVisible())
+
+    def test_discard_changes(self):
+        orig_tags = list(self.table.records[0]["tags"])
+        orig_pls = list(self.table.records[0]["playlists"])
+
+        self.table._on_chip_item_added(0, "tags", "Techno")
+        self.table._on_chip_item_deleted(0, "playlists", "Peak Time")
+        self.assertTrue(self.table.has_staged_changes())
+
+        self.table.discard_changes()
+        self.assertFalse(self.table.has_staged_changes())
+        self.assertFalse(self.table.bottom_bar.isVisible())
+        self.assertEqual(self.table.records[0]["tags"], orig_tags)
+        self.assertEqual(self.table.records[0]["playlists"], orig_pls)
+
+    def test_save_changes_rekordbox_running(self):
+        self.table._on_chip_item_added(0, "tags", "Techno")
+        with patch("rekordbox_collection_manager.gui.track_table.is_rekordbox_running", return_value=True), \
+             patch("rekordbox_collection_manager.gui.track_table.QMessageBox.warning") as mock_warn:
+            saved = self.table.save_changes()
+            self.assertFalse(saved)
+            self.assertTrue(self.table.has_staged_changes())
+            mock_warn.assert_called_once()
+
+    def test_save_changes_success(self):
+        from unittest.mock import MagicMock
+        self.table.engine = MagicMock()
+        self.table._on_chip_item_added(0, "tags", "Techno")
+        self.table._on_chip_item_deleted(0, "playlists", "Peak Time")
+
+        saved_signals = []
+        self.table.db_saved.connect(lambda: saved_signals.append(True))
+
+        with patch("rekordbox_collection_manager.gui.track_table.is_rekordbox_running", return_value=False), \
+             patch("rekordbox_collection_manager.gui.track_table.add_track_to_tag") as mock_add_tag, \
+             patch("rekordbox_collection_manager.gui.track_table.remove_track_from_playlist") as mock_rm_pl:
+            saved = self.table.save_changes()
+            self.assertTrue(saved)
+            mock_add_tag.assert_called_once_with(self.table.engine, "trk_1", "Techno")
+            mock_rm_pl.assert_called_once_with(self.table.engine, "trk_1", "Peak Time")
+            self.assertFalse(self.table.has_staged_changes())
+            self.assertFalse(self.table.bottom_bar.isVisible())
+            self.assertEqual(len(saved_signals), 1)
+
+    def test_confirm_unsaved_changes_dialog(self):
+        # When clean
+        self.assertTrue(self.table.confirm_unsaved_changes())
+
+        # When dirty - Cancel
+        self.table._on_chip_item_added(0, "tags", "Techno")
+        with patch("rekordbox_collection_manager.gui.track_table.QMessageBox.question",
+                   return_value=QMessageBox.StandardButton.Cancel):
+            self.assertFalse(self.table.confirm_unsaved_changes())
+            self.assertTrue(self.table.has_staged_changes())
+
+        # When dirty - Discard
+        with patch("rekordbox_collection_manager.gui.track_table.QMessageBox.question",
+                   return_value=QMessageBox.StandardButton.Discard):
+            self.assertTrue(self.table.confirm_unsaved_changes())
+            self.assertFalse(self.table.has_staged_changes())
+
+    def test_staged_badge_and_model_rendering(self):
+        from PySide6.QtCore import Qt
+
+        self.table._on_chip_item_added(0, "tags", "Techno")
+        # Check delegate is_item_staged
+        self.assertTrue(self.table._is_tag_item_staged((0, self.table._tags_col_idx), "Techno"))
+        self.assertFalse(self.table._is_tag_item_staged((0, self.table._tags_col_idx), "Melodic"))
+
+        # Check row staged background in model
+        idx = self.table.model().index(0, 0)
+        bg = self.table.model().data(idx, Qt.ItemDataRole.BackgroundRole)
+        self.assertIsNotNone(bg)
+
+        # Check tooltip in model
+        tags_idx = self.table.model().index(0, self.table._tags_col_idx)
+        tip = self.table.model().data(tags_idx, Qt.ItemDataRole.ToolTipRole)
+        self.assertIn("Unsaved modifications", tip)
+
+    def test_sync_saved_track(self):
+        self.table._on_chip_item_added(0, "tags", "Techno")
+        self.assertTrue(self.table.has_staged_changes())
+
+        self.table.sync_saved_track({"id": "trk_1", "tags": ["Techno"]})
+        self.assertFalse(self.table.has_staged_changes())
+
 
 if __name__ == "__main__":
     unittest.main()

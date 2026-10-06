@@ -184,6 +184,7 @@ class HistoryDetailView(QWidget):
     discard_session_requested = Signal(str)  # Emits history_id
     location_added = Signal(str)  # Emits new location name
     dj_added = Signal(str)  # Emits new DJ name
+    db_saved = Signal()
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -825,7 +826,9 @@ class HistoryDetailView(QWidget):
         self.table.track_detail_requested.connect(self._open_track_detail)
         self.table.open_playlist_requested.connect(self.open_playlist_requested.emit)
         self.table.open_tag_requested.connect(self.open_tag_requested.emit)
+        self.table.db_saved.connect(self.db_saved.emit)
         main_layout.addWidget(self.table, stretch=1)
+        main_layout.addWidget(self.table.bottom_bar)
 
         # 5. Bottom Action Bar for Unsaved Changes
         self.bottom_bar = QFrame()
@@ -1109,12 +1112,19 @@ class HistoryDetailView(QWidget):
         self.table.copy_tracklist_to_clipboard()
 
     def _on_back_clicked(self) -> None:
+        if self.table.has_staged_changes():
+            if not self.table.confirm_unsaved_changes():
+                return
         self.back_clicked.emit()
 
     def _open_track_detail(self, track: Dict[str, Any]) -> None:
         """Request in-place track details view for a track in the history session."""
         if not track:
             return
+
+        if self.table.has_staged_changes():
+            if not self.table.confirm_unsaved_changes():
+                return
 
         track_id = track.get("id") or track.get("content_id")
         curr_idx = 0
@@ -1124,6 +1134,30 @@ class HistoryDetailView(QWidget):
                 break
 
         self.track_detail_requested.emit(track, curr_idx)
+
+    def confirm_unsaved_changes(self) -> bool:
+        """Prompt user if there are unsaved table or session modifications."""
+        if self.table.has_staged_changes():
+            if not self.table.confirm_unsaved_changes():
+                return False
+        if self.bottom_bar.isVisible():
+            reply = QMessageBox.question(
+                self,
+                "Unsaved Modifications",
+                "You have unsaved history session modifications. Do you want to save them before leaving?",
+                QMessageBox.StandardButton.Save
+                | QMessageBox.StandardButton.Discard
+                | QMessageBox.StandardButton.Cancel,
+            )
+            if reply == QMessageBox.StandardButton.Save:
+                self._on_save_clicked()
+                return True
+            elif reply == QMessageBox.StandardButton.Discard:
+                self._on_discard_clicked()
+                return True
+            else:
+                return False
+        return True
 
     def select_track_at_index(self, idx: int) -> None:
         """Select and scroll to track in table when detail view navigates."""

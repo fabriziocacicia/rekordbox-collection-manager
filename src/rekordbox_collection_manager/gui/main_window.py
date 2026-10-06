@@ -425,6 +425,14 @@ class MainWindow(QMainWindow):
 
     def _on_nav_clicked(self, page_id: int) -> None:
         curr = self.stacked_widget.currentIndex()
+        if page_id != curr:
+            curr_widget = self.stacked_widget.currentWidget()
+            if curr_widget and hasattr(curr_widget, "confirm_unsaved_changes"):
+                if not curr_widget.confirm_unsaved_changes():
+                    if 0 <= curr < len(self.nav_buttons):
+                        self.nav_buttons[curr].setChecked(True)
+                    return
+
         if page_id == curr:
             if page_id == 0 and hasattr(self.tracks_view, "reset_to_list"):
                 self.tracks_view.reset_to_list()
@@ -449,6 +457,12 @@ class MainWindow(QMainWindow):
 
     def open_history_session(self, history_id: str) -> None:
         """Switch navigation to History tab and open the requested history session."""
+        curr = self.stacked_widget.currentIndex()
+        if curr != 3:
+            curr_widget = self.stacked_widget.currentWidget()
+            if curr_widget and hasattr(curr_widget, "confirm_unsaved_changes"):
+                if not curr_widget.confirm_unsaved_changes():
+                    return
         if self.nav_buttons and len(self.nav_buttons) > 3:
             self.nav_buttons[3].setChecked(True)
         self.stacked_widget.setCurrentIndex(3)
@@ -456,6 +470,12 @@ class MainWindow(QMainWindow):
 
     def open_playlist(self, playlist_name_or_id: str) -> None:
         """Switch navigation to Playlists tab and select the requested playlist."""
+        curr = self.stacked_widget.currentIndex()
+        if curr != 1:
+            curr_widget = self.stacked_widget.currentWidget()
+            if curr_widget and hasattr(curr_widget, "confirm_unsaved_changes"):
+                if not curr_widget.confirm_unsaved_changes():
+                    return
         if self.nav_buttons and len(self.nav_buttons) > 1:
             self.nav_buttons[1].setChecked(True)
         self.stacked_widget.setCurrentIndex(1)
@@ -463,6 +483,12 @@ class MainWindow(QMainWindow):
 
     def open_tag(self, tag_name_or_id: str) -> None:
         """Switch navigation to Tags tab and select the requested tag."""
+        curr = self.stacked_widget.currentIndex()
+        if curr != 2:
+            curr_widget = self.stacked_widget.currentWidget()
+            if curr_widget and hasattr(curr_widget, "confirm_unsaved_changes"):
+                if not curr_widget.confirm_unsaved_changes():
+                    return
         if self.nav_buttons and len(self.nav_buttons) > 2:
             self.nav_buttons[2].setChecked(True)
         self.stacked_widget.setCurrentIndex(2)
@@ -470,6 +496,12 @@ class MainWindow(QMainWindow):
 
     def open_replace_file_for_track(self, track_data: Dict[str, Any]) -> None:
         """Switch navigation to Replace File tab and preselect track."""
+        curr = self.stacked_widget.currentIndex()
+        if curr != 5:
+            curr_widget = self.stacked_widget.currentWidget()
+            if curr_widget and hasattr(curr_widget, "confirm_unsaved_changes"):
+                if not curr_widget.confirm_unsaved_changes():
+                    return
         if self.nav_buttons and len(self.nav_buttons) > 5:
             self.nav_buttons[5].setChecked(True)
         self.stacked_widget.setCurrentIndex(5)
@@ -886,6 +918,21 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         """Safely terminate active background workers before closing."""
+        # Prompt user if there are unsaved modifications in any view
+        views = [
+            getattr(self, "tags_view", None),
+            getattr(self, "playlists_view", None),
+            getattr(self, "tracks_view", None),
+            getattr(self, "history_view", None),
+            getattr(self, "play_count_view", None),
+            getattr(self, "replace_file_view", None),
+        ]
+        for v in views:
+            if v is not None and hasattr(v, "confirm_unsaved_changes"):
+                if not v.confirm_unsaved_changes():
+                    event.ignore()
+                    return
+
         if hasattr(self, "safety_timer"):
             self.safety_timer.stop()
 

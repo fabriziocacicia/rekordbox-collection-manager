@@ -39,10 +39,13 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QApplication,
     QCompleter,
+    QFrame,
     QHBoxLayout,
     QHeaderView,
+    QLabel,
     QMenu,
     QMessageBox,
+    QPushButton,
     QStyle,
     QStyledItemDelegate,
     QStyleOptionViewItem,
@@ -67,6 +70,9 @@ from rekordbox_collection_manager.gui.chip import (
     ChipSearchLineEdit,
 )
 from rekordbox_collection_manager.gui.theme import (
+    COLOR_AMBER,
+    COLOR_AMBER_BG,
+    COLOR_AMBER_BORDER,
     COLOR_BG_HOVER,
     COLOR_BG_INPUT,
     COLOR_BG_PANEL,
@@ -271,6 +277,7 @@ class ChipBadgeDelegate(QStyledItemDelegate):
         bg_hover: Optional[QColor] = None,
         border_hover: Optional[QColor] = None,
         removable: bool = True,
+        is_item_staged: Optional[Any] = None,
         parent: Optional[QWidget] = None,
     ):
         super().__init__(parent)
@@ -298,6 +305,7 @@ class ChipBadgeDelegate(QStyledItemDelegate):
             )
         )
         self.removable = removable
+        self.is_item_staged = is_item_staged
 
         self.hovered_cell: Optional[Tuple[int, int]] = None
         self.hovered_chip_idx: Optional[int] = None
@@ -493,16 +501,31 @@ class ChipBadgeDelegate(QStyledItemDelegate):
         for chip in layout.chips:
             is_chip_hovered = is_cell_hovered and (self.hovered_chip_idx == chip.index)
             is_btn_hovered = is_chip_hovered and self.hovered_delete_btn
+            is_staged = False
+            if callable(self.is_item_staged):
+                try:
+                    is_staged = bool(self.is_item_staged(index.row(), chip.text_str))
+                except Exception:
+                    is_staged = False
 
             # Pill background & border
-            cur_bg = self.bg_hover if is_chip_hovered else self.bg_color
-            cur_border = self.border_hover if is_chip_hovered else self.border_color
+            if is_staged:
+                cur_bg = QColor(245, 158, 11, 40) if not is_chip_hovered else QColor(245, 158, 11, 75)
+                cur_border = QColor(245, 158, 11, 210)
+                pen = QPen(cur_border, 1.2, Qt.PenStyle.DashLine)
+                cur_text = QColor("#fef3c7")
+            else:
+                cur_bg = self.bg_hover if is_chip_hovered else self.bg_color
+                cur_border = self.border_hover if is_chip_hovered else self.border_color
+                pen = QPen(cur_border, 1.0)
+                cur_text = self.text_color
+
             painter.setBrush(QBrush(cur_bg))
-            painter.setPen(QPen(cur_border, 1.0))
+            painter.setPen(pen)
             painter.drawRoundedRect(chip.rect, 4.0, 4.0)
 
             # Text
-            painter.setPen(self.text_color)
+            painter.setPen(cur_text)
             painter.drawText(chip.rect, Qt.AlignmentFlag.AlignCenter, chip.display_str)
 
             # Vector delete button on hover
@@ -517,9 +540,11 @@ class ChipBadgeDelegate(QStyledItemDelegate):
                     pen = QPen(QColor("#ffffff"), 1.5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
                 else:
                     painter.setBrush(QBrush(QColor(22, 24, 32, 240)))
-                    painter.setPen(QPen(self.border_color, 1.0))
+                    del_border = QColor(245, 158, 11, 210) if is_staged else self.border_color
+                    del_pen_color = QColor("#fef3c7") if is_staged else self.text_color
+                    painter.setPen(QPen(del_border, 1.0))
                     painter.drawEllipse(btn_rect.adjusted(0.5, 0.5, -0.5, -0.5))
-                    pen = QPen(self.text_color, 1.3, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
+                    pen = QPen(del_pen_color, 1.3, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
                 painter.setPen(pen)
                 pad = 4.0
                 painter.drawLine(
@@ -974,6 +999,8 @@ class TracksTableModel(QAbstractTableModel):
         self._title_font = QFont()
         self._title_font.setBold(True)
 
+        self._is_row_staged_fn: Optional[Any] = None
+
         self._color_white = QColor("#ffffff")
         self._color_secondary = QColor(COLOR_TEXT_SECONDARY)
         self._color_muted = QColor(COLOR_TEXT_MUTED)
@@ -1086,6 +1113,11 @@ class TracksTableModel(QAbstractTableModel):
         col = index.column()
 
         if not (0 <= row < len(self.records) and 0 <= col < len(self.config.columns)):
+            return None
+
+        if role == Qt.ItemDataRole.BackgroundRole:
+            if callable(self._is_row_staged_fn) and self._is_row_staged_fn(row):
+                return QBrush(QColor(245, 158, 11, 20))
             return None
 
         t = self.records[row]
@@ -1223,7 +1255,10 @@ class TracksTableModel(QAbstractTableModel):
             elif role == Qt.ItemDataRole.UserRole:
                 return tags
             elif role == Qt.ItemDataRole.ToolTipRole:
-                return f"Tags: {', '.join(tags)}" if tags else "No tags"
+                base = f"Tags: {', '.join(tags)}" if tags else "No tags"
+                if callable(self._is_row_staged_fn) and self._is_row_staged_fn(row):
+                    return f"{base} (⚠️ Unsaved modifications)"
+                return base
 
         # 12. PLAYLISTS
         elif col_name == TrackColumn.PLAYLISTS:
@@ -1233,11 +1268,14 @@ class TracksTableModel(QAbstractTableModel):
             elif role == Qt.ItemDataRole.UserRole:
                 return playlists
             elif role == Qt.ItemDataRole.ToolTipRole:
-                return (
+                base = (
                     f"Playlists: {', '.join(playlists)}"
                     if playlists
                     else "Not in any playlist"
                 )
+                if callable(self._is_row_staged_fn) and self._is_row_staged_fn(row):
+                    return f"{base} (⚠️ Unsaved modifications)"
+                return base
 
         # 13. FOLDER
         elif col_name == TrackColumn.FOLDER:
@@ -1334,6 +1372,8 @@ class TracksTableWidget(QTableView):
     track_playlists_changed = Signal(int, list)
     track_tags_changed = Signal(int, list)
     track_modified = Signal(dict)
+    db_saved = Signal()
+    staged_changes_changed = Signal(bool)
 
     def __init__(
         self,
@@ -1343,6 +1383,7 @@ class TracksTableWidget(QTableView):
         super().__init__(parent)
         self.config: TrackTableConfig = config or TrackTableConfig()
         self.records: List[Dict[str, Any]] = []
+        self.staged_edits: Dict[str, Dict[str, Any]] = {}
         self.hovered_link_cell: Optional[Tuple[int, int]] = None
         self.current_sort_col: int = 1
         self.current_sort_order: Qt.SortOrder = Qt.SortOrder.AscendingOrder
@@ -1378,6 +1419,38 @@ class TracksTableWidget(QTableView):
         self._chip_editor.item_added.connect(self._on_chip_item_added)
         self.verticalScrollBar().valueChanged.connect(self._chip_editor.close_editor)
         self.horizontalScrollBar().valueChanged.connect(self._chip_editor.close_editor)
+
+        # Bottom Save/Discard Bar (Hidden by default; appears when staged edits exist)
+        self.bottom_bar = QFrame()
+        self.bottom_bar.setObjectName("bottomActionBar")
+        self.bottom_bar.setStyleSheet(
+            f"QFrame#bottomActionBar {{ "
+            f"  background-color: {COLOR_BG_PANEL}; "
+            f"  border-top: 1px solid {COLOR_BORDER}; "
+            f"  border-radius: 6px; "
+            f"}}"
+        )
+        bottom_layout = QHBoxLayout(self.bottom_bar)
+        bottom_layout.setContentsMargins(16, 10, 16, 10)
+        bottom_layout.setSpacing(12)
+
+        self.staged_status_label = QLabel("⚠️ You have unsaved playlist or tag modifications")
+        self.staged_status_label.setStyleSheet(f"color: {COLOR_AMBER}; font-size: 12px; font-weight: 600;")
+        bottom_layout.addWidget(self.staged_status_label)
+        bottom_layout.addStretch(1)
+
+        self.discard_btn = QPushButton("Discard Changes")
+        self.discard_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.discard_btn.clicked.connect(self.discard_changes)
+        bottom_layout.addWidget(self.discard_btn)
+
+        self.save_btn = QPushButton("💾 Save Changes")
+        self.save_btn.setObjectName("primaryButton")
+        self.save_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.save_btn.clicked.connect(self.save_changes)
+        bottom_layout.addWidget(self.save_btn)
+
+        self.bottom_bar.setVisible(False)
 
         self._init_table_structure()
 
@@ -1470,6 +1543,7 @@ class TracksTableWidget(QTableView):
             bg_hover=QColor(139, 92, 246, 68),
             border_hover=QColor(167, 139, 250, 180),
             removable=True,
+            is_item_staged=self._is_tag_item_staged,
             parent=self,
         )
         self._playlist_delegate = ChipBadgeDelegate(
@@ -1479,8 +1553,10 @@ class TracksTableWidget(QTableView):
             bg_hover=QColor(20, 184, 166, 68),
             border_hover=QColor(45, 212, 191, 180),
             removable=True,
+            is_item_staged=self._is_playlist_item_staged,
             parent=self,
         )
+        self._model._is_row_staged_fn = self._is_row_staged
         path_link_delegate = PathLinkDelegate(parent=self)
 
         self._folder_col_idx = -1
@@ -1678,6 +1754,10 @@ class TracksTableWidget(QTableView):
                             QRectF(cell_rect), pos, items
                         )
                         if clicked_item:
+                            if self.has_staged_changes():
+                                if not self.confirm_unsaved_changes():
+                                    event.accept()
+                                    return
                             if idx.column() == self._playlist_col_idx:
                                 self.open_playlist_requested.emit(clicked_item)
                             else:
@@ -1777,127 +1857,348 @@ class TracksTableWidget(QTableView):
             available_items=available_items,
         )
 
-    def _on_chip_item_added(self, row: int, category: str, item_name: str) -> None:
-        """Handle adding a tag or playlist item from the inline editor."""
-        if is_rekordbox_running():
-            QMessageBox.warning(
-                self,
-                "Rekordbox is Running",
-                "Please close Rekordbox before modifying tags or playlists.",
+    def _find_row_by_id(self, content_id: str) -> int:
+        """Find row index in self.records for a given track id."""
+        for idx, r in enumerate(self.records):
+            cid = str(r.get("id") or r.get("content_id") or "")
+            if cid == content_id:
+                return idx
+        return -1
+
+    def _is_tag_item_staged(self, row: Any, item_name: str) -> bool:
+        """Return True if the specified tag on this row is a staged/pending addition."""
+        row_idx = row[0] if isinstance(row, tuple) else (row.row() if hasattr(row, "row") else row)
+        if isinstance(row_idx, int) and 0 <= row_idx < len(self.records):
+            track = self.records[row_idx]
+            content_id = str(track.get("id") or track.get("content_id") or "")
+            if content_id in self.staged_edits:
+                orig_tags = self.staged_edits[content_id].get("original_tags") or []
+                return item_name not in orig_tags
+        return False
+
+    def _is_playlist_item_staged(self, row: Any, item_name: str) -> bool:
+        """Return True if the specified playlist on this row is a staged/pending addition."""
+        row_idx = row[0] if isinstance(row, tuple) else (row.row() if hasattr(row, "row") else row)
+        if isinstance(row_idx, int) and 0 <= row_idx < len(self.records):
+            track = self.records[row_idx]
+            content_id = str(track.get("id") or track.get("content_id") or "")
+            if content_id in self.staged_edits:
+                orig_pls = self.staged_edits[content_id].get("original_playlists") or []
+                return item_name not in orig_pls
+        return False
+
+    def _is_row_staged(self, row: Any) -> bool:
+        """Return True if the track at this row has unsaved modifications."""
+        row_idx = row[0] if isinstance(row, tuple) else (row.row() if hasattr(row, "row") else row)
+        if isinstance(row_idx, int) and 0 <= row_idx < len(self.records):
+            track = self.records[row_idx]
+            content_id = str(track.get("id") or track.get("content_id") or "")
+            return content_id in self.staged_edits
+        return False
+
+    def has_staged_changes(self) -> bool:
+        """Return True if there are unsaved playlist or tag modifications in the table."""
+        return len(self.staged_edits) > 0
+
+    def get_staged_summary(self) -> str:
+        """Produce a human-readable summary of all staged modifications."""
+        num_tracks = len(self.staged_edits)
+        if num_tracks == 0:
+            return "No unsaved changes"
+
+        total_added_pl = 0
+        total_removed_pl = 0
+        total_added_tags = 0
+        total_removed_tags = 0
+
+        for data in self.staged_edits.values():
+            orig_pl = set(data["original_playlists"])
+            cur_pl = set(data["current_playlists"])
+            orig_tags = set(data["original_tags"])
+            cur_tags = set(data["current_tags"])
+            total_added_pl += len(cur_pl - orig_pl)
+            total_removed_pl += len(orig_pl - cur_pl)
+            total_added_tags += len(cur_tags - orig_tags)
+            total_removed_tags += len(orig_tags - cur_tags)
+
+        if num_tracks == 1:
+            first_data = next(iter(self.staged_edits.values()))
+            title = first_data["record"].get("title") or "Track"
+            sections = []
+            if total_added_pl or total_removed_pl:
+                parts = []
+                if total_added_pl:
+                    parts.append(f"+{total_added_pl} added")
+                if total_removed_pl:
+                    parts.append(f"-{total_removed_pl} removed")
+                sections.append(f"Playlists: {', '.join(parts)}")
+            if total_added_tags or total_removed_tags:
+                parts = []
+                if total_added_tags:
+                    parts.append(f"+{total_added_tags} added")
+                if total_removed_tags:
+                    parts.append(f"-{total_removed_tags} removed")
+                sections.append(f"Tags: {', '.join(parts)}")
+            inner = "; ".join(sections) if sections else "modified"
+            return f"'{title}': {inner}"
+        else:
+            sections = []
+            if total_added_pl or total_removed_pl:
+                parts = []
+                if total_added_pl:
+                    parts.append(f"+{total_added_pl}")
+                if total_removed_pl:
+                    parts.append(f"-{total_removed_pl}")
+                sections.append(f"Playlists: {', '.join(parts)}")
+            if total_added_tags or total_removed_tags:
+                parts = []
+                if total_added_tags:
+                    parts.append(f"+{total_added_tags}")
+                if total_removed_tags:
+                    parts.append(f"-{total_removed_tags}")
+                sections.append(f"Tags: {', '.join(parts)}")
+            inner = "; ".join(sections) if sections else "modified"
+            return f"{num_tracks} tracks modified ({inner})"
+
+    def _update_staged_ui(self) -> None:
+        """Update bottom action bar visibility and message text based on staged edits."""
+        staged = self.has_staged_changes()
+        self.bottom_bar.setVisible(staged)
+        if staged:
+            num = len(self.staged_edits)
+            summary = self.get_staged_summary()
+            self.staged_status_label.setText(
+                f"⚠️ Unsaved modifications ({summary}) — click Save Changes to commit."
             )
-            return
+            self.save_btn.setText(f"💾 Save Changes ({num})" if num > 1 else "💾 Save Changes")
+            self.discard_btn.setText(f"Discard Changes ({num})" if num > 1 else "Discard Changes")
+        self.viewport().update()
 
-        if not self.engine:
-            self.status_message.emit("⚠️ Database engine not available.")
-            return
-
+    def _on_chip_item_added(self, row: int, category: str, item_name: str) -> None:
+        """Handle adding a tag or playlist item from the inline editor as a staged edit."""
         if not (0 <= row < len(self.records)):
             return
 
         track = self.records[row]
-        content_id = track.get("id") or track.get("content_id")
+        content_id = str(track.get("id") or track.get("content_id") or "")
         if not content_id:
             return
 
         title = track.get("title") or "Track"
 
-        if category == "tags":
-            current_tags = list(track.get("tags") or [])
-            if item_name in current_tags:
-                return
-            try:
-                add_track_to_tag(self.engine, str(content_id), item_name)
-            except Exception as e:
-                QMessageBox.critical(
-                    self, "Add Tag Failed", f"Could not add tag '{item_name}':\n{e}"
-                )
-                return
-            current_tags.append(item_name)
-            track["tags"] = current_tags
-            self._model.update_track_tags(row, current_tags)
-            self.status_message.emit(f"🏷️ Added tag '{item_name}' to '{title}'")
-            self.track_tags_changed.emit(row, current_tags)
-            self.track_modified.emit(track)
+        if content_id not in self.staged_edits:
+            self.staged_edits[content_id] = {
+                "record": track,
+                "original_tags": list(dict.fromkeys(track.get("tags") or [])),
+                "original_playlists": list(dict.fromkeys(track.get("playlists") or [])),
+                "current_tags": list(dict.fromkeys(track.get("tags") or [])),
+                "current_playlists": list(dict.fromkeys(track.get("playlists") or [])),
+            }
 
+        staged = self.staged_edits[content_id]
+        if category == "tags":
+            current_tags = staged["current_tags"]
+            if item_name not in current_tags:
+                current_tags.append(item_name)
+            track["tags"] = list(current_tags)
+            self._model.update_track_tags(row, current_tags)
+            self.track_tags_changed.emit(row, current_tags)
+            cat_singular = "tag"
         elif category == "playlists":
-            current_pls = list(track.get("playlists") or [])
-            if item_name in current_pls:
-                return
-            try:
-                add_track_to_playlist(self.engine, str(content_id), item_name)
-            except Exception as e:
-                QMessageBox.critical(
-                    self, "Add Playlist Failed", f"Could not add to playlist '{item_name}':\n{e}"
-                )
-                return
-            current_pls.append(item_name)
-            track["playlists"] = current_pls
+            current_pls = staged["current_playlists"]
+            if item_name not in current_pls:
+                current_pls.append(item_name)
+            track["playlists"] = list(current_pls)
             self._model.update_track_playlists(row, current_pls)
-            self.status_message.emit(f"📑 Added '{title}' to playlist '{item_name}'")
             self.track_playlists_changed.emit(row, current_pls)
-            self.track_modified.emit(track)
+            cat_singular = "playlist"
+        else:
+            return
+
+        if (
+            set(staged["current_tags"]) == set(staged["original_tags"])
+            and set(staged["current_playlists"]) == set(staged["original_playlists"])
+        ):
+            self.staged_edits.pop(content_id, None)
+
+        self._update_staged_ui()
+        self.track_modified.emit(track)
+        self.staged_changes_changed.emit(self.has_staged_changes())
+        self.status_message.emit(f"⚠️ Staged adding {cat_singular} '{item_name}' to '{title}' (Unsaved)")
 
     def _on_chip_item_deleted(self, row: int, category: str, item_name: str) -> None:
-        """Handle removing a tag or playlist item when clicking its chip delete button."""
-        if is_rekordbox_running():
-            QMessageBox.warning(
-                self,
-                "Rekordbox is Running",
-                "Please close Rekordbox before modifying tags or playlists.",
-            )
-            return
-
-        if not self.engine:
-            self.status_message.emit("⚠️ Database engine not available.")
-            return
-
+        """Handle removing a tag or playlist item as a staged edit."""
         if not (0 <= row < len(self.records)):
             return
 
         track = self.records[row]
-        content_id = track.get("id") or track.get("content_id")
+        content_id = str(track.get("id") or track.get("content_id") or "")
         if not content_id:
             return
 
         title = track.get("title") or "Track"
 
+        if content_id not in self.staged_edits:
+            self.staged_edits[content_id] = {
+                "record": track,
+                "original_tags": list(dict.fromkeys(track.get("tags") or [])),
+                "original_playlists": list(dict.fromkeys(track.get("playlists") or [])),
+                "current_tags": list(dict.fromkeys(track.get("tags") or [])),
+                "current_playlists": list(dict.fromkeys(track.get("playlists") or [])),
+            }
+
+        staged = self.staged_edits[content_id]
         if category == "tags":
-            current_tags = list(track.get("tags") or [])
-            if item_name not in current_tags:
-                return
-            try:
-                remove_track_from_tag(self.engine, str(content_id), item_name)
-            except Exception as e:
-                QMessageBox.critical(
-                    self, "Remove Tag Failed", f"Could not remove tag '{item_name}':\n{e}"
-                )
-                return
-            current_tags.remove(item_name)
-            track["tags"] = current_tags
+            current_tags = staged["current_tags"]
+            if item_name in current_tags:
+                current_tags.remove(item_name)
+            track["tags"] = list(current_tags)
             self._model.update_track_tags(row, current_tags)
             self._clear_chip_hover()
-            self.status_message.emit(f"🗑️ Removed tag '{item_name}' from '{title}'")
             self.track_tags_changed.emit(row, current_tags)
-            self.track_modified.emit(track)
-
+            cat_singular = "tag"
         elif category == "playlists":
-            current_pls = list(track.get("playlists") or [])
-            if item_name not in current_pls:
-                return
-            try:
-                remove_track_from_playlist(self.engine, str(content_id), item_name)
-            except Exception as e:
-                QMessageBox.critical(
-                    self, "Remove Playlist Failed", f"Could not remove from playlist '{item_name}':\n{e}"
-                )
-                return
-            current_pls.remove(item_name)
-            track["playlists"] = current_pls
+            current_pls = staged["current_playlists"]
+            if item_name in current_pls:
+                current_pls.remove(item_name)
+            track["playlists"] = list(current_pls)
             self._model.update_track_playlists(row, current_pls)
             self._clear_chip_hover()
-            self.status_message.emit(f"🗑️ Removed '{title}' from playlist '{item_name}'")
             self.track_playlists_changed.emit(row, current_pls)
-            self.track_modified.emit(track)
+            cat_singular = "playlist"
+        else:
+            return
+
+        if (
+            set(staged["current_tags"]) == set(staged["original_tags"])
+            and set(staged["current_playlists"]) == set(staged["original_playlists"])
+        ):
+            self.staged_edits.pop(content_id, None)
+
+        self._update_staged_ui()
+        self.track_modified.emit(track)
+        self.staged_changes_changed.emit(self.has_staged_changes())
+        self.status_message.emit(f"⚠️ Staged removing {cat_singular} '{item_name}' from '{title}' (Unsaved)")
+
+    def discard_changes(self) -> None:
+        """Discard all staged tag and playlist modifications and restore original state."""
+        if not self.staged_edits:
+            return
+
+        for content_id, data in list(self.staged_edits.items()):
+            track = data["record"]
+            orig_tags = list(data["original_tags"])
+            orig_pls = list(data["original_playlists"])
+            track["tags"] = orig_tags
+            track["playlists"] = orig_pls
+            row = self._find_row_by_id(content_id)
+            if row != -1:
+                self._model.update_track_tags(row, orig_tags)
+                self._model.update_track_playlists(row, orig_pls)
+                self.track_tags_changed.emit(row, orig_tags)
+                self.track_playlists_changed.emit(row, orig_pls)
+
+        self.staged_edits.clear()
+        self._clear_chip_hover()
+        self._update_staged_ui()
+        self.staged_changes_changed.emit(False)
+        self.status_message.emit("Modifications discarded.")
+
+    def save_changes(self) -> bool:
+        """Commit all staged tag and playlist modifications to the database."""
+        if not self.staged_edits:
+            return True
+
+        if is_rekordbox_running():
+            QMessageBox.warning(
+                self,
+                "Rekordbox is Running",
+                "Please close Rekordbox before saving modifications to the database.",
+            )
+            return False
+
+        if not self.engine:
+            QMessageBox.warning(
+                self,
+                "Database Unavailable",
+                "Database engine is not connected. Cannot save modifications.",
+            )
+            return False
+
+        try:
+            for content_id, data in self.staged_edits.items():
+                orig_pl = set(data["original_playlists"])
+                cur_pl = set(data["current_playlists"])
+                orig_tags = set(data["original_tags"])
+                cur_tags = set(data["current_tags"])
+
+                added_pl = cur_pl - orig_pl
+                removed_pl = orig_pl - cur_pl
+                added_tags = cur_tags - orig_tags
+                removed_tags = orig_tags - cur_tags
+
+                for name in added_pl:
+                    add_track_to_playlist(self.engine, str(content_id), name)
+                for name in removed_pl:
+                    remove_track_from_playlist(self.engine, str(content_id), name)
+                for name in added_tags:
+                    add_track_to_tag(self.engine, str(content_id), name)
+                for name in removed_tags:
+                    remove_track_from_tag(self.engine, str(content_id), name)
+
+                data["original_playlists"] = list(data["current_playlists"])
+                data["original_tags"] = list(data["current_tags"])
+                data["record"]["playlists"] = list(data["current_playlists"])
+                data["record"]["tags"] = list(data["current_tags"])
+
+        except Exception as e:
+            QMessageBox.critical(
+                self, "Save Failed", f"Database error while saving modifications:\n{e}"
+            )
+            return False
+
+        saved_count = len(self.staged_edits)
+        self.staged_edits.clear()
+        self._refresh_available_caches()
+        self._update_staged_ui()
+        self.staged_changes_changed.emit(False)
+        self.db_saved.emit()
+        self.status_message.emit(
+            f"✅ Saved modifications for {saved_count} track{'s' if saved_count != 1 else ''} successfully."
+        )
+        return True
+
+    def confirm_unsaved_changes(self) -> bool:
+        """Prompt user if there are unsaved playlist or tag changes in the table before navigating away.
+
+        Returns True if safe to proceed, False if action was cancelled.
+        """
+        if not self.has_staged_changes():
+            return True
+
+        reply = QMessageBox.question(
+            self,
+            "Unsaved Modifications",
+            "You have unsaved playlist or tag modifications in the table. Do you want to save them before leaving?",
+            QMessageBox.StandardButton.Save
+            | QMessageBox.StandardButton.Discard
+            | QMessageBox.StandardButton.Cancel,
+        )
+        if reply == QMessageBox.StandardButton.Save:
+            return self.save_changes()
+        elif reply == QMessageBox.StandardButton.Discard:
+            self.discard_changes()
+            return True
+        else:
+            return False
+
+    def sync_saved_track(self, track: Dict[str, Any]) -> None:
+        """Update track data from external save (e.g. from TrackDetailView)."""
+        content_id = str(track.get("id") or track.get("content_id") or "")
+        if content_id and content_id in self.staged_edits:
+            self.staged_edits.pop(content_id, None)
+            self._update_staged_ui()
+            self.staged_changes_changed.emit(self.has_staged_changes())
 
     def _on_header_section_clicked(self, logical_index: int) -> None:
         """Handle header click for server-side sorting."""
@@ -1949,6 +2250,8 @@ class TracksTableWidget(QTableView):
     def set_tracks(self, records: List[Dict[str, Any]]) -> None:
         """Populate the table with records according to the active configuration."""
         self.records = records
+        self.staged_edits.clear()
+        self._update_staged_ui()
         self._model.set_records(records)
         self._update_index_column_width()
 
@@ -2133,6 +2436,9 @@ class TracksTableWidget(QTableView):
         else:
             return
         if 0 <= row < len(self.records):
+            if self.has_staged_changes():
+                if not self.confirm_unsaved_changes():
+                    return
             self.track_detail_requested.emit(self.records[row])
 
     def _on_table_context_menu(self, pos: QPoint) -> None:
@@ -2202,12 +2508,24 @@ class TracksTableWidget(QTableView):
 
         action = menu.exec(self.viewport().mapToGlobal(pos))
         if action == act_details:
+            if self.has_staged_changes():
+                if not self.confirm_unsaved_changes():
+                    return
             self.track_detail_requested.emit(track)
         elif action == act_replace:
+            if self.has_staged_changes():
+                if not self.confirm_unsaved_changes():
+                    return
             self.replace_file_requested.emit(track)
         elif action in act_pl_map:
+            if self.has_staged_changes():
+                if not self.confirm_unsaved_changes():
+                    return
             self.open_playlist_requested.emit(act_pl_map[action])
         elif action in act_tag_map:
+            if self.has_staged_changes():
+                if not self.confirm_unsaved_changes():
+                    return
             self.open_tag_requested.emit(act_tag_map[action])
         elif action == act_open_folder:
             self.open_folder(folder_dir)

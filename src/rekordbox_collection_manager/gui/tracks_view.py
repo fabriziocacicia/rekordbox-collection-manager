@@ -133,7 +133,9 @@ class TracksView(QWidget):
         self.table.replace_file_requested.connect(self.replace_file_requested.emit)
         self.table.open_playlist_requested.connect(self.open_playlist_requested.emit)
         self.table.open_tag_requested.connect(self.open_tag_requested.emit)
+        self.table.db_saved.connect(self.db_saved.emit)
         main_layout.addWidget(self.table, stretch=1)
+        main_layout.addWidget(self.table.bottom_bar)
 
         # 3. Bottom Status Bar
         self.status_label = QLabel("0 tracks")
@@ -258,6 +260,10 @@ class TracksView(QWidget):
         if not self.engine:
             return
 
+        if self.table.has_staged_changes():
+            if not self.table.confirm_unsaved_changes():
+                return
+
         query = self.search_input.text().strip()
 
         # Limit: None if hidden or 0 (All Tracks); otherwise int limit
@@ -326,6 +332,10 @@ class TracksView(QWidget):
         if not self.engine or not track:
             return
 
+        if self.table.has_staged_changes():
+            if not self.table.confirm_unsaved_changes():
+                return
+
         track_id = track.get("id") or track.get("content_id")
         curr_idx = 0
         for idx, r in enumerate(self.records):
@@ -349,6 +359,7 @@ class TracksView(QWidget):
 
     def _on_detail_track_changed(self, idx: int, track: Dict[str, Any]) -> None:
         """Select, scroll, and update track in table when detail view navigates or changes."""
+        self.table.sync_saved_track(track)
         if 0 <= idx < len(self.records):
             self.records[idx].update(track)
             if "playlists" in track:
@@ -358,6 +369,12 @@ class TracksView(QWidget):
         if 0 <= idx < self.table.rowCount():
             self.table.selectRow(idx)
             self.table.scrollToRow(idx)
+
+    def confirm_unsaved_changes(self) -> bool:
+        """Prompt user if there are unsaved changes in detail view or tracks table."""
+        if self.stack.currentIndex() == 1:
+            return self.detail_view._confirm_unsaved_changes()
+        return self.table.confirm_unsaved_changes()
 
     def _on_open_selected_track_detail(self) -> None:
         """Open details for currently selected table row."""

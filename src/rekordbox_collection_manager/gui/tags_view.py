@@ -260,8 +260,9 @@ class TagsView(QWidget):
         self.table.replace_file_requested.connect(self.replace_file_requested.emit)
         self.table.open_playlist_requested.connect(self.open_playlist_requested.emit)
         self.table.open_tag_requested.connect(self.open_tag_by_id_or_name)
-        self.table.track_tags_changed.connect(self._on_table_tags_changed)
+        self.table.db_saved.connect(self._on_table_db_saved)
         right_layout.addWidget(self.table, stretch=1)
+        right_layout.addWidget(self.table.bottom_bar)
 
         # Status Bar
         self.status_label = QLabel("Select a tag to view tracks.")
@@ -303,9 +304,10 @@ class TagsView(QWidget):
         self.table.set_engine(engine)
         self._load_tags_tree()
 
-    def _on_table_tags_changed(self, row: int, tags: List[str]) -> None:
-        """Refresh sidebar tag tree when tag chips are added or removed."""
-        self._load_tags_tree()
+    def _on_table_db_saved(self) -> None:
+        """Refresh sidebar tag tree and active tag tracks when changes are committed."""
+        self._load_tags_tree(force_reload_selected=True)
+        self.db_saved.emit()
 
     def _load_tags_tree(self, force_reload_selected: bool = False) -> None:
         """Fetch Genre & Style tags hierarchy in background thread."""
@@ -484,10 +486,16 @@ class TagsView(QWidget):
             return
         if node.get("attribute") == 1:
             # Clicked a category folder: toggle expand/collapse
+            if self.table.has_staged_changes():
+                if not self.table.confirm_unsaved_changes():
+                    return
             item.setExpanded(not item.isExpanded())
             self._show_folder_summary(node)
         else:
             if not self.current_tag or self.current_tag.get("id") != node.get("id"):
+                if self.table.has_staged_changes():
+                    if not self.table.confirm_unsaved_changes():
+                        return
                 self.load_tag(node)
 
     def _on_tree_current_item_changed(
@@ -497,6 +505,13 @@ class TagsView(QWidget):
             return
         node = current.data(0, Qt.ItemDataRole.UserRole)
         if node and node.get("attribute") != 1:
+            if self.table.has_staged_changes():
+                if not self.table.confirm_unsaved_changes():
+                    if previous:
+                        self.tree.blockSignals(True)
+                        self.tree.setCurrentItem(previous)
+                        self.tree.blockSignals(False)
+                    return
             self.load_tag(node)
 
     def _show_folder_summary(self, folder_node: Dict[str, Any]) -> None:
@@ -620,6 +635,9 @@ class TagsView(QWidget):
         """Switch to and load the specified tag's tracks."""
         if not force_reload and self.current_tag and self.current_tag.get("id") == tag_dict.get("id"):
             return
+        if self.table.has_staged_changes():
+            if not self.table.confirm_unsaved_changes():
+                return
         self.current_tag = tag_dict
         name = tag_dict.get("name", "Untitled")
 
@@ -674,6 +692,10 @@ class TagsView(QWidget):
         """Run non-blocking worker to query tracks for active tag."""
         if not self.engine or not self.current_tag:
             return
+
+        if self.table.has_staged_changes():
+            if not self.table.confirm_unsaved_changes():
+                return
 
         tag_id = self.current_tag.get("id")
         if not tag_id:
@@ -778,6 +800,10 @@ class TagsView(QWidget):
         if not self.engine or not track:
             return
 
+        if self.table.has_staged_changes():
+            if not self.table.confirm_unsaved_changes():
+                return
+
         track_id = track.get("id") or track.get("content_id")
         curr_idx = 0
         for idx, r in enumerate(self.records):
@@ -802,6 +828,7 @@ class TagsView(QWidget):
 
     def _on_detail_track_changed(self, idx: int, track: Dict[str, Any]) -> None:
         """Update and scroll table when detail view navigates."""
+        self.table.sync_saved_track(track)
         if 0 <= idx < len(self.records):
             self.records[idx].update(track)
             if "playlists" in track:
@@ -811,6 +838,12 @@ class TagsView(QWidget):
         if 0 <= idx < self.table.rowCount():
             self.table.selectRow(idx)
             self.table.scrollToRow(idx)
+
+    def confirm_unsaved_changes(self) -> bool:
+        """Prompt user if there are unsaved changes in detail view or tracks table."""
+        if self.stack.currentIndex() == 1:
+            return self.detail_view._confirm_unsaved_changes()
+        return self.table.confirm_unsaved_changes()
 
     def _on_open_selected_track_detail(self) -> None:
         """Open detail view for currently selected row."""

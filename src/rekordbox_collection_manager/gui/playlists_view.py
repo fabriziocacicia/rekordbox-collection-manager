@@ -251,8 +251,9 @@ class PlaylistsView(QWidget):
         self.table.replace_file_requested.connect(self.replace_file_requested.emit)
         self.table.open_playlist_requested.connect(self.open_playlist_by_id_or_name)
         self.table.open_tag_requested.connect(self.open_tag_requested.emit)
-        self.table.track_playlists_changed.connect(self._on_table_playlists_changed)
+        self.table.db_saved.connect(self._on_table_db_saved)
         right_layout.addWidget(self.table, stretch=1)
+        right_layout.addWidget(self.table.bottom_bar)
 
         # Status Bar
         self.status_label = QLabel("Select a playlist to view tracks.")
@@ -294,9 +295,10 @@ class PlaylistsView(QWidget):
         self.table.set_engine(engine)
         self._load_playlists_tree()
 
-    def _on_table_playlists_changed(self, row: int, playlists: List[str]) -> None:
-        """Refresh sidebar playlist tree when playlist chips are added or removed."""
-        self._load_playlists_tree()
+    def _on_table_db_saved(self) -> None:
+        """Refresh sidebar playlist tree and active playlist tracks when changes are committed."""
+        self._load_playlists_tree(force_reload_selected=True)
+        self.db_saved.emit()
 
     def _load_playlists_tree(self, force_reload_selected: bool = False) -> None:
         """Fetch all playlists and folders in background thread."""
@@ -480,10 +482,16 @@ class PlaylistsView(QWidget):
             return
         if node.get("attribute") == 1:
             # Clicked a folder: toggle expand/collapse
+            if self.table.has_staged_changes():
+                if not self.table.confirm_unsaved_changes():
+                    return
             item.setExpanded(not item.isExpanded())
             self._show_folder_summary(node)
         else:
             if not self.current_playlist or self.current_playlist.get("id") != node.get("id"):
+                if self.table.has_staged_changes():
+                    if not self.table.confirm_unsaved_changes():
+                        return
                 self.load_playlist(node)
 
     def _on_tree_current_item_changed(
@@ -493,6 +501,13 @@ class PlaylistsView(QWidget):
             return
         node = current.data(0, Qt.ItemDataRole.UserRole)
         if node and node.get("attribute") != 1:
+            if self.table.has_staged_changes():
+                if not self.table.confirm_unsaved_changes():
+                    if previous:
+                        self.tree.blockSignals(True)
+                        self.tree.setCurrentItem(previous)
+                        self.tree.blockSignals(False)
+                    return
             self.load_playlist(node)
 
     def _show_folder_summary(self, folder_node: Dict[str, Any]) -> None:
@@ -509,6 +524,9 @@ class PlaylistsView(QWidget):
         """Switch to and load the specified playlist's tracks."""
         if not force_reload and self.current_playlist and self.current_playlist.get("id") == playlist_dict.get("id"):
             return
+        if self.table.has_staged_changes():
+            if not self.table.confirm_unsaved_changes():
+                return
         self.current_playlist = playlist_dict
         attr = playlist_dict.get("attribute", 0)
         name = playlist_dict.get("name", "Untitled")
@@ -565,6 +583,10 @@ class PlaylistsView(QWidget):
         """Run non-blocking worker to query tracks for active playlist."""
         if not self.engine or not self.current_playlist:
             return
+
+        if self.table.has_staged_changes():
+            if not self.table.confirm_unsaved_changes():
+                return
 
         pl_id = self.current_playlist.get("id")
         attr = self.current_playlist.get("attribute", 0)
@@ -673,6 +695,10 @@ class PlaylistsView(QWidget):
         if not self.engine or not track:
             return
 
+        if self.table.has_staged_changes():
+            if not self.table.confirm_unsaved_changes():
+                return
+
         track_id = track.get("id") or track.get("content_id")
         curr_idx = 0
         for idx, r in enumerate(self.records):
@@ -697,6 +723,7 @@ class PlaylistsView(QWidget):
 
     def _on_detail_track_changed(self, idx: int, track: Dict[str, Any]) -> None:
         """Update and scroll table when detail view navigates."""
+        self.table.sync_saved_track(track)
         if 0 <= idx < len(self.records):
             self.records[idx].update(track)
             if "playlists" in track:
@@ -706,6 +733,12 @@ class PlaylistsView(QWidget):
         if 0 <= idx < self.table.rowCount():
             self.table.selectRow(idx)
             self.table.scrollToRow(idx)
+
+    def confirm_unsaved_changes(self) -> bool:
+        """Prompt user if there are unsaved changes in detail view or tracks table."""
+        if self.stack.currentIndex() == 1:
+            return self.detail_view._confirm_unsaved_changes()
+        return self.table.confirm_unsaved_changes()
 
     def _on_open_selected_track_detail(self) -> None:
         """Open detail view for currently selected row."""

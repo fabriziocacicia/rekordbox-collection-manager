@@ -1100,7 +1100,7 @@ class TestPlaylistChipsUI(unittest.TestCase):
         self.assertEqual(len(back_called), 0)
 
     def test_table_chip_item_deleted(self):
-        """Verify deleting a chip from TracksTableWidget does not error with dangling event."""
+        """Verify deleting a chip from TracksTableWidget stages change until saved."""
         from unittest.mock import MagicMock
         from rekordbox_collection_manager.gui.track_table import TracksTableWidget, TrackTableConfig
 
@@ -1112,12 +1112,19 @@ class TestPlaylistChipsUI(unittest.TestCase):
              patch("rekordbox_collection_manager.gui.track_table.remove_track_from_tag") as mock_rm_tag, \
              patch("rekordbox_collection_manager.gui.track_table.remove_track_from_playlist") as mock_rm_pl:
             table._on_chip_item_deleted(0, "tags", "Melodic Techno")
-            mock_rm_tag.assert_called_once()
+            mock_rm_tag.assert_not_called()
+            self.assertTrue(table.has_staged_changes())
             self.assertNotIn("Melodic Techno", table.records[0]["tags"])
 
             table._on_chip_item_deleted(0, "playlists", "Favorites")
-            mock_rm_pl.assert_called_once()
+            mock_rm_pl.assert_not_called()
             self.assertNotIn("Favorites", table.records[0]["playlists"])
+
+            saved = table.save_changes()
+            self.assertTrue(saved)
+            mock_rm_tag.assert_called_once()
+            mock_rm_pl.assert_called_once()
+            self.assertFalse(table.has_staged_changes())
 
 
 if __name__ == "__main__":
