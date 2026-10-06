@@ -242,6 +242,24 @@ class PathLinkDelegate(QStyledItemDelegate):
         return QSize(min(fm.horizontalAdvance(text_str) + 20, 300), 36)
 
 
+@dataclass
+class _ChipLayoutItem:
+    index: int
+    text_str: str
+    display_str: str
+    rect: QRectF
+    btn_rect: QRectF
+
+
+@dataclass
+class _PillLayoutResult:
+    chips: List[_ChipLayoutItem]
+    rem_count: int
+    rem_str: str
+    rem_rect: Optional[QRectF]
+    end_x: int
+
+
 class ChipBadgeDelegate(QStyledItemDelegate):
     """Renders a list of strings as sleek, rounded pill/chip badges with hover-to-delete support."""
 
@@ -290,6 +308,159 @@ class ChipBadgeDelegate(QStyledItemDelegate):
         self.badge_font.setWeight(QFont.Weight.DemiBold)
         self.fm = QFontMetrics(self.badge_font)
 
+    def _layout_chips(self, rect: QRectF, items: Any) -> _PillLayoutResult:
+        """Compute the positions and visible items for badges/chips in the given cell rect.
+
+        Guarantees that:
+        1. If all items fit, all items are shown with no overflow badge.
+        2. If not all items fit, the maximum number of items that fit ALONGSIDE the
+           '+N' overflow badge are shown, and the '+N' overflow badge is ALWAYS
+           rendered (preventing situations where items are omitted but '+N' disappears).
+        3. If only 1 item exists and it overflows, it is gracefully elided to fit available width.
+        """
+        rect_f = QRectF(rect)
+        start_x = rect_f.x() + 5.0
+        chip_h = 20.0
+        y = rect_f.y() + (rect_f.height() - chip_h) / 2.0
+        max_x = rect_f.right() - 5.0
+        avail_w = max_x - start_x
+
+        if not items:
+            return _PillLayoutResult(
+                chips=[], rem_count=0, rem_str="", rem_rect=None, end_x=int(start_x)
+            )
+
+        if isinstance(items, str):
+            item_list = [items]
+        elif isinstance(items, (list, tuple)):
+            item_list = list(dict.fromkeys(items))
+        else:
+            item_list = list(items)
+
+        if not item_list:
+            return _PillLayoutResult(
+                chips=[], rem_count=0, rem_str="", rem_rect=None, end_x=int(start_x)
+            )
+
+        if avail_w <= 0:
+            return _PillLayoutResult(
+                chips=[],
+                rem_count=len(item_list),
+                rem_str=f"+{len(item_list)}",
+                rem_rect=None,
+                end_x=int(start_x),
+            )
+
+        max_chip_w = 140.0
+        btn_size = 14.0
+        gap = 8.0
+        pad = 14.0
+        fm = self.fm
+        n = len(item_list)
+
+        measured_items: List[Tuple[int, str, str, float]] = []
+        for i, text_val in enumerate(item_list):
+            text_str = str(text_val)
+            raw_w = float(fm.horizontalAdvance(text_str))
+            if raw_w + pad > max_chip_w:
+                display_str = fm.elidedText(
+                    text_str, Qt.TextElideMode.ElideRight, int(max_chip_w - pad)
+                )
+                chip_w = float(fm.horizontalAdvance(display_str) + pad)
+            else:
+                display_str = text_str
+                chip_w = raw_w + pad
+            measured_items.append((i, text_str, display_str, chip_w))
+
+        # Special case: single item that overflows is elided to available width
+        if n == 1:
+            i, text_str, display_str, chip_w = measured_items[0]
+            if chip_w > avail_w:
+                display_str = fm.elidedText(
+                    text_str, Qt.TextElideMode.ElideRight, max(0, int(avail_w - pad))
+                )
+                chip_w = min(avail_w, float(fm.horizontalAdvance(display_str) + pad))
+            chip_rect = QRectF(start_x, y, chip_w, chip_h)
+            btn_cx = chip_rect.right() - 2.0
+            btn_cy = chip_rect.top() + 2.0
+            btn_rect = QRectF(btn_cx - btn_size / 2.0, btn_cy - btn_size / 2.0, btn_size, btn_size)
+            return _PillLayoutResult(
+                chips=[_ChipLayoutItem(i, text_str, display_str, chip_rect, btn_rect)],
+                rem_count=0,
+                rem_str="",
+                rem_rect=None,
+                end_x=int(start_x + chip_w),
+            )
+
+        # Check if all items fit
+        total_w_all = sum(item[3] for item in measured_items) + gap * (n - 1)
+        if total_w_all <= avail_w:
+            chips = []
+            cur_x = start_x
+            for i, text_str, display_str, chip_w in measured_items:
+                chip_rect = QRectF(cur_x, y, chip_w, chip_h)
+                btn_cx = chip_rect.right() - 2.0
+                btn_cy = chip_rect.top() + 2.0
+                btn_rect = QRectF(btn_cx - btn_size / 2.0, btn_cy - btn_size / 2.0, btn_size, btn_size)
+                chips.append(_ChipLayoutItem(i, text_str, display_str, chip_rect, btn_rect))
+                cur_x += chip_w + gap
+            return _PillLayoutResult(
+                chips=chips,
+                rem_count=0,
+                rem_str="",
+                rem_rect=None,
+                end_x=int(cur_x - gap) if chips else int(start_x),
+            )
+
+        # Not all items fit: find the largest k in [n - 1 .. 0] such that k chips
+        # AND the '+{n - k}' badge fit within avail_w.
+        best_k = 0
+        for k in range(n - 1, -1, -1):
+            rem = n - k
+            rem_str = f"+{rem}"
+            rem_w = float(fm.horizontalAdvance(rem_str) + 8)
+            if k > 0:
+                chips_w = sum(measured_items[j][3] for j in range(k))
+                w_needed = chips_w + (gap * k) + rem_w
+            else:
+                w_needed = rem_w
+
+            if w_needed <= avail_w:
+                best_k = k
+                break
+
+        chips = []
+        cur_x = start_x
+        for j in range(best_k):
+            i, text_str, display_str, chip_w = measured_items[j]
+            chip_rect = QRectF(cur_x, y, chip_w, chip_h)
+            btn_cx = chip_rect.right() - 2.0
+            btn_cy = chip_rect.top() + 2.0
+            btn_rect = QRectF(btn_cx - btn_size / 2.0, btn_cy - btn_size / 2.0, btn_size, btn_size)
+            chips.append(_ChipLayoutItem(i, text_str, display_str, chip_rect, btn_rect))
+            cur_x += chip_w + gap
+
+        rem_count = n - best_k
+        rem_str = f"+{rem_count}"
+        rem_w = float(fm.horizontalAdvance(rem_str) + 8)
+        if best_k == 0 and rem_w > avail_w:
+            # Column is extremely tight; clip badge width to available space if possible
+            if avail_w >= 10.0:
+                rem_rect = QRectF(cur_x, y, avail_w, chip_h)
+            else:
+                rem_rect = None
+        else:
+            rem_rect = QRectF(cur_x, y, rem_w, chip_h)
+
+        end_x = int(rem_rect.right()) if rem_rect is not None else int(cur_x)
+        return _PillLayoutResult(
+            chips=chips,
+            rem_count=rem_count,
+            rem_str=rem_str,
+            rem_rect=rem_rect,
+            end_x=end_x,
+        )
+
     def paint(
         self,
         painter: QPainter,
@@ -314,52 +485,13 @@ class ChipBadgeDelegate(QStyledItemDelegate):
             painter.restore()
             return
 
-        if isinstance(items, str):
-            items = [items]
-        elif isinstance(items, (list, tuple)):
-            items = list(dict.fromkeys(items))
-
-        chip_h = 20
-        y = option.rect.y() + (option.rect.height() - chip_h) // 2
-        x = option.rect.x() + 5
-        max_x = option.rect.right() - 5
-
         painter.setFont(self.badge_font)
-        fm = self.fm
-
-        max_chip_w = 140
-        btn_size = 14.0
-
         is_cell_hovered = self.hovered_cell == (index.row(), index.column())
 
-        for i, text_val in enumerate(items):
-            text_str = str(text_val)
-            raw_w = fm.horizontalAdvance(text_str)
-            if raw_w + 14 > max_chip_w:
-                display_str = fm.elidedText(
-                    text_str, Qt.TextElideMode.ElideRight, max_chip_w - 14
-                )
-                chip_w = fm.horizontalAdvance(display_str) + 14
-            else:
-                display_str = text_str
-                chip_w = raw_w + 14
+        layout = self._layout_chips(QRectF(option.rect), items)
 
-            if x + chip_w > max_x:
-                remaining = len(items) - i
-                if remaining > 0:
-                    rem_str = f"+{remaining}"
-                    rem_w = fm.horizontalAdvance(rem_str) + 8
-                    if x + rem_w <= max_x:
-                        rem_rect = QRectF(x, y, rem_w, chip_h)
-                        painter.setBrush(QBrush(QColor(40, 40, 50, 180)))
-                        painter.setPen(QPen(QColor(80, 80, 95), 1))
-                        painter.drawRoundedRect(rem_rect, 4, 4)
-                        painter.setPen(QColor(COLOR_TEXT_SECONDARY))
-                        painter.drawText(rem_rect, Qt.AlignmentFlag.AlignCenter, rem_str)
-                break
-
-            chip_rect = QRectF(x, y, chip_w, chip_h)
-            is_chip_hovered = is_cell_hovered and (self.hovered_chip_idx == i)
+        for chip in layout.chips:
+            is_chip_hovered = is_cell_hovered and (self.hovered_chip_idx == chip.index)
             is_btn_hovered = is_chip_hovered and self.hovered_delete_btn
 
             # Pill background & border
@@ -367,17 +499,15 @@ class ChipBadgeDelegate(QStyledItemDelegate):
             cur_border = self.border_hover if is_chip_hovered else self.border_color
             painter.setBrush(QBrush(cur_bg))
             painter.setPen(QPen(cur_border, 1.0))
-            painter.drawRoundedRect(chip_rect, 4.0, 4.0)
+            painter.drawRoundedRect(chip.rect, 4.0, 4.0)
 
             # Text
             painter.setPen(self.text_color)
-            painter.drawText(chip_rect, Qt.AlignmentFlag.AlignCenter, display_str)
+            painter.drawText(chip.rect, Qt.AlignmentFlag.AlignCenter, chip.display_str)
 
             # Vector delete button on hover
             if is_chip_hovered and self.removable:
-                btn_cx = chip_rect.right() - 2.0
-                btn_cy = chip_rect.top() + 2.0
-                btn_rect = QRectF(btn_cx - btn_size / 2.0, btn_cy - btn_size / 2.0, btn_size, btn_size)
+                btn_rect = chip.btn_rect
 
                 painter.save()
                 if is_btn_hovered:
@@ -402,7 +532,12 @@ class ChipBadgeDelegate(QStyledItemDelegate):
                 )
                 painter.restore()
 
-            x += chip_w + 8
+        if layout.rem_rect is not None and layout.rem_count > 0:
+            painter.setBrush(QBrush(QColor(40, 40, 50, 180)))
+            painter.setPen(QPen(QColor(80, 80, 95), 1))
+            painter.drawRoundedRect(layout.rem_rect, 4, 4)
+            painter.setPen(QColor(COLOR_TEXT_SECONDARY))
+            painter.drawText(layout.rem_rect, Qt.AlignmentFlag.AlignCenter, layout.rem_str)
 
         painter.restore()
 
@@ -424,35 +559,10 @@ class ChipBadgeDelegate(QStyledItemDelegate):
         """Detect which badge chip's delete button is located under the given point."""
         if not items or not self.removable:
             return None
-        chip_h = 20
-        y = rect.y() + (rect.height() - chip_h) // 2
-        x = rect.x() + 5
-        max_x = rect.right() - 5
-        max_chip_w = 140
-        btn_size = 14.0
-
-        for i, text_val in enumerate(items):
-            text_str = str(text_val)
-            raw_w = self.fm.horizontalAdvance(text_str)
-            if raw_w + 14 > max_chip_w:
-                display_str = self.fm.elidedText(
-                    text_str, Qt.TextElideMode.ElideRight, max_chip_w - 14
-                )
-                chip_w = self.fm.horizontalAdvance(display_str) + 14
-            else:
-                chip_w = raw_w + 14
-
-            if x + chip_w > max_x:
-                break
-
-            chip_rect = QRectF(x, y, chip_w, chip_h)
-            btn_cx = chip_rect.right() - 2.0
-            btn_cy = chip_rect.top() + 2.0
-            btn_rect = QRectF(btn_cx - btn_size / 2.0, btn_cy - btn_size / 2.0, btn_size, btn_size)
-
-            if btn_rect.contains(point):
-                return text_str
-            x += chip_w + 8
+        layout = self._layout_chips(rect, items)
+        for chip in layout.chips:
+            if chip.btn_rect.contains(point):
+                return chip.text_str
         return None
 
     def item_at_point(
@@ -461,72 +571,18 @@ class ChipBadgeDelegate(QStyledItemDelegate):
         """Detect which badge chip text is located under the given point inside the cell rect."""
         if not items:
             return None
-        chip_h = 20
-        y = rect.y() + (rect.height() - chip_h) // 2
-        x = rect.x() + 5
-        max_x = rect.right() - 5
-        max_chip_w = 140
-        btn_size = 14.0
-
-        for i, text_val in enumerate(items):
-            text_str = str(text_val)
-            raw_w = self.fm.horizontalAdvance(text_str)
-            if raw_w + 14 > max_chip_w:
-                display_str = self.fm.elidedText(
-                    text_str, Qt.TextElideMode.ElideRight, max_chip_w - 14
-                )
-                chip_w = self.fm.horizontalAdvance(display_str) + 14
-            else:
-                chip_w = raw_w + 14
-
-            if x + chip_w > max_x:
-                break
-
-            chip_rect = QRectF(x, y, chip_w, chip_h)
-            btn_cx = chip_rect.right() - 2.0
-            btn_cy = chip_rect.top() + 2.0
-            btn_rect = QRectF(btn_cx - btn_size / 2.0, btn_cy - btn_size / 2.0, btn_size, btn_size)
-
-            if chip_rect.contains(point) or (self.removable and btn_rect.contains(point)):
-                return text_str
-            x += chip_w + 8
+        layout = self._layout_chips(rect, items)
+        for chip in layout.chips:
+            if chip.rect.contains(point) or (self.removable and chip.btn_rect.contains(point)):
+                return chip.text_str
         return None
 
     def get_chips_end_x(self, rect: QRectF, items: List[Any]) -> int:
         """Return the rightmost x coordinate occupied by chips in the cell."""
         if not items:
             return int(rect.x() + 5)
-        chip_h = 20
-        x = rect.x() + 5
-        max_x = rect.right() - 5
-        max_chip_w = 140
-        end_x = int(x)
-
-        for i, text_val in enumerate(items):
-            text_str = str(text_val)
-            raw_w = self.fm.horizontalAdvance(text_str)
-            if raw_w + 14 > max_chip_w:
-                display_str = self.fm.elidedText(
-                    text_str, Qt.TextElideMode.ElideRight, max_chip_w - 14
-                )
-                chip_w = self.fm.horizontalAdvance(display_str) + 14
-            else:
-                chip_w = raw_w + 14
-
-            if x + chip_w > max_x:
-                remaining = len(items) - i
-                if remaining > 0:
-                    rem_str = f"+{remaining}"
-                    rem_w = self.fm.horizontalAdvance(rem_str) + 8
-                    end_x = int(min(x + rem_w, max_x))
-                else:
-                    end_x = int(max_x)
-                break
-
-            end_x = int(x + chip_w)
-            x += chip_w + 8
-
-        return end_x
+        layout = self._layout_chips(rect, items)
+        return layout.end_x
 
     def update_hover(
         self, cell: Tuple[int, int], rect: QRectF, point: QPoint, items: List[Any]
@@ -539,40 +595,14 @@ class ChipBadgeDelegate(QStyledItemDelegate):
             self.set_hover(None, None, False)
             return (None, False, False)
 
-        chip_h = 20
-        y = rect.y() + (rect.height() - chip_h) // 2
-        x = rect.x() + 5
-        max_x = rect.right() - 5
-        max_chip_w = 140
-        btn_size = 14.0
-
-        for i, text_val in enumerate(items):
-            text_str = str(text_val)
-            raw_w = self.fm.horizontalAdvance(text_str)
-            if raw_w + 14 > max_chip_w:
-                display_str = self.fm.elidedText(
-                    text_str, Qt.TextElideMode.ElideRight, max_chip_w - 14
-                )
-                chip_w = self.fm.horizontalAdvance(display_str) + 14
-            else:
-                chip_w = raw_w + 14
-
-            if x + chip_w > max_x:
-                break
-
-            chip_rect = QRectF(x, y, chip_w, chip_h)
-            btn_cx = chip_rect.right() - 2.0
-            btn_cy = chip_rect.top() + 2.0
-            btn_rect = QRectF(btn_cx - btn_size / 2.0, btn_cy - btn_size / 2.0, btn_size, btn_size)
-
-            if self.removable and btn_rect.contains(point):
-                self.set_hover(cell, i, True)
-                return (text_str, True, True)
-            elif chip_rect.contains(point):
-                self.set_hover(cell, i, False)
-                return (text_str, True, False)
-
-            x += chip_w + 8
+        layout = self._layout_chips(rect, items)
+        for chip in layout.chips:
+            if self.removable and chip.btn_rect.contains(point):
+                self.set_hover(cell, chip.index, True)
+                return (chip.text_str, True, True)
+            elif chip.rect.contains(point):
+                self.set_hover(cell, chip.index, False)
+                return (chip.text_str, True, False)
 
         self.set_hover(None, None, False)
         return (None, False, False)

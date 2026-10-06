@@ -1701,6 +1701,79 @@ class TestTableChipInteractions(unittest.TestCase):
         self.assertTrue(is_del)
         self.assertEqual(delegate.delete_button_at_point(cell_rect, QPoint(int(btn_cx), int(btn_cy)), items), "Peak Time")
 
+    def test_chip_badge_delegate_overflow_guarantee(self):
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor
+        from rekordbox_collection_manager.gui.track_table import ChipBadgeDelegate
+
+        delegate = ChipBadgeDelegate(
+            bg_color=QColor(20, 184, 166, 38),
+            border_color=QColor(45, 212, 191, 95),
+            text_color=QColor("#5eead4"),
+        )
+        items = ["Organic", "Deep House", "House", "Electronica"]
+
+        w_organic = delegate.fm.horizontalAdvance("Organic") + 14
+        w_deep = delegate.fm.horizontalAdvance("Deep House") + 14
+        w_house = delegate.fm.horizontalAdvance("House") + 14
+        w_elec = delegate.fm.horizontalAdvance("Electronica") + 14
+        w_rem1 = delegate.fm.horizontalAdvance("+1") + 8
+
+        # Scenario 1: Available width fits 3 chips, but NOT 3 chips + "+1"
+        w_3_chips = w_organic + 8 + w_deep + 8 + w_house
+        w_3_chips_with_rem1 = w_3_chips + 8 + w_rem1
+        # Set cell width such that w_3_chips fits, but w_3_chips_with_rem1 does NOT fit
+        tight_avail_w = w_3_chips + 4
+        cell_rect = QRectF(0, 0, tight_avail_w + 10, 36)
+
+        layout = delegate._layout_chips(cell_rect, items)
+        # Because "+1" cannot fit alongside 3 chips, it displays 2 chips and "+2",
+        # guaranteeing that Electronica (and House) are NOT silently omitted without a counter.
+        self.assertEqual(len(layout.chips), 2)
+        self.assertEqual(layout.chips[0].text_str, "Organic")
+        self.assertEqual(layout.chips[1].text_str, "Deep House")
+        self.assertEqual(layout.rem_count, 2)
+        self.assertEqual(layout.rem_str, "+2")
+        self.assertIsNotNone(layout.rem_rect)
+        self.assertLessEqual(layout.end_x, cell_rect.right() - 5)
+
+        # Scenario 2: Widened cell allows 3 chips + "+1"
+        wide_avail_w = w_3_chips_with_rem1 + 10
+        wide_rect = QRectF(0, 0, wide_avail_w + 10, 36)
+        wide_layout = delegate._layout_chips(wide_rect, items)
+        self.assertEqual(len(wide_layout.chips), 3)
+        self.assertEqual(wide_layout.rem_count, 1)
+        self.assertEqual(wide_layout.rem_str, "+1")
+        self.assertIsNotNone(wide_layout.rem_rect)
+        self.assertLessEqual(wide_layout.end_x, wide_rect.right() - 5)
+
+        # Scenario 3: Large cell allows all 4 chips
+        all_avail_w = w_organic + 8 + w_deep + 8 + w_house + 8 + w_elec + 20
+        all_rect = QRectF(0, 0, all_avail_w + 10, 36)
+        all_layout = delegate._layout_chips(all_rect, items)
+        self.assertEqual(len(all_layout.chips), 4)
+        self.assertEqual(all_layout.rem_count, 0)
+        self.assertEqual(all_layout.rem_str, "")
+        self.assertIsNone(all_layout.rem_rect)
+        self.assertLessEqual(all_layout.end_x, all_rect.right() - 5)
+
+        # Scenario 4: Narrow cell shows "+4"
+        narrow_rect = QRectF(0, 0, 60, 36)
+        narrow_layout = delegate._layout_chips(narrow_rect, items)
+        self.assertEqual(len(narrow_layout.chips), 0)
+        self.assertEqual(narrow_layout.rem_count, 4)
+        self.assertEqual(narrow_layout.rem_str, "+4")
+        self.assertIsNotNone(narrow_layout.rem_rect)
+
+        # Scenario 5: Single item that overflows gets elided rather than showing "+1"
+        single_item = ["A Extremely Long Tag Name For Melodic Techno"]
+        single_rect = QRectF(0, 0, 100, 36)
+        single_layout = delegate._layout_chips(single_rect, single_item)
+        self.assertEqual(len(single_layout.chips), 1)
+        self.assertEqual(single_layout.rem_count, 0)
+        self.assertIsNone(single_layout.rem_rect)
+        self.assertTrue(single_layout.chips[0].display_str.endswith("…") or single_layout.chips[0].display_str.endswith("..."))
+
     def test_table_chip_add_editor_lifecycle(self):
         from PySide6.QtCore import QPoint, QRect
         from rekordbox_collection_manager.gui.track_table import TableChipAddEditor
