@@ -1832,6 +1832,35 @@ class TestTableChipInteractions(unittest.TestCase):
         self.assertEqual(created_signals, [(0, "Afro Tech")])
         self.assertFalse(editor.isVisible())
 
+    def test_table_chip_add_editor_playlist_create_requested(self):
+        from PySide6.QtCore import QRect
+        from rekordbox_collection_manager.gui.track_table import TableChipAddEditor
+
+        editor = TableChipAddEditor(self.table.viewport())
+        target_rect = QRect(100, 5, 150, 24)
+
+        editor.show_at(
+            rect=target_rect,
+            category="playlists",
+            row=0,
+            col=self.table._playlist_col_idx,
+            existing_items=["House"],
+            available_items=["House", "Techno"],
+        )
+
+        created_signals = []
+        editor.playlist_create_requested.connect(lambda r, pl: created_signals.append((r, pl)))
+
+        # 1. Test textChanged adds Create option to completer
+        editor.input_edit.setText("Ibiza 2026")
+        candidates = editor.completer_model.stringList()
+        self.assertIn('＋ Create "Ibiza 2026"...', candidates)
+
+        # 2. Test returnPressed on custom playlist triggers playlist_create_requested
+        editor._on_return_pressed()
+        self.assertEqual(created_signals, [(0, "Ibiza 2026")])
+        self.assertFalse(editor.isVisible())
+
     def test_double_click_on_empty_space_opens_editor(self):
         from PySide6.QtCore import QPoint, Qt
         from PySide6.QtGui import QMouseEvent
@@ -2099,6 +2128,64 @@ class TestTableChipInteractions(unittest.TestCase):
             view.btn_new_tag.click()
 
         self.assertIn("Minimal", view.table.records[0]["tags"])
+        view.close()
+
+    def test_table_on_playlist_create_requested_stages_and_emits_playlist_created(self):
+        from unittest.mock import MagicMock
+        self.table.engine = MagicMock()
+
+        playlist_created_signals = []
+        db_saved_signals = []
+        self.table.playlist_created.connect(playlist_created_signals.append)
+        self.table.db_saved.connect(db_saved_signals.append)
+
+        mock_dialog_instance = MagicMock()
+        mock_dialog_instance.exec.return_value = 1
+        mock_dialog_instance.created_playlist = {
+            "id": "205",
+            "name": "Ibiza Closing",
+            "attribute": 0,
+            "is_folder": False,
+        }
+
+        with patch("rekordbox_collection_manager.gui.track_table.is_rekordbox_running", return_value=False), \
+             patch("rekordbox_collection_manager.gui.track_table.CreatePlaylistDialog", return_value=mock_dialog_instance):
+            self.table._on_playlist_create_requested(0, "Ibiza Closing")
+
+        # Must emit playlist_created but NOT db_saved (to prevent wiping staged edits prematurely)
+        self.assertEqual(playlist_created_signals, ["Ibiza Closing"])
+        self.assertEqual(len(db_saved_signals), 0)
+
+        # Must be staged on row 0
+        self.assertTrue(self.table.has_staged_changes())
+        self.assertIn("Ibiza Closing", self.table.records[0]["playlists"])
+
+    def test_tracks_view_new_playlist_button_and_toolbar(self):
+        from rekordbox_collection_manager.gui.tracks_view import TracksView
+        from unittest.mock import MagicMock
+
+        view = TracksView()
+        self.assertTrue(hasattr(view, "btn_new_playlist"))
+        self.assertEqual(view.btn_new_playlist.text(), "📑 ＋ New Playlist...")
+
+        mock_dialog = MagicMock()
+        mock_dialog.exec.return_value = 1
+        mock_dialog.created_playlist = {
+            "id": "206",
+            "name": "Festival Mainstage",
+            "attribute": 0,
+            "is_folder": False,
+        }
+
+        view.table.set_engine(MagicMock())
+        view.table.set_tracks([{"id": "t1", "title": "Track 1", "playlists": []}])
+        view.table.selectRow(0)
+
+        with patch("rekordbox_collection_manager.gui.track_table.is_rekordbox_running", return_value=False), \
+             patch("rekordbox_collection_manager.gui.track_table.CreatePlaylistDialog", return_value=mock_dialog):
+            view.btn_new_playlist.click()
+
+        self.assertIn("Festival Mainstage", view.table.records[0]["playlists"])
         view.close()
 
 

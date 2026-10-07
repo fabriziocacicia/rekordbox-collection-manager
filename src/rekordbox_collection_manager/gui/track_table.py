@@ -69,6 +69,7 @@ from rekordbox_collection_manager.gui.chip import (
     CHIP_SCHEMES,
     ChipSearchLineEdit,
 )
+from rekordbox_collection_manager.gui.create_playlist_dialog import CreatePlaylistDialog
 from rekordbox_collection_manager.gui.create_tag_dialog import CreateTagDialog
 from rekordbox_collection_manager.gui.theme import (
     COLOR_AMBER,
@@ -666,6 +667,7 @@ class TableChipAddEditor(QWidget):
 
     item_added = Signal(int, str, str)  # (row, category, item_name)
     tag_create_requested = Signal(int, str)  # (row, tag_name)
+    playlist_create_requested = Signal(int, str)  # (row, playlist_name)
     editing_closed = Signal()
 
     def __init__(self, parent: QWidget):
@@ -741,7 +743,7 @@ class TableChipAddEditor(QWidget):
         self.input_edit.escape_pressed.connect(self.close_editor)
 
     def _on_text_changed(self, text: str) -> None:
-        if self.category != "tags":
+        if self.category not in ("tags", "playlists"):
             return
         query = text.strip()
         assigned_lower = {e.lower() for e in self.existing_items}
@@ -822,9 +824,12 @@ class TableChipAddEditor(QWidget):
         row = self.current_row
         cat = self.category
         self.close_editor()
-        if cat == "tags" and (item.startswith("＋ Create \"") or item.startswith("+ Create \"")):
-            new_tag = item.split("\"", 2)[1] if "\"" in item else item.replace("＋ Create ", "").replace("+ Create ", "").rstrip(".").strip()
-            self.tag_create_requested.emit(row, new_tag)
+        if item.startswith("＋ Create \"") or item.startswith("+ Create \""):
+            new_name = item.split("\"", 2)[1] if "\"" in item else item.replace("＋ Create ", "").replace("+ Create ", "").rstrip(".").strip()
+            if cat == "tags":
+                self.tag_create_requested.emit(row, new_name)
+            elif cat == "playlists":
+                self.playlist_create_requested.emit(row, new_name)
         else:
             self.item_added.emit(row, cat, item)
 
@@ -837,10 +842,13 @@ class TableChipAddEditor(QWidget):
         row = self.current_row
         cat = self.category
 
-        if cat == "tags" and (text.startswith("＋ Create \"") or text.startswith("+ Create \"")):
-            new_tag = text.split("\"", 2)[1] if "\"" in text else text.replace("＋ Create ", "").replace("+ Create ", "").rstrip(".").strip()
+        if text.startswith("＋ Create \"") or text.startswith("+ Create \""):
+            new_name = text.split("\"", 2)[1] if "\"" in text else text.replace("＋ Create ", "").replace("+ Create ", "").rstrip(".").strip()
             self.close_editor()
-            self.tag_create_requested.emit(row, new_tag)
+            if cat == "tags":
+                self.tag_create_requested.emit(row, new_name)
+            elif cat == "playlists":
+                self.playlist_create_requested.emit(row, new_name)
             return
 
         matched = None
@@ -852,9 +860,12 @@ class TableChipAddEditor(QWidget):
         if not matched and self.completer.currentCompletion():
             cur = self.completer.currentCompletion()
             if cur.startswith("＋ Create \"") or cur.startswith("+ Create \""):
-                new_tag = cur.split("\"", 2)[1] if "\"" in cur else text
+                new_name = cur.split("\"", 2)[1] if "\"" in cur else text
                 self.close_editor()
-                self.tag_create_requested.emit(row, new_tag)
+                if cat == "tags":
+                    self.tag_create_requested.emit(row, new_name)
+                elif cat == "playlists":
+                    self.playlist_create_requested.emit(row, new_name)
                 return
             elif cur.lower().startswith(text.lower()) and cur in self.all_available_items:
                 matched = cur
@@ -864,6 +875,9 @@ class TableChipAddEditor(QWidget):
         elif cat == "tags":
             self.close_editor()
             self.tag_create_requested.emit(row, text)
+        elif cat == "playlists":
+            self.close_editor()
+            self.playlist_create_requested.emit(row, text)
         else:
             self.close_editor()
 
@@ -1424,6 +1438,7 @@ class TracksTableWidget(QTableView):
     track_modified = Signal(dict)
     db_saved = Signal()
     tag_created = Signal(str)  # (tag_name)
+    playlist_created = Signal(str)  # (playlist_name)
     staged_changes_changed = Signal(bool)
 
     def __init__(
@@ -1469,6 +1484,7 @@ class TracksTableWidget(QTableView):
         self._chip_editor = TableChipAddEditor(self.viewport())
         self._chip_editor.item_added.connect(self._on_chip_item_added)
         self._chip_editor.tag_create_requested.connect(self._on_tag_create_requested)
+        self._chip_editor.playlist_create_requested.connect(self._on_playlist_create_requested)
         self.verticalScrollBar().valueChanged.connect(self._chip_editor.close_editor)
         self.horizontalScrollBar().valueChanged.connect(self._chip_editor.close_editor)
 
@@ -2117,6 +2133,46 @@ class TracksTableWidget(QTableView):
                     self.status_message.emit(f"🏷️ Created tag '{new_name}'.")
                 self.tag_created.emit(new_name)
 
+    def _on_playlist_create_requested(self, row: int, playlist_name: str) -> None:
+        """Handle creating a brand-new playlist from the table cell editor or context menu."""
+        if not self.engine:
+            QMessageBox.warning(
+                self,
+                "Database Unavailable",
+                "Database engine is not connected. Cannot create playlist.",
+            )
+            return
+
+        if is_rekordbox_running():
+            QMessageBox.warning(
+                self,
+                "Rekordbox is Running",
+                "Please close Rekordbox before creating playlists in the database.",
+            )
+            return
+
+        dlg = CreatePlaylistDialog(
+            engine=self.engine,
+            parent=self.window() or self,
+            initial_name=playlist_name,
+        )
+        if dlg.exec():
+            created = dlg.created_playlist
+            if created:
+                new_name = created.get("name")
+                # Reload available items in this table and refresh caches
+                self._refresh_available_caches()
+                # Stage the newly created playlist on this track row if standard playlist!
+                if created.get("attribute", 0) == 0:
+                    if new_name and 0 <= row < len(self.records):
+                        self._on_chip_item_added(row, "playlists", new_name)
+                        self.status_message.emit(f"📑 Created and assigned playlist '{new_name}'.")
+                    else:
+                        self.status_message.emit(f"📑 Created playlist '{new_name}'.")
+                else:
+                    self.status_message.emit(f"📁 Created folder '{new_name}'.")
+                self.playlist_created.emit(new_name)
+
     def _on_chip_item_deleted(self, row: int, category: str, item_name: str) -> None:
         """Handle removing a tag or playlist item as a staged edit."""
         if not (0 <= row < len(self.records)):
@@ -2592,6 +2648,8 @@ class TracksTableWidget(QTableView):
         menu.addSeparator()
         act_create_tag = menu.addAction("🏷️ ＋ Create New Tag...")
         act_add_tag = menu.addAction("🏷️ Add Existing Tag...")
+        act_create_playlist = menu.addAction("📑 ＋ Create New Playlist...")
+        act_add_playlist = menu.addAction("📑 Add Existing Playlist...")
         menu.addSeparator()
         act_open_folder = menu.addAction("📁 Open Containing Folder")
         act_reveal_file = menu.addAction("🔍 Reveal in Finder")
@@ -2630,6 +2688,15 @@ class TracksTableWidget(QTableView):
                 self._open_chip_add_editor(idx, "tags")
             else:
                 self._on_tag_create_requested(row, "")
+        elif action == act_create_playlist:
+            self._on_playlist_create_requested(row, "")
+        elif action == act_add_playlist:
+            if self._playlist_col_idx >= 0:
+                idx = self.model().index(row, self._playlist_col_idx)
+                self.scrollTo(idx)
+                self._open_chip_add_editor(idx, "playlists")
+            else:
+                self._on_playlist_create_requested(row, "")
         elif action == act_open_folder:
             self.open_folder(folder_dir)
         elif action == act_reveal_file:

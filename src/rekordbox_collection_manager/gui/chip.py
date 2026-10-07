@@ -762,12 +762,13 @@ class PlaylistChipsContainer(EditableChipsContainer):
     playlist_added = Signal(str)
     playlist_removed = Signal(str)
     playlist_clicked = Signal(str)
+    playlist_create_requested = Signal(str)
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(
             scheme="teal",
             chip_class=PlaylistChip,
-            placeholder="Search playlist to add...",
+            placeholder="Search playlist to add (or type new playlist)...",
             empty_text="Not in any playlist (click here to add)",
             object_name="playlistChipsContainer",
             allow_custom=False,
@@ -776,6 +777,7 @@ class PlaylistChipsContainer(EditableChipsContainer):
         self.item_added.connect(self.playlist_added.emit)
         self.item_removed.connect(self.playlist_removed.emit)
         self.item_clicked.connect(self.playlist_clicked.emit)
+        self.custom_item_entered.connect(self.playlist_create_requested.emit)
 
     @property
     def playlists(self) -> List[str]:

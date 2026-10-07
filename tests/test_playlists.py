@@ -8,10 +8,13 @@ from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
 from rekordbox_collection_manager.gui.chip import PlaylistChip, PlaylistChipsContainer
+from rekordbox_collection_manager.gui.create_playlist_dialog import CreatePlaylistDialog
 from rekordbox_collection_manager.gui.main_window import MainWindow
 from rekordbox_collection_manager.gui.playlists_view import PlaylistsView
 from rekordbox_collection_manager.gui.track_table import TrackColumn, TrackTableConfig, TracksTableWidget
 from rekordbox_collection_manager.playlists import (
+    create_playlist,
+    fetch_playlist_folders,
     fetch_playlist_tracks,
     fetch_playlists_tree,
     parse_smartlist_to_sql,
@@ -369,6 +372,223 @@ class TestPlaylistsGUI(unittest.TestCase):
             finally:
                 win.safety_timer.stop()
                 win.close()
+
+
+class TestCreatePlaylist(unittest.TestCase):
+    """Test suite for creating playlists and folders in Rekordbox database and via GUI."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
+    def setUp(self):
+        self.engine = create_engine(
+            "sqlite:///:memory:",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        with self.engine.begin() as conn:
+            conn.exec_driver_sql("""
+                CREATE TABLE djmdPlaylist (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    Seq INTEGER,
+                    Name VARCHAR(255),
+                    Attribute INTEGER DEFAULT 0,
+                    ParentID VARCHAR(255),
+                    SmartList TEXT,
+                    UUID VARCHAR(255),
+                    rb_data_status INTEGER DEFAULT 0,
+                    rb_local_data_status INTEGER DEFAULT 0,
+                    rb_local_deleted INTEGER DEFAULT 0,
+                    rb_local_synced INTEGER DEFAULT 0,
+                    created_at DATETIME NOT NULL,
+                    updated_at DATETIME NOT NULL
+                );
+            """)
+            conn.exec_driver_sql("""
+                CREATE TABLE djmdSongPlaylist (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    PlaylistID VARCHAR(255),
+                    ContentID VARCHAR(255),
+                    TrackNo INTEGER,
+                    rb_local_deleted INTEGER DEFAULT 0,
+                    created_at DATETIME,
+                    updated_at DATETIME
+                );
+            """)
+            # Initial folders: root folder 'Sets', nested folder '2026'
+            conn.exec_driver_sql("""
+                INSERT INTO djmdPlaylist (ID, Seq, Name, Attribute, ParentID, UUID, created_at, updated_at)
+                VALUES 
+                    ('fld_sets', 1, 'Sets', 1, 'root', 'uuid-f1', '2026-01-01', '2026-01-01'),
+                    ('fld_2026', 1, '2026', 1, 'fld_sets', 'uuid-f2', '2026-01-01', '2026-01-01');
+            """)
+            # Initial playlists under Sets
+            conn.exec_driver_sql("""
+                INSERT INTO djmdPlaylist (ID, Seq, Name, Attribute, ParentID, UUID, rb_local_deleted, created_at, updated_at)
+                VALUES 
+                    ('101', 1, 'Ibiza Warmup', 0, 'fld_sets', 'uuid-p1', 0, '2026-01-01', '2026-01-01'),
+                    ('102', 2, 'Closing Set', 0, 'fld_sets', 'uuid-p2', 0, '2026-01-01', '2026-01-01'),
+                    ('103', 3, 'Old Set', 0, 'fld_sets', 'uuid-p3', 1, '2026-01-01', '2026-01-01');
+            """)
+
+    def test_fetch_playlist_folders(self):
+        folders = fetch_playlist_folders(self.engine)
+        self.assertEqual(len(folders), 3)  # Root, Sets, 2026
+        self.assertEqual(folders[0]["id"], "root")
+        self.assertEqual(folders[0]["name"], "Root (Top-level)")
+        self.assertEqual(folders[0]["depth"], 0)
+
+        self.assertEqual(folders[1]["id"], "fld_sets")
+        self.assertEqual(folders[1]["name"], "Sets")
+        self.assertEqual(folders[1]["depth"], 1)
+
+        self.assertEqual(folders[2]["id"], "fld_2026")
+        self.assertEqual(folders[2]["name"], "2026")
+        self.assertEqual(folders[2]["depth"], 2)
+
+    def test_create_playlist_success(self):
+        result = create_playlist(self.engine, name="Peak Techno", parent_id_or_name="root", is_folder=False)
+        self.assertEqual(result["name"], "Peak Techno")
+        self.assertEqual(result["parent_id"], "root")
+        self.assertEqual(result["attribute"], 0)
+        self.assertFalse(result["is_folder"])
+        self.assertFalse(result["reactivated"])
+        self.assertTrue(result["id"].isdigit())
+
+        # Verify persisted in database
+        with self.engine.connect() as conn:
+            row = conn.exec_driver_sql(
+                "SELECT ID, Name, ParentID, Seq, Attribute, rb_local_deleted FROM djmdPlaylist WHERE ID = :id;",
+                {"id": result["id"]},
+            ).fetchone()
+            self.assertIsNotNone(row)
+            self.assertEqual(row[1], "Peak Techno")
+            self.assertEqual(row[2], "root")
+            self.assertEqual(row[4], 0)  # Attribute 0 = playlist
+            self.assertEqual(row[5], 0)  # Active
+
+    def test_create_playlist_folder_success(self):
+        result = create_playlist(self.engine, name="Festivals", parent_id_or_name="root", is_folder=True)
+        self.assertEqual(result["name"], "Festivals")
+        self.assertEqual(result["attribute"], 1)
+        self.assertTrue(result["is_folder"])
+
+        with self.engine.connect() as conn:
+            row = conn.exec_driver_sql(
+                "SELECT Attribute FROM djmdPlaylist WHERE ID = :id;",
+                {"id": result["id"]},
+            ).fetchone()
+            self.assertEqual(row[0], 1)
+
+    def test_create_playlist_under_folder(self):
+        result = create_playlist(self.engine, name="Tomorrowland", parent_id_or_name="Sets", is_folder=False)
+        self.assertEqual(result["name"], "Tomorrowland")
+        self.assertEqual(result["parent_id"], "fld_sets")
+        self.assertEqual(result["parent_name"], "Sets")
+        self.assertEqual(result["seq"], 3)  # Active in Sets were 2, next is 3
+
+    def test_create_playlist_whitespace_stripped(self):
+        result = create_playlist(self.engine, name="   Afterhours   ", parent_id_or_name="root")
+        self.assertEqual(result["name"], "Afterhours")
+
+    def test_create_playlist_empty_name_raises(self):
+        with self.assertRaises(ValueError) as ctx:
+            create_playlist(self.engine, name="   ", parent_id_or_name="root")
+        self.assertIn("empty", str(ctx.exception).lower())
+
+    def test_create_playlist_invalid_parent_raises(self):
+        with self.assertRaises(ValueError) as ctx:
+            create_playlist(self.engine, name="Test", parent_id_or_name="NonExistentFolder")
+        self.assertIn("not found", str(ctx.exception).lower())
+
+    def test_create_playlist_duplicate_active_raises(self):
+        with self.assertRaises(ValueError) as ctx:
+            create_playlist(self.engine, name="ibiza warmup", parent_id_or_name="Sets")
+        self.assertIn("already exists", str(ctx.exception).lower())
+
+    def test_create_playlist_reactivates_soft_deleted(self):
+        # 'Old Set' was soft-deleted under 'Sets'
+        result = create_playlist(self.engine, name="Old Set", parent_id_or_name="Sets")
+        self.assertEqual(result["id"], "103")
+        self.assertTrue(result["reactivated"])
+        self.assertEqual(result["parent_id"], "fld_sets")
+
+        with self.engine.connect() as conn:
+            row = conn.exec_driver_sql(
+                "SELECT rb_local_deleted, Seq FROM djmdPlaylist WHERE ID = '103';"
+            ).fetchone()
+            self.assertEqual(row[0], 0, "Should be reactivated")
+            self.assertEqual(row[1], 3)
+
+    def test_create_playlist_dialog_ui(self):
+        dlg = CreatePlaylistDialog(
+            engine=self.engine,
+            initial_name="Ibiza Sunset",
+            default_parent="Sets",
+            is_folder_default=False,
+        )
+        self.assertEqual(dlg.name_input.text(), "Ibiza Sunset")
+        self.assertFalse(dlg.type_combo.currentData())  # Standard playlist
+
+        # Switch to Folder
+        dlg.type_combo.setCurrentIndex(1)
+        self.assertTrue(dlg.type_combo.currentData())
+        self.assertEqual(dlg.btn_create.text(), "Create Folder")
+
+        # Switch back to Playlist
+        dlg.type_combo.setCurrentIndex(0)
+        self.assertEqual(dlg.btn_create.text(), "Create Playlist")
+
+        # Submit dialog
+        with patch("rekordbox_collection_manager.gui.create_playlist_dialog.is_rekordbox_running", return_value=False):
+            dlg._on_submit()
+        self.assertIsNotNone(dlg.created_playlist)
+        self.assertEqual(dlg.created_playlist["name"], "Ibiza Sunset")
+        dlg.close()
+
+    def test_playlist_chips_container_custom_item_entered_signal(self):
+        container = PlaylistChipsContainer()
+        container.set_available_playlists(["Ibiza Warmup", "Closing Set"])
+
+        emitted = []
+        container.playlist_create_requested.connect(emitted.append)
+
+        # Type custom playlist that does not exist
+        container.input_edit.setText("My New Set")
+        container._on_input_return_pressed()
+
+        self.assertEqual(emitted, ["My New Set"])
+        container.close()
+
+    def test_playlists_view_create_playlist_actions(self):
+        view = PlaylistsView()
+        try:
+            self.assertTrue(hasattr(view, "btn_new_playlist"))
+            self.assertEqual(view.btn_new_playlist.text(), "＋")
+
+            # Mock dialog execution
+            mock_dlg = unittest.mock.MagicMock()
+            mock_dlg.exec.return_value = 1
+            mock_dlg.created_playlist = {
+                "id": "205",
+                "name": "Live Set",
+                "is_folder": False,
+                "attribute": 0,
+            }
+
+            view.engine = self.engine
+            status_emitted = []
+            view.notify_status.connect(status_emitted.append)
+
+            with patch("rekordbox_collection_manager.gui.playlists_view.is_rekordbox_running", return_value=False), \
+                 patch("rekordbox_collection_manager.gui.playlists_view.CreatePlaylistDialog", return_value=mock_dlg):
+                view.btn_new_playlist.click()
+
+            self.assertTrue(any("Created playlist 'Live Set'" in s for s in status_emitted))
+        finally:
+            view.cleanup()
+            view.close()
 
 
 if __name__ == "__main__":

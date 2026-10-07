@@ -4,6 +4,8 @@ Provides methods to query playlist hierarchies, folders, smart playlists,
 and retrieve track lists for individual playlists with full metadata.
 """
 
+import random
+import uuid
 import xml.etree.ElementTree as ET
 from typing import Any, Dict, List, Optional, Tuple
 from sqlalchemy import text
@@ -12,6 +14,7 @@ from sqlalchemy.engine import Engine
 from rekordbox_collection_manager.utils import (
     build_exclude_streaming_clause,
     build_track_record,
+    get_rekordbox_timestamp,
 )
 
 
@@ -669,3 +672,263 @@ def fetch_playlist_tracks(
             tracks.append(build_track_record(r, extra={"track_no": track_num}))
 
         return tracks
+
+
+def fetch_playlist_folders(engine: Engine) -> List[Dict[str, Any]]:
+    """Fetch all active playlist folder categories (Attribute = 1) from Rekordbox database.
+
+    Returns a hierarchical/flattened list of folder dictionaries, starting with the root container:
+    [
+        {"id": "root", "name": "Root (Top-level)", "attribute": 1, "parent_id": None, "depth": 0},
+        {"id": "123", "name": "Sets", "attribute": 1, "parent_id": "root", "depth": 1},
+        ...
+    ]
+    """
+    root_node = {
+        "id": "root",
+        "name": "Root (Top-level)",
+        "attribute": 1,
+        "parent_id": None,
+        "depth": 0,
+    }
+
+    with engine.connect() as conn:
+        existing_tables = {
+            r[0]
+            for r in conn.exec_driver_sql(
+                "SELECT name FROM sqlite_master WHERE type='table';"
+            ).fetchall()
+        }
+        if "djmdPlaylist" not in existing_tables:
+            return [root_node]
+
+        pl_cols = {
+            r[1]
+            for r in conn.exec_driver_sql("PRAGMA table_info(djmdPlaylist);").fetchall()
+        }
+
+        del_filter = (
+            "AND (rb_local_deleted = 0 OR rb_local_deleted IS NULL)"
+            if "rb_local_deleted" in pl_cols
+            else ""
+        )
+        seq_col = "Seq" if "Seq" in pl_cols else "0 AS Seq"
+
+        query = f"""
+            SELECT ID, Name, ParentID, {seq_col}
+            FROM djmdPlaylist
+            WHERE Attribute = 1
+              {del_filter}
+            ORDER BY Seq ASC, lower(Name) ASC;
+        """
+        rows = conn.execute(text(query)).fetchall()
+        folders_by_id = {}
+        folders_by_parent: Dict[str, List[Dict[str, Any]]] = {}
+
+        for r in rows:
+            f_id = str(r[0])
+            f_name = str(r[1]).strip() if r[1] else "Untitled Folder"
+            p_id = str(r[2]).strip() if r[2] else "root"
+            f_seq = int(r[3]) if r[3] is not None else 0
+            node = {
+                "id": f_id,
+                "name": f_name,
+                "attribute": 1,
+                "parent_id": p_id,
+                "seq": f_seq,
+                "depth": 1,
+            }
+            folders_by_id[f_id] = node
+            folders_by_parent.setdefault(p_id, []).append(node)
+
+        result: List[Dict[str, Any]] = [root_node]
+
+        def traverse(p_id: str, depth: int) -> None:
+            children = folders_by_parent.get(p_id, [])
+            for child in children:
+                child_copy = dict(child)
+                child_copy["depth"] = depth
+                result.append(child_copy)
+                traverse(child["id"], depth + 1)
+
+        traverse("root", 1)
+        return result
+
+
+def create_playlist(
+    engine: Engine,
+    name: str,
+    parent_id_or_name: str = "root",
+    is_folder: bool = False,
+) -> Dict[str, Any]:
+    """Create a new playlist or playlist folder in Rekordbox database.
+
+    If a playlist/folder with the exact same name and parent was previously soft-deleted,
+    reactivates it and updates its timestamps.
+
+    Args:
+        engine: Active SQLAlchemy database engine.
+        name: Desired playlist or folder name (non-empty string).
+        parent_id_or_name: Parent folder ID or Name (e.g. 'root' or a folder ID).
+        is_folder: True to create a playlist folder (Attribute = 1), False for standard playlist (Attribute = 0).
+
+    Returns:
+        Dict representing the created or reactivated playlist.
+
+    Raises:
+        ValueError: If name is empty, parent folder not found, or active duplicate exists.
+    """
+    clean_name = name.strip()
+    if not clean_name:
+        raise ValueError("Playlist name cannot be empty.")
+
+    now_utc = get_rekordbox_timestamp()
+
+    with engine.begin() as conn:
+        existing_tables = {
+            r[0]
+            for r in conn.exec_driver_sql(
+                "SELECT name FROM sqlite_master WHERE type='table';"
+            ).fetchall()
+        }
+        if "djmdPlaylist" not in existing_tables:
+            raise ValueError("Table djmdPlaylist not found in database.")
+
+        pl_cols = {
+            r[1]
+            for r in conn.exec_driver_sql("PRAGMA table_info(djmdPlaylist);").fetchall()
+        }
+
+        has_rb_del = "rb_local_deleted" in pl_cols
+        del_filter = (
+            "AND (rb_local_deleted = 0 OR rb_local_deleted IS NULL)"
+            if has_rb_del
+            else ""
+        )
+
+        # 1. Resolve parent folder ID
+        p_str = str(parent_id_or_name).strip()
+        if p_str.lower() in ("root", "root (top-level)", ""):
+            parent_id = "root"
+            parent_name = "Root (Top-level)"
+        else:
+            parent_sql = f"""
+                SELECT ID, Name
+                FROM djmdPlaylist
+                WHERE Attribute = 1
+                  AND (ID = :p_query OR lower(Name) = lower(:p_query))
+                  {del_filter}
+                LIMIT 1;
+            """
+            parent_row = conn.execute(text(parent_sql), {"p_query": p_str}).fetchone()
+            if not parent_row:
+                raise ValueError(f"Parent folder '{parent_id_or_name}' not found.")
+            parent_id = str(parent_row[0])
+            parent_name = str(parent_row[1]).strip()
+
+        # 2. Check if a playlist/folder with this name already exists under the same parent
+        check_sql = """
+            SELECT ID, Name, Attribute, ParentID, Seq, rb_local_deleted
+            FROM djmdPlaylist
+            WHERE lower(Name) = lower(:name)
+              AND ParentID = :pid
+            LIMIT 1;
+        """
+        existing = conn.execute(text(check_sql), {"name": clean_name, "pid": parent_id}).fetchone()
+
+        # Calculate next sequence number in parent folder
+        seq_sql = f"""
+            SELECT COALESCE(MAX(Seq), 0) + 1
+            FROM djmdPlaylist
+            WHERE ParentID = :pid
+              {del_filter};
+        """
+        next_seq = int(conn.execute(text(seq_sql), {"pid": parent_id}).scalar() or 1)
+
+        attr_val = 1 if is_folder else 0
+        kind_str = "folder" if is_folder else "playlist"
+
+        if existing:
+            pl_id = str(existing[0])
+            existing_name = str(existing[1])
+            is_deleted = bool(existing[5]) if (has_rb_del and existing[5] is not None) else False
+
+            if is_deleted:
+                # Reactivate soft-deleted playlist/folder
+                update_fields = ["Attribute = :attr", "Seq = :seq"]
+                params: Dict[str, Any] = {
+                    "attr": attr_val,
+                    "seq": next_seq,
+                    "id": pl_id,
+                }
+                if has_rb_del:
+                    update_fields.append("rb_local_deleted = 0")
+                if "updated_at" in pl_cols:
+                    update_fields.append("updated_at = :now")
+                    params["now"] = now_utc
+                if "rb_local_synced" in pl_cols:
+                    update_fields.append("rb_local_synced = 1")
+                if "rb_local_data_status" in pl_cols:
+                    update_fields.append("rb_local_data_status = 1")
+
+                update_sql = f"UPDATE djmdPlaylist SET {', '.join(update_fields)} WHERE ID = :id;"
+                conn.execute(text(update_sql), params)
+
+                return {
+                    "id": pl_id,
+                    "name": existing_name,
+                    "parent_id": parent_id,
+                    "parent_name": parent_name,
+                    "attribute": attr_val,
+                    "is_folder": is_folder,
+                    "seq": next_seq,
+                    "reactivated": True,
+                }
+            else:
+                raise ValueError(f"A {kind_str} named '{existing_name}' already exists in '{parent_name}'.")
+
+        # 3. Generate unique numeric 32-bit positive integer string ID
+        while True:
+            candidate_id = str(random.randint(100_000_000, 2_147_483_647))
+            exists_id = conn.execute(
+                text("SELECT 1 FROM djmdPlaylist WHERE ID = :cid LIMIT 1;"),
+                {"cid": candidate_id},
+            ).fetchone()
+            if not exists_id:
+                new_id = candidate_id
+                break
+
+        new_uuid = str(uuid.uuid4())
+        record_data = {
+            "ID": new_id,
+            "Seq": next_seq,
+            "Name": clean_name,
+            "Attribute": attr_val,
+            "ParentID": parent_id,
+            "SmartList": None,
+            "UUID": new_uuid,
+            "rb_data_status": 0,
+            "rb_local_data_status": 1,
+            "rb_local_deleted": 0,
+            "rb_local_synced": 1,
+            "created_at": now_utc,
+            "updated_at": now_utc,
+        }
+
+        insert_cols = [k for k in record_data if k in pl_cols]
+        col_names = ", ".join(insert_cols)
+        val_placeholders = ", ".join(f":{k}" for k in insert_cols)
+        insert_sql = f"INSERT INTO djmdPlaylist ({col_names}) VALUES ({val_placeholders});"
+        conn.execute(text(insert_sql), {k: record_data[k] for k in insert_cols})
+
+        return {
+            "id": new_id,
+            "name": clean_name,
+            "parent_id": parent_id,
+            "parent_name": parent_name,
+            "attribute": attr_val,
+            "is_folder": is_folder,
+            "seq": next_seq,
+            "uuid": new_uuid,
+            "reactivated": False,
+        }

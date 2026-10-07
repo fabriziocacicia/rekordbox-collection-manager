@@ -120,6 +120,11 @@ class TracksView(QWidget):
         self.btn_new_tag.clicked.connect(self._on_create_tag_clicked)
         toolbar.addWidget(self.btn_new_tag)
 
+        self.btn_new_playlist = QPushButton("📑 ＋ New Playlist...")
+        self.btn_new_playlist.setToolTip("Create a new Playlist in the database (stages on selected track if one is selected)")
+        self.btn_new_playlist.clicked.connect(self._on_create_playlist_clicked)
+        toolbar.addWidget(self.btn_new_playlist)
+
         main_layout.addLayout(toolbar)
 
         # 2. Main Tracks Table (13 Columns via shared TracksTableWidget)
@@ -140,6 +145,7 @@ class TracksView(QWidget):
         self.table.open_tag_requested.connect(self.open_tag_requested.emit)
         self.table.db_saved.connect(self.db_saved.emit)
         self.table.tag_created.connect(lambda name: self.status_label.setText(f"🏷️ Created tag '{name}'."))
+        self.table.playlist_created.connect(lambda name: self.status_label.setText(f"📑 Created playlist '{name}'."))
         main_layout.addWidget(self.table, stretch=1)
         main_layout.addWidget(self.table.bottom_bar)
 
@@ -399,6 +405,12 @@ class TracksView(QWidget):
         selected_rows = self.table.selected_rows()
         target_row = selected_rows[0] if selected_rows else -1
         self.table._on_tag_create_requested(target_row, "")
+
+    def _on_create_playlist_clicked(self) -> None:
+        """Create a new playlist in the database, optionally staging it on the selected track row."""
+        selected_rows = self.table.selected_rows()
+        target_row = selected_rows[0] if selected_rows else -1
+        self.table._on_playlist_create_requested(target_row, "")
 
     def cleanup(self) -> None:
         """Stop background search workers and timers cleanly."""

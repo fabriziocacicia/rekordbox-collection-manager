@@ -8,13 +8,15 @@ as well as supporting in-place track details and universal deep-linking.
 
 import os
 from typing import Any, Dict, List, Optional
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import QPoint, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMenu,
+    QMessageBox,
     QPushButton,
     QSplitter,
     QStackedWidget,
@@ -35,6 +37,7 @@ from rekordbox_collection_manager.gui.theme import (
     COLOR_TEXT_PRIMARY,
     COLOR_TEXT_SECONDARY,
 )
+from rekordbox_collection_manager.gui.create_playlist_dialog import CreatePlaylistDialog
 from rekordbox_collection_manager.gui.track_detail_view import TrackDetailView
 from rekordbox_collection_manager.gui.track_table import (
     DEFAULT_COLLECTION_COLUMNS,
@@ -47,6 +50,7 @@ from rekordbox_collection_manager.gui.workers import (
     PlaylistTracksWorker,
     stop_worker,
 )
+from rekordbox_collection_manager.utils import is_rekordbox_running
 
 
 class PlaylistsView(QWidget):
@@ -111,6 +115,13 @@ class PlaylistsView(QWidget):
         )
         left_header.addWidget(self.tree_header_label, stretch=1)
 
+        self.btn_new_playlist = QPushButton("＋")
+        self.btn_new_playlist.setToolTip("Create new playlist or folder...")
+        self.btn_new_playlist.setFixedSize(24, 24)
+        self.btn_new_playlist.setStyleSheet("font-size: 13px; font-weight: bold; padding: 0;")
+        self.btn_new_playlist.clicked.connect(self._on_new_playlist_clicked)
+        left_header.addWidget(self.btn_new_playlist)
+
         self.btn_expand_all = QPushButton("▼")
         self.btn_expand_all.setToolTip("Expand all folders")
         self.btn_expand_all.setFixedSize(24, 24)
@@ -139,6 +150,8 @@ class PlaylistsView(QWidget):
         self.tree.setHeaderHidden(True)
         self.tree.setIndentation(16)
         self.tree.setAnimated(True)
+        self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.tree.customContextMenuRequested.connect(self._on_tree_context_menu)
         self.tree.setStyleSheet(
             f"QTreeWidget {{ "
             f"  background-color: {COLOR_BG_PANEL}; "
@@ -252,6 +265,7 @@ class PlaylistsView(QWidget):
         self.table.open_playlist_requested.connect(self.open_playlist_by_id_or_name)
         self.table.open_tag_requested.connect(self.open_tag_requested.emit)
         self.table.db_saved.connect(self._on_table_db_saved)
+        self.table.playlist_created.connect(self._on_table_playlist_created)
         right_layout.addWidget(self.table, stretch=1)
         right_layout.addWidget(self.table.bottom_bar)
 
@@ -273,7 +287,7 @@ class PlaylistsView(QWidget):
         self.detail_view.status_message.connect(self._on_table_status_message)
         self.detail_view.track_changed.connect(self._on_detail_track_changed)
         self.detail_view.replace_file_requested.connect(self.replace_file_requested.emit)
-        self.detail_view.db_saved.connect(self.db_saved.emit)
+        self.detail_view.db_saved.connect(self._on_detail_db_saved)
         self.stack.addWidget(self.detail_view)
 
         self.splitter.addWidget(self.stack)
@@ -299,6 +313,101 @@ class PlaylistsView(QWidget):
         """Refresh sidebar playlist tree and active playlist tracks when changes are committed."""
         self._load_playlists_tree(force_reload_selected=True)
         self.db_saved.emit()
+
+    def _on_table_playlist_created(self, playlist_name: str) -> None:
+        """Refresh sidebar playlist tree when a playlist is created without wiping table staged edits."""
+        self._load_playlists_tree(force_reload_selected=False)
+
+    def _on_detail_db_saved(self) -> None:
+        """Refresh sidebar playlist tree when playlist changes occur in detail view and bubble db_saved upwards."""
+        self._load_playlists_tree(force_reload_selected=False)
+        self.db_saved.emit()
+
+    def _on_tree_context_menu(self, pos: QPoint) -> None:
+        """Context menu for playlist tree items (New Playlist, New Folder)."""
+        item = self.tree.itemAt(pos)
+        menu = QMenu(self)
+        global_pos = self.tree.mapToGlobal(pos)
+
+        target_parent = None
+        target_name = "Root"
+        is_folder = False
+
+        if item:
+            node = item.data(0, Qt.ItemDataRole.UserRole)
+            if node:
+                attr = node.get("attribute", 0)
+                if attr == 1:
+                    # Folder
+                    target_parent = node.get("id")
+                    target_name = node.get("name", "Folder")
+                    is_folder = True
+                else:
+                    # Standard playlist
+                    target_parent = node.get("parent_id") or "root"
+                    target_name = "Parent Folder" if target_parent != "root" else "Root"
+
+        if is_folder and target_parent:
+            act_new_pl = menu.addAction(f"📑 ＋ New Playlist in '{target_name}'...")
+            act_new_folder = menu.addAction(f"📁 ＋ New Folder in '{target_name}'...")
+        else:
+            act_new_pl = menu.addAction("📑 ＋ New Playlist...")
+            act_new_folder = menu.addAction("📁 ＋ New Folder...")
+
+        chosen = menu.exec(global_pos)
+        if chosen == act_new_pl:
+            self._open_create_playlist_dialog(default_parent=target_parent, is_folder=False)
+        elif chosen == act_new_folder:
+            self._open_create_playlist_dialog(default_parent=target_parent, is_folder=True)
+
+    def _on_new_playlist_clicked(self) -> None:
+        """Handler for header '＋' button."""
+        default_parent = None
+        curr_item = self.tree.currentItem()
+        if curr_item:
+            node = curr_item.data(0, Qt.ItemDataRole.UserRole)
+            if node:
+                if node.get("attribute", 0) == 1:
+                    default_parent = node.get("id")
+                else:
+                    default_parent = node.get("parent_id")
+        self._open_create_playlist_dialog(default_parent=default_parent, is_folder=False)
+
+    def _open_create_playlist_dialog(
+        self, default_parent: Optional[str] = None, is_folder: bool = False
+    ) -> None:
+        """Prompt user with CreatePlaylistDialog, reload tree on creation, and optionally select new playlist."""
+        if is_rekordbox_running():
+            QMessageBox.warning(
+                self,
+                "Rekordbox is Running",
+                "Please close Rekordbox before creating playlists in the database.",
+            )
+            return
+
+        if not self.engine:
+            return
+
+        dlg = CreatePlaylistDialog(
+            engine=self.engine,
+            parent=self,
+            default_parent=default_parent,
+            is_folder_default=is_folder,
+        )
+        if dlg.exec():
+            created = dlg.created_playlist
+            if created:
+                p_name = created.get("name")
+                is_f = created.get("is_folder", False)
+                icon = "📁" if is_f else "📑"
+                kind = "folder" if is_f else "playlist"
+                self.notify_status.emit(f"{icon} Created {kind} '{p_name}'.")
+                if not is_f:
+                    self.current_playlist = created
+                    self._load_playlists_tree(force_reload_selected=True)
+                else:
+                    self._load_playlists_tree(force_reload_selected=False)
+                self.db_saved.emit()
 
     def _load_playlists_tree(self, force_reload_selected: bool = False) -> None:
         """Fetch all playlists and folders in background thread."""

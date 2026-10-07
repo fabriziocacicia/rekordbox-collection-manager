@@ -62,6 +62,7 @@ from rekordbox_collection_manager.gui.chip import (
     TagChip,
     TagChipsContainer,
 )
+from rekordbox_collection_manager.gui.create_playlist_dialog import CreatePlaylistDialog
 from rekordbox_collection_manager.gui.create_tag_dialog import CreateTagDialog
 from rekordbox_collection_manager.gui.theme import (
     COLOR_AMBER,
@@ -383,12 +384,36 @@ class TrackDetailView(QWidget):
         playlists_title.setStyleSheet(f"color: {COLOR_TEXT_MUTED}; font-size: 10px; font-weight: 700; letter-spacing: 0.6px;")
         playlists_header_layout.addWidget(playlists_title)
         playlists_header_layout.addStretch(1)
+
+        self.btn_new_playlist = QPushButton("＋ New Playlist")
+        self.btn_new_playlist.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_new_playlist.setFixedHeight(20)
+        self.btn_new_playlist.setToolTip("Create a new Playlist...")
+        self.btn_new_playlist.setStyleSheet(
+            f"QPushButton {{ "
+            f"  background-color: transparent; "
+            f"  color: {COLOR_BLUE}; "
+            f"  border: 1px solid {COLOR_BORDER_LIGHT}; "
+            f"  border-radius: 4px; "
+            f"  padding: 0 6px; "
+            f"  font-size: 10px; "
+            f"  font-weight: 600; "
+            f"}} "
+            f"QPushButton:hover {{ "
+            f"  background-color: {COLOR_BLUE_BG}; "
+            f"  border-color: {COLOR_BLUE}; "
+            f"  color: #ffffff; "
+            f"}}"
+        )
+        self.btn_new_playlist.clicked.connect(lambda: self._on_playlist_create_requested(""))
+        playlists_header_layout.addWidget(self.btn_new_playlist)
         cat_layout.addLayout(playlists_header_layout)
 
         self.playlists_container = PlaylistChipsContainer(parent=self)
         self.playlists_container.playlist_added.connect(self._on_playlist_added_or_removed)
         self.playlists_container.playlist_removed.connect(self._on_playlist_added_or_removed)
         self.playlists_container.playlist_clicked.connect(self.open_playlist_requested.emit)
+        self.playlists_container.playlist_create_requested.connect(self._on_playlist_create_requested)
         cat_layout.addWidget(self.playlists_container)
 
         # Comments (if present)
@@ -1137,6 +1162,39 @@ class TrackDetailView(QWidget):
         """Update staged playlists state when a chip is added or deleted."""
         self.current_playlists = self.playlists_container.get_playlists()
         self._update_staged_changes_ui()
+
+    def _on_playlist_create_requested(self, playlist_name: str) -> None:
+        """Handle request to create a new playlist, e.g. from inline chip input or '+ New Playlist' button."""
+        if not self.engine:
+            return
+
+        if is_rekordbox_running():
+            QMessageBox.warning(
+                self,
+                "Rekordbox is Running",
+                "Please close Rekordbox before creating playlists in the database.",
+            )
+            return
+
+        dlg = CreatePlaylistDialog(
+            engine=self.engine,
+            parent=self,
+            initial_name=playlist_name,
+        )
+        if dlg.exec():
+            created = dlg.created_playlist
+            if created:
+                new_name = created.get("name")
+                self._load_available_playlists()
+                # If standard playlist, stage it as a chip
+                if created.get("attribute", 0) == 0:
+                    if new_name and new_name not in self.current_playlists:
+                        self.playlists_container._add_single_item(new_name)
+                        self._on_playlist_added_or_removed(new_name)
+                    self.status_message.emit(f"📑 Created and assigned playlist '{new_name}'.")
+                else:
+                    self.status_message.emit(f"📁 Created folder '{new_name}'.")
+                self.db_saved.emit()
 
     def _on_tag_added_or_removed(self, name: str) -> None:
         """Update staged tags state when a chip is added or deleted."""
