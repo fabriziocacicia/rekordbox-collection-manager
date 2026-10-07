@@ -69,6 +69,7 @@ from rekordbox_collection_manager.gui.chip import (
     CHIP_SCHEMES,
     ChipSearchLineEdit,
 )
+from rekordbox_collection_manager.gui.create_tag_dialog import CreateTagDialog
 from rekordbox_collection_manager.gui.theme import (
     COLOR_AMBER,
     COLOR_AMBER_BG,
@@ -664,6 +665,7 @@ class TableChipAddEditor(QWidget):
     """Floating inline search/add editor for adding tags or playlists directly inside table cells."""
 
     item_added = Signal(int, str, str)  # (row, category, item_name)
+    tag_create_requested = Signal(int, str)  # (row, tag_name)
     editing_closed = Signal()
 
     def __init__(self, parent: QWidget):
@@ -734,8 +736,33 @@ class TableChipAddEditor(QWidget):
 
         self.completer.activated.connect(self._on_item_chosen)
         self.input_edit.setCompleter(self.completer)
+        self.input_edit.textChanged.connect(self._on_text_changed)
         self.input_edit.returnPressed.connect(self._on_return_pressed)
         self.input_edit.escape_pressed.connect(self.close_editor)
+
+    def _on_text_changed(self, text: str) -> None:
+        if self.category != "tags":
+            return
+        query = text.strip()
+        assigned_lower = {e.lower() for e in self.existing_items}
+        base_candidates = [
+            item for item in self.all_available_items if item.lower() not in assigned_lower
+        ]
+        if query:
+            exact = any(item.lower() == query.lower() for item in self.all_available_items)
+            create_option = f"＋ Create \"{query}\"..."
+            if not exact:
+                candidates = [create_option] + base_candidates
+            else:
+                candidates = base_candidates
+        else:
+            candidates = base_candidates
+        self.completer_model.setStringList(candidates)
+        popup = self.completer.popup()
+        if popup:
+            fm = popup.fontMetrics()
+            max_w = max((fm.horizontalAdvance(item) for item in candidates), default=0) + 40
+            popup.setMinimumWidth(max(220, min(max_w, 400)))
 
     def show_at(
         self,
@@ -790,10 +817,15 @@ class TableChipAddEditor(QWidget):
 
     def _on_item_chosen(self, text: str) -> None:
         item = text.strip()
-        if item:
-            row = self.current_row
-            cat = self.category
-            self.close_editor()
+        if not item:
+            return
+        row = self.current_row
+        cat = self.category
+        self.close_editor()
+        if cat == "tags" and (item.startswith("＋ Create \"") or item.startswith("+ Create \"")):
+            new_tag = item.split("\"", 2)[1] if "\"" in item else item.replace("＋ Create ", "").replace("+ Create ", "").rstrip(".").strip()
+            self.tag_create_requested.emit(row, new_tag)
+        else:
             self.item_added.emit(row, cat, item)
 
     def _on_return_pressed(self) -> None:
@@ -802,18 +834,36 @@ class TableChipAddEditor(QWidget):
             self.close_editor()
             return
 
+        row = self.current_row
+        cat = self.category
+
+        if cat == "tags" and (text.startswith("＋ Create \"") or text.startswith("+ Create \"")):
+            new_tag = text.split("\"", 2)[1] if "\"" in text else text.replace("＋ Create ", "").replace("+ Create ", "").rstrip(".").strip()
+            self.close_editor()
+            self.tag_create_requested.emit(row, new_tag)
+            return
+
         matched = None
-        for cand in self.completer_model.stringList():
+        for cand in self.all_available_items:
             if cand.lower() == text.lower():
                 matched = cand
                 break
+
         if not matched and self.completer.currentCompletion():
             cur = self.completer.currentCompletion()
-            if cur.lower().startswith(text.lower()):
+            if cur.startswith("＋ Create \"") or cur.startswith("+ Create \""):
+                new_tag = cur.split("\"", 2)[1] if "\"" in cur else text
+                self.close_editor()
+                self.tag_create_requested.emit(row, new_tag)
+                return
+            elif cur.lower().startswith(text.lower()) and cur in self.all_available_items:
                 matched = cur
 
         if matched:
             self._on_item_chosen(matched)
+        elif cat == "tags":
+            self.close_editor()
+            self.tag_create_requested.emit(row, text)
         else:
             self.close_editor()
 
@@ -1373,6 +1423,7 @@ class TracksTableWidget(QTableView):
     track_tags_changed = Signal(int, list)
     track_modified = Signal(dict)
     db_saved = Signal()
+    tag_created = Signal(str)  # (tag_name)
     staged_changes_changed = Signal(bool)
 
     def __init__(
@@ -1417,6 +1468,7 @@ class TracksTableWidget(QTableView):
 
         self._chip_editor = TableChipAddEditor(self.viewport())
         self._chip_editor.item_added.connect(self._on_chip_item_added)
+        self._chip_editor.tag_create_requested.connect(self._on_tag_create_requested)
         self.verticalScrollBar().valueChanged.connect(self._chip_editor.close_editor)
         self.horizontalScrollBar().valueChanged.connect(self._chip_editor.close_editor)
 
@@ -1825,6 +1877,7 @@ class TracksTableWidget(QTableView):
         if not (0 <= row < len(self.records)):
             return
 
+        self.scrollTo(idx)
         track = self.records[row]
         existing_items = list(track.get(category) or [])
         available_items = self.get_available_items(category)
@@ -2025,6 +2078,44 @@ class TracksTableWidget(QTableView):
         self.track_modified.emit(track)
         self.staged_changes_changed.emit(self.has_staged_changes())
         self.status_message.emit(f"⚠️ Staged adding {cat_singular} '{item_name}' to '{title}' (Unsaved)")
+
+    def _on_tag_create_requested(self, row: int, tag_name: str) -> None:
+        """Handle creating a brand-new tag from the table cell editor or context menu."""
+        if not self.engine:
+            QMessageBox.warning(
+                self,
+                "Database Unavailable",
+                "Database engine is not connected. Cannot create tag.",
+            )
+            return
+
+        if is_rekordbox_running():
+            QMessageBox.warning(
+                self,
+                "Rekordbox is Running",
+                "Please close Rekordbox before creating tags in the database.",
+            )
+            return
+
+        dlg = CreateTagDialog(
+            engine=self.engine,
+            parent=self.window() or self,
+            initial_name=tag_name,
+            default_category="Genre",
+        )
+        if dlg.exec():
+            created = dlg.created_tag
+            if created:
+                new_name = created.get("name")
+                # Reload available items in this table and refresh caches
+                self._refresh_available_caches()
+                # Stage the newly created tag on this track row!
+                if new_name and 0 <= row < len(self.records):
+                    self._on_chip_item_added(row, "tags", new_name)
+                    self.status_message.emit(f"🏷️ Created and assigned tag '{new_name}'.")
+                else:
+                    self.status_message.emit(f"🏷️ Created tag '{new_name}'.")
+                self.tag_created.emit(new_name)
 
     def _on_chip_item_deleted(self, row: int, category: str, item_name: str) -> None:
         """Handle removing a tag or playlist item as a staged edit."""
@@ -2499,6 +2590,9 @@ class TracksTableWidget(QTableView):
                     act_tag_map[sub_act] = t_name
 
         menu.addSeparator()
+        act_create_tag = menu.addAction("🏷️ ＋ Create New Tag...")
+        act_add_tag = menu.addAction("🏷️ Add Existing Tag...")
+        menu.addSeparator()
         act_open_folder = menu.addAction("📁 Open Containing Folder")
         act_reveal_file = menu.addAction("🔍 Reveal in Finder")
         menu.addSeparator()
@@ -2527,6 +2621,15 @@ class TracksTableWidget(QTableView):
                 if not self.confirm_unsaved_changes():
                     return
             self.open_tag_requested.emit(act_tag_map[action])
+        elif action == act_create_tag:
+            self._on_tag_create_requested(row, "")
+        elif action == act_add_tag:
+            if self._tags_col_idx >= 0:
+                idx = self.model().index(row, self._tags_col_idx)
+                self.scrollTo(idx)
+                self._open_chip_add_editor(idx, "tags")
+            else:
+                self._on_tag_create_requested(row, "")
         elif action == act_open_folder:
             self.open_folder(folder_dir)
         elif action == act_reveal_file:

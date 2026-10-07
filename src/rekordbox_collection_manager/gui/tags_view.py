@@ -31,6 +31,8 @@ from sqlalchemy.engine import Engine
 from rekordbox_collection_manager.tags import sort_tags_in_folder
 from rekordbox_collection_manager.utils import is_rekordbox_running
 
+from rekordbox_collection_manager.gui.create_tag_dialog import CreateTagDialog
+
 from rekordbox_collection_manager.gui.theme import (
     COLOR_BG_CARD,
     COLOR_BG_DARK,
@@ -117,6 +119,13 @@ class TagsView(QWidget):
             f"color: {COLOR_TEXT_MUTED}; font-size: 11px; font-weight: 700; letter-spacing: 0.8px;"
         )
         left_header.addWidget(self.tree_header_label, stretch=1)
+
+        self.btn_new_tag = QPushButton("＋")
+        self.btn_new_tag.setToolTip("Create new tag...")
+        self.btn_new_tag.setFixedSize(24, 24)
+        self.btn_new_tag.setStyleSheet("font-size: 13px; font-weight: bold; padding: 0;")
+        self.btn_new_tag.clicked.connect(self._on_new_tag_clicked)
+        left_header.addWidget(self.btn_new_tag)
 
         self.btn_expand_all = QPushButton("▼")
         self.btn_expand_all.setToolTip("Expand all categories")
@@ -261,6 +270,7 @@ class TagsView(QWidget):
         self.table.open_playlist_requested.connect(self.open_playlist_requested.emit)
         self.table.open_tag_requested.connect(self.open_tag_by_id_or_name)
         self.table.db_saved.connect(self._on_table_db_saved)
+        self.table.tag_created.connect(self._on_table_tag_created)
         right_layout.addWidget(self.table, stretch=1)
         right_layout.addWidget(self.table.bottom_bar)
 
@@ -282,7 +292,7 @@ class TagsView(QWidget):
         self.detail_view.status_message.connect(self._on_table_status_message)
         self.detail_view.track_changed.connect(self._on_detail_track_changed)
         self.detail_view.replace_file_requested.connect(self.replace_file_requested.emit)
-        self.detail_view.db_saved.connect(self.db_saved.emit)
+        self.detail_view.db_saved.connect(self._on_detail_db_saved)
         self.stack.addWidget(self.detail_view)
 
         self.splitter.addWidget(self.stack)
@@ -303,6 +313,15 @@ class TagsView(QWidget):
         self.db_path = db_path
         self.table.set_engine(engine)
         self._load_tags_tree()
+
+    def _on_table_tag_created(self, tag_name: str) -> None:
+        """Refresh sidebar tag tree when a tag is created without wiping table staged edits."""
+        self._load_tags_tree(force_reload_selected=False)
+
+    def _on_detail_db_saved(self) -> None:
+        """Refresh sidebar tag tree when tag changes occur in detail view and bubble db_saved upwards."""
+        self._load_tags_tree(force_reload_selected=False)
+        self.db_saved.emit()
 
     def _on_table_db_saved(self) -> None:
         """Refresh sidebar tag tree and active tag tracks when changes are committed."""
@@ -543,11 +562,15 @@ class TagsView(QWidget):
             folder_id = str(node.get("id"))
             folder_name = node.get("name", "Folder")
 
+            act_new_tag = menu.addAction(f"＋ New Tag in '{folder_name}'...")
+            menu.addSeparator()
             act_sort_az = menu.addAction(f"Sort '{folder_name}' Alphabetically (A to Z)")
             act_sort_za = menu.addAction(f"Sort '{folder_name}' Alphabetically (Z to A)")
 
             chosen = menu.exec(global_pos)
-            if chosen == act_sort_az:
+            if chosen == act_new_tag:
+                self._open_create_tag_dialog(default_category=folder_name)
+            elif chosen == act_sort_az:
                 self._sort_folder_tags(folder_id, folder_name, descending=False)
             elif chosen == act_sort_za:
                 self._sort_folder_tags(folder_id, folder_name, descending=True)
@@ -556,14 +579,59 @@ class TagsView(QWidget):
             parent_id = str(node.get("parent_id", ""))
             category_name = node.get("category_name") or "Folder"
             if parent_id and parent_id != "root":
+                act_new_tag = menu.addAction(f"＋ New Tag in '{category_name}'...")
+                menu.addSeparator()
                 act_sort_folder = menu.addAction(f"Sort Folder '{category_name}' Alphabetically (A to Z)")
                 act_sort_folder_desc = menu.addAction(f"Sort Folder '{category_name}' Alphabetically (Z to A)")
 
                 chosen = menu.exec(global_pos)
-                if chosen == act_sort_folder:
+                if chosen == act_new_tag:
+                    self._open_create_tag_dialog(default_category=category_name)
+                elif chosen == act_sort_folder:
                     self._sort_folder_tags(parent_id, category_name, descending=False)
                 elif chosen == act_sort_folder_desc:
                     self._sort_folder_tags(parent_id, category_name, descending=True)
+
+    def _on_new_tag_clicked(self) -> None:
+        """Handler for header '＋' button."""
+        default_cat = None
+        curr_item = self.tree.currentItem()
+        if curr_item:
+            node = curr_item.data(0, Qt.ItemDataRole.UserRole)
+            if node:
+                if node.get("attribute", 0) == 1:
+                    default_cat = node.get("name")
+                else:
+                    default_cat = node.get("category_name")
+        self._open_create_tag_dialog(default_category=default_cat)
+
+    def _open_create_tag_dialog(self, default_category: Optional[str] = None) -> None:
+        """Prompt user with CreateTagDialog, reload tree on creation, and select new tag."""
+        if is_rekordbox_running():
+            QMessageBox.warning(
+                self,
+                "Rekordbox is Running",
+                "Please close Rekordbox before creating tags in the database.",
+            )
+            return
+
+        if not self.engine:
+            return
+
+        dlg = CreateTagDialog(
+            engine=self.engine,
+            parent=self,
+            default_category=default_category,
+        )
+        if dlg.exec():
+            created = dlg.created_tag
+            if created:
+                t_name = created.get("name")
+                c_name = created.get("category_name", default_category or "Category")
+                self.notify_status.emit(f"🏷️ Created tag '{t_name}' in category '{c_name}'.")
+                self.current_tag = created
+                self._load_tags_tree(force_reload_selected=True)
+                self.db_saved.emit()
 
     def _sort_folder_tags(
         self, folder_id: str, folder_name: str, descending: bool = False

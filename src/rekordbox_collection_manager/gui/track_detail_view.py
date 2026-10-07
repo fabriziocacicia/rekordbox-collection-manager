@@ -62,6 +62,7 @@ from rekordbox_collection_manager.gui.chip import (
     TagChip,
     TagChipsContainer,
 )
+from rekordbox_collection_manager.gui.create_tag_dialog import CreateTagDialog
 from rekordbox_collection_manager.gui.theme import (
     COLOR_AMBER,
     COLOR_AMBER_BG,
@@ -344,12 +345,36 @@ class TrackDetailView(QWidget):
         tags_title.setStyleSheet(f"color: {COLOR_TEXT_MUTED}; font-size: 10px; font-weight: 700; letter-spacing: 0.6px;")
         tags_header_layout.addWidget(tags_title)
         tags_header_layout.addStretch(1)
+
+        self.btn_new_tag = QPushButton("＋ New Tag")
+        self.btn_new_tag.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_new_tag.setFixedHeight(20)
+        self.btn_new_tag.setToolTip("Create a new My Tag...")
+        self.btn_new_tag.setStyleSheet(
+            f"QPushButton {{ "
+            f"  background-color: transparent; "
+            f"  color: {COLOR_BLUE}; "
+            f"  border: 1px solid {COLOR_BORDER_LIGHT}; "
+            f"  border-radius: 4px; "
+            f"  padding: 0 6px; "
+            f"  font-size: 10px; "
+            f"  font-weight: 600; "
+            f"}} "
+            f"QPushButton:hover {{ "
+            f"  background-color: {COLOR_BLUE_BG}; "
+            f"  border-color: {COLOR_BLUE}; "
+            f"  color: #ffffff; "
+            f"}}"
+        )
+        self.btn_new_tag.clicked.connect(lambda: self._on_tag_create_requested(""))
+        tags_header_layout.addWidget(self.btn_new_tag)
         cat_layout.addLayout(tags_header_layout)
 
         self.tags_container = TagChipsContainer(parent=self)
         self.tags_container.tag_added.connect(self._on_tag_added_or_removed)
         self.tags_container.tag_removed.connect(self._on_tag_added_or_removed)
         self.tags_container.tag_clicked.connect(self.open_tag_requested.emit)
+        self.tags_container.tag_create_requested.connect(self._on_tag_create_requested)
         cat_layout.addWidget(self.tags_container)
 
         # Playlists Row
@@ -1117,6 +1142,36 @@ class TrackDetailView(QWidget):
         """Update staged tags state when a chip is added or deleted."""
         self.current_tags = self.tags_container.get_tags()
         self._update_staged_changes_ui()
+
+    def _on_tag_create_requested(self, tag_name: str) -> None:
+        """Handle request to create a new tag, e.g. from inline chip input or '+ New Tag' button."""
+        if not self.engine:
+            return
+
+        if is_rekordbox_running():
+            QMessageBox.warning(
+                self,
+                "Rekordbox is Running",
+                "Please close Rekordbox before creating tags in the database.",
+            )
+            return
+
+        dlg = CreateTagDialog(
+            engine=self.engine,
+            parent=self,
+            initial_name=tag_name,
+            default_category="Genre",
+        )
+        if dlg.exec():
+            created = dlg.created_tag
+            if created:
+                new_name = created.get("name")
+                self._load_available_tags()
+                if new_name and new_name not in self.current_tags:
+                    self.tags_container._add_single_item(new_name)
+                    self._on_tag_added_or_removed(new_name)
+                self.status_message.emit(f"🏷️ Created and assigned tag '{new_name}'.")
+                self.db_saved.emit()
 
     def _update_staged_changes_ui(self) -> None:
         """Refresh the bottom bar visibility and message according to staged edits."""

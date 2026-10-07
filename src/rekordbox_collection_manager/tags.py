@@ -4,7 +4,9 @@ Provides methods to query tag categories (filtering by Genre and Style),
 hierarchies, track counts, and retrieve track lists for individual tags with full metadata.
 """
 
+import random
 from typing import Any, Dict, List, Optional, Set, Tuple
+import uuid
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
@@ -601,3 +603,235 @@ def cleanup_duplicate_song_tags(engine: Engine) -> int:
                 )
 
         return len(duplicate_ids)
+
+
+def fetch_tag_categories(
+    engine: Engine,
+    category_names: Optional[Tuple[str, ...]] = None,
+) -> List[Dict[str, Any]]:
+    """Retrieve active MyTag category folders (Attribute = 1 or ParentID = 'root').
+
+    Returns a list of dicts:
+    [
+        {"id": "1", "name": "Genre", "seq": 1},
+        {"id": "4", "name": "Style", "seq": 4},
+        ...
+    ]
+    """
+    with engine.connect() as conn:
+        existing_tables = {
+            r[0]
+            for r in conn.exec_driver_sql(
+                "SELECT name FROM sqlite_master WHERE type='table';"
+            ).fetchall()
+        }
+        if "djmdMyTag" not in existing_tables:
+            return []
+
+        tag_cols = {
+            r[1]
+            for r in conn.exec_driver_sql("PRAGMA table_info(djmdMyTag);").fetchall()
+        }
+
+        del_filter = (
+            "AND (rb_local_deleted = 0 OR rb_local_deleted IS NULL)"
+            if "rb_local_deleted" in tag_cols
+            else ""
+        )
+        seq_col = "Seq" if "Seq" in tag_cols else "0 AS Seq"
+
+        if category_names:
+            placeholders = ", ".join(f":c_{i}" for i in range(len(category_names)))
+            params = {f"c_{i}": name for i, name in enumerate(category_names)}
+            name_filter = f"AND Name IN ({placeholders})"
+        else:
+            name_filter = ""
+            params = {}
+
+        query = f"""
+            SELECT ID, Name, {seq_col}
+            FROM djmdMyTag
+            WHERE (ParentID = 'root' OR Attribute = 1)
+              {name_filter}
+              {del_filter}
+            ORDER BY Seq ASC, lower(Name) ASC;
+        """
+        rows = conn.execute(text(query), params).fetchall()
+        return [
+            {
+                "id": str(r[0]),
+                "name": str(r[1]).strip() if r[1] else "",
+                "seq": int(r[2]) if r[2] is not None else 0,
+            }
+            for r in rows
+            if r[1] and str(r[1]).strip()
+        ]
+
+
+def create_tag(
+    engine: Engine,
+    name: str,
+    parent_id_or_name: str = "Genre",
+) -> Dict[str, Any]:
+    """Create a new My Tag under a specified category folder in Rekordbox database.
+
+    If a tag with the same name was previously soft-deleted, reactivates it under the
+    given category and updates its Seq and updated_at.
+
+    Args:
+        engine: Active SQLAlchemy database engine.
+        name: Desired tag name (non-empty string).
+        parent_id_or_name: Parent category folder ID or Name (e.g. 'Genre' or 'Style').
+
+    Returns:
+        Dict representing the created or reactivated tag.
+
+    Raises:
+        ValueError: If name is empty, category is not found, or tag already exists.
+    """
+    clean_name = name.strip()
+    if not clean_name:
+        raise ValueError("Tag name cannot be empty.")
+
+    now_utc = get_rekordbox_timestamp()
+
+    with engine.begin() as conn:
+        existing_tables = {
+            r[0]
+            for r in conn.exec_driver_sql(
+                "SELECT name FROM sqlite_master WHERE type='table';"
+            ).fetchall()
+        }
+        if "djmdMyTag" not in existing_tables:
+            raise ValueError("Table djmdMyTag not found in database.")
+
+        tag_cols = {
+            r[1]
+            for r in conn.exec_driver_sql("PRAGMA table_info(djmdMyTag);").fetchall()
+        }
+
+        has_rb_del = "rb_local_deleted" in tag_cols
+        del_filter = (
+            "AND (rb_local_deleted = 0 OR rb_local_deleted IS NULL)"
+            if has_rb_del
+            else ""
+        )
+
+        # 1. Resolve parent category folder
+        parent_sql = f"""
+            SELECT ID, Name
+            FROM djmdMyTag
+            WHERE (ParentID = 'root' OR Attribute = 1)
+              AND (ID = :p_query OR lower(Name) = lower(:p_query))
+              {del_filter}
+            LIMIT 1;
+        """
+        parent_row = conn.execute(text(parent_sql), {"p_query": str(parent_id_or_name).strip()}).fetchone()
+        if not parent_row:
+            raise ValueError(f"Category folder '{parent_id_or_name}' not found.")
+
+        parent_id = str(parent_row[0])
+        category_name = str(parent_row[1]).strip()
+
+        # 2. Check if a tag with this name already exists
+        check_sql = """
+            SELECT ID, Name, ParentID, Seq, rb_local_deleted
+            FROM djmdMyTag
+            WHERE lower(Name) = lower(:name)
+              AND (Attribute = 0 OR Attribute IS NULL)
+            LIMIT 1;
+        """
+        existing = conn.execute(text(check_sql), {"name": clean_name}).fetchone()
+
+        # Calculate next sequence number in parent folder
+        seq_sql = f"""
+            SELECT COALESCE(MAX(Seq), 0) + 1
+            FROM djmdMyTag
+            WHERE ParentID = :pid
+              {del_filter};
+        """
+        next_seq = int(conn.execute(text(seq_sql), {"pid": parent_id}).scalar() or 1)
+
+        if existing:
+            tag_id = str(existing[0])
+            existing_name = str(existing[1])
+            is_deleted = bool(existing[4]) if (has_rb_del and existing[4] is not None) else False
+
+            if is_deleted:
+                # Reactivate soft-deleted tag
+                update_fields = ["ParentID = :pid", "Seq = :seq"]
+                params: Dict[str, Any] = {
+                    "pid": parent_id,
+                    "seq": next_seq,
+                    "id": tag_id,
+                }
+                if has_rb_del:
+                    update_fields.append("rb_local_deleted = 0")
+                if "updated_at" in tag_cols:
+                    update_fields.append("updated_at = :now")
+                    params["now"] = now_utc
+                if "rb_local_synced" in tag_cols:
+                    update_fields.append("rb_local_synced = 1")
+                if "rb_local_data_status" in tag_cols:
+                    update_fields.append("rb_local_data_status = 1")
+
+                update_sql = f"UPDATE djmdMyTag SET {', '.join(update_fields)} WHERE ID = :id;"
+                conn.execute(text(update_sql), params)
+
+                return {
+                    "id": tag_id,
+                    "name": existing_name,
+                    "parent_id": parent_id,
+                    "category_name": category_name,
+                    "seq": next_seq,
+                    "reactivated": True,
+                }
+            else:
+                raise ValueError(f"A tag named '{existing_name}' already exists.")
+
+        # 3. Generate unique numeric 32-bit positive integer string ID
+        while True:
+            candidate_id = str(random.randint(100_000_000, 2_147_483_647))
+            matching_ids = _resolve_tag_matching_ids(candidate_id) or [candidate_id]
+            m_placeholders = ", ".join(f":mid_{i}" for i in range(len(matching_ids)))
+            m_params = {f"mid_{i}": mid for i, mid in enumerate(matching_ids)}
+            exists_id = conn.execute(
+                text(f"SELECT 1 FROM djmdMyTag WHERE ID IN ({m_placeholders}) LIMIT 1;"),
+                m_params,
+            ).fetchone()
+            if not exists_id:
+                new_id = candidate_id
+                break
+
+        new_uuid = str(uuid.uuid4())
+        record_data = {
+            "ID": new_id,
+            "Seq": next_seq,
+            "Name": clean_name,
+            "Attribute": 0,
+            "ParentID": parent_id,
+            "UUID": new_uuid,
+            "rb_data_status": 0,
+            "rb_local_data_status": 1,
+            "rb_local_deleted": 0,
+            "rb_local_synced": 1,
+            "created_at": now_utc,
+            "updated_at": now_utc,
+        }
+
+        insert_cols = [k for k in record_data if k in tag_cols]
+        col_names = ", ".join(insert_cols)
+        val_placeholders = ", ".join(f":{k}" for k in insert_cols)
+        insert_sql = f"INSERT INTO djmdMyTag ({col_names}) VALUES ({val_placeholders});"
+        conn.execute(text(insert_sql), {k: record_data[k] for k in insert_cols})
+
+        return {
+            "id": new_id,
+            "name": clean_name,
+            "parent_id": parent_id,
+            "category_name": category_name,
+            "seq": next_seq,
+            "uuid": new_uuid,
+            "reactivated": False,
+        }
+

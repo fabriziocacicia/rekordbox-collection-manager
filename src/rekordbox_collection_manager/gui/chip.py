@@ -486,6 +486,7 @@ class EditableChipsContainer(QWidget):
     items_changed = Signal(list)
     item_clicked = Signal(str)
     editing_state_changed = Signal(bool)
+    custom_item_entered = Signal(str)
 
     def __init__(
         self,
@@ -732,6 +733,7 @@ class EditableChipsContainer(QWidget):
         elif self.allow_custom:
             self._on_item_chosen(text)
         else:
+            self.custom_item_entered.emit(text)
             self.hide_add_input()
 
     def _on_item_chosen(self, name: str) -> None:
@@ -810,12 +812,13 @@ class TagChipsContainer(EditableChipsContainer):
     tag_added = Signal(str)
     tag_removed = Signal(str)
     tag_clicked = Signal(str)
+    tag_create_requested = Signal(str)
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(
             scheme="purple",
             chip_class=TagChip,
-            placeholder="Search tag to add...",
+            placeholder="Search tag to add (or type new tag)...",
             empty_text="No tags assigned (click here to add)",
             object_name="tagChipsContainer",
             allow_custom=False,
@@ -824,6 +827,7 @@ class TagChipsContainer(EditableChipsContainer):
         self.item_added.connect(self.tag_added.emit)
         self.item_removed.connect(self.tag_removed.emit)
         self.item_clicked.connect(self.tag_clicked.emit)
+        self.custom_item_entered.connect(self.tag_create_requested.emit)
 
     @property
     def tags(self) -> List[str]:

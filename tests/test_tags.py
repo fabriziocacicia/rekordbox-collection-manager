@@ -12,9 +12,12 @@ from rekordbox_collection_manager.gui.chip import TagChip, TagChipsContainer
 from rekordbox_collection_manager.gui.main_window import MainWindow
 from rekordbox_collection_manager.gui.tags_view import TagsView
 from rekordbox_collection_manager.gui.track_table import TrackColumn, TrackTableConfig, TracksTableWidget
+from rekordbox_collection_manager.gui.create_tag_dialog import CreateTagDialog
 from rekordbox_collection_manager.tags import (
     _resolve_tag_matching_ids,
     cleanup_duplicate_song_tags,
+    create_tag,
+    fetch_tag_categories,
     fetch_tag_tracks,
     fetch_tags_tree,
     sort_tags_in_folder,
@@ -439,9 +442,10 @@ class TestTagsGUI(unittest.TestCase):
              patch("rekordbox_collection_manager.gui.tags_view.QMenu") as mock_menu_cls:
             mock_menu = MagicMock()
             mock_menu_cls.return_value = mock_menu
+            mock_act_new = MagicMock()
             mock_act_az = MagicMock()
             mock_act_za = MagicMock()
-            mock_menu.addAction.side_effect = [mock_act_az, mock_act_za]
+            mock_menu.addAction.side_effect = [mock_act_new, mock_act_az, mock_act_za]
             mock_menu.exec.return_value = mock_act_az
 
             self.view._on_tree_context_menu(QPoint(10, 10))
@@ -631,5 +635,161 @@ class TestTagDeduplication(unittest.TestCase):
             self.assertEqual(del_status, 1, "Duplicate row should be marked soft-deleted")
 
 
+class TestCreateTag(unittest.TestCase):
+    """Test suite for creating tags in Rekordbox database and via GUI."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
+    def setUp(self):
+        self.engine = create_engine(
+            "sqlite:///:memory:",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        with self.engine.begin() as conn:
+            conn.exec_driver_sql("""
+                CREATE TABLE djmdMyTag (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    Seq INTEGER,
+                    Name VARCHAR(255),
+                    Attribute INTEGER DEFAULT 0,
+                    ParentID VARCHAR(255),
+                    UUID VARCHAR(255),
+                    rb_data_status INTEGER DEFAULT 0,
+                    rb_local_data_status INTEGER DEFAULT 0,
+                    rb_local_deleted INTEGER DEFAULT 0,
+                    rb_local_synced INTEGER DEFAULT 0,
+                    created_at DATETIME NOT NULL,
+                    updated_at DATETIME NOT NULL
+                );
+            """)
+            conn.exec_driver_sql("""
+                CREATE TABLE djmdSongMyTag (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    MyTagID VARCHAR(255),
+                    ContentID VARCHAR(255),
+                    TrackNo INTEGER,
+                    rb_local_deleted INTEGER DEFAULT 0,
+                    created_at DATETIME,
+                    updated_at DATETIME
+                );
+            """)
+            # Categories
+            conn.exec_driver_sql("""
+                INSERT INTO djmdMyTag (ID, Seq, Name, Attribute, ParentID, UUID, created_at, updated_at)
+                VALUES 
+                    ('1', 1, 'Genre', 1, 'root', 'uuid-1', '2026-01-01', '2026-01-01'),
+                    ('4', 2, 'Style', 1, 'root', 'uuid-4', '2026-01-01', '2026-01-01');
+            """)
+            # Existing tags under Genre
+            conn.exec_driver_sql("""
+                INSERT INTO djmdMyTag (ID, Seq, Name, Attribute, ParentID, UUID, rb_local_deleted, created_at, updated_at)
+                VALUES 
+                    ('101', 1, 'Techno', 0, '1', 'uuid-t1', 0, '2026-01-01', '2026-01-01'),
+                    ('102', 2, 'House', 0, '1', 'uuid-t2', 0, '2026-01-01', '2026-01-01'),
+                    ('103', 3, 'Trance', 0, '1', 'uuid-t3', 1, '2026-01-01', '2026-01-01');
+            """)
+
+    def test_fetch_tag_categories(self):
+        cats = fetch_tag_categories(self.engine)
+        self.assertEqual(len(cats), 2)
+        cat_names = [c["name"] for c in cats]
+        self.assertIn("Genre", cat_names)
+        self.assertIn("Style", cat_names)
+
+    def test_create_tag_success(self):
+        result = create_tag(self.engine, name="Acid House", parent_id_or_name="Genre")
+        self.assertEqual(result["name"], "Acid House")
+        self.assertEqual(result["parent_id"], "1")
+        self.assertEqual(result["category_name"], "Genre")
+        self.assertEqual(result["seq"], 3)  # Active tags in Genre were 2, next is 3
+        self.assertFalse(result["reactivated"])
+        self.assertTrue(result["id"].isdigit())
+
+        # Verify persisted in database
+        with self.engine.connect() as conn:
+            row = conn.exec_driver_sql(
+                "SELECT ID, Name, ParentID, Seq, Attribute, rb_local_deleted FROM djmdMyTag WHERE ID = :id;",
+                {"id": result["id"]},
+            ).fetchone()
+            self.assertIsNotNone(row)
+            self.assertEqual(row[1], "Acid House")
+            self.assertEqual(row[2], "1")
+            self.assertEqual(row[3], 3)
+            self.assertEqual(row[4], 0)  # Attribute 0 = tag
+            self.assertEqual(row[5], 0)  # Active
+
+    def test_create_tag_by_category_id(self):
+        result = create_tag(self.engine, name="Peak Time", parent_id_or_name="4")
+        self.assertEqual(result["name"], "Peak Time")
+        self.assertEqual(result["parent_id"], "4")
+        self.assertEqual(result["category_name"], "Style")
+        self.assertEqual(result["seq"], 1)
+
+    def test_create_tag_whitespace_stripped(self):
+        result = create_tag(self.engine, name="   Minimal Tech   ", parent_id_or_name="Genre")
+        self.assertEqual(result["name"], "Minimal Tech")
+
+    def test_create_tag_empty_name_raises(self):
+        with self.assertRaises(ValueError) as ctx:
+            create_tag(self.engine, name="   ", parent_id_or_name="Genre")
+        self.assertIn("empty", str(ctx.exception).lower())
+
+    def test_create_tag_invalid_category_raises(self):
+        with self.assertRaises(ValueError) as ctx:
+            create_tag(self.engine, name="Dubstep", parent_id_or_name="NonExistent")
+        self.assertIn("not found", str(ctx.exception).lower())
+
+    def test_create_tag_duplicate_active_raises(self):
+        with self.assertRaises(ValueError) as ctx:
+            create_tag(self.engine, name="techno", parent_id_or_name="Genre")
+        self.assertIn("already exists", str(ctx.exception).lower())
+
+    def test_create_tag_reactivates_soft_deleted(self):
+        # 'Trance' is soft-deleted with ID 103
+        result = create_tag(self.engine, name="Trance", parent_id_or_name="Style")
+        self.assertEqual(result["id"], "103")
+        self.assertTrue(result["reactivated"])
+        self.assertEqual(result["parent_id"], "4")  # Moved to Style
+
+        with self.engine.connect() as conn:
+            row = conn.exec_driver_sql(
+                "SELECT rb_local_deleted, ParentID FROM djmdMyTag WHERE ID = '103';"
+            ).fetchone()
+            self.assertEqual(row[0], 0, "Should be reactivated")
+            self.assertEqual(row[1], "4")
+
+    def test_create_tag_dialog_ui(self):
+        dlg = CreateTagDialog(
+            engine=self.engine,
+            initial_name="Ambient",
+            default_category="Genre",
+        )
+        self.assertEqual(dlg.name_input.text(), "Ambient")
+        # Submit dialog
+        with patch("rekordbox_collection_manager.gui.create_tag_dialog.is_rekordbox_running", return_value=False):
+            dlg._on_submit()
+        self.assertIsNotNone(dlg.created_tag)
+        self.assertEqual(dlg.created_tag["name"], "Ambient")
+        dlg.close()
+
+    def test_tag_chips_container_custom_item_entered_signal(self):
+        container = TagChipsContainer()
+        container.set_available_tags(["Techno", "House"])
+
+        emitted_tags = []
+        container.tag_create_requested.connect(emitted_tags.append)
+
+        # Type custom tag that doesn't exist
+        container.input_edit.setText("Progressive")
+        container._on_input_return_pressed()
+
+        self.assertEqual(emitted_tags, ["Progressive"])
+        container.close()
+
+
 if __name__ == "__main__":
     unittest.main()
+

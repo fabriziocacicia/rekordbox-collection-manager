@@ -1803,6 +1803,35 @@ class TestTableChipInteractions(unittest.TestCase):
         self.assertEqual(received, [(0, "tags", "Techno")])
         self.assertFalse(editor.isVisible())
 
+    def test_table_chip_add_editor_tag_create_requested(self):
+        from PySide6.QtCore import QRect
+        from rekordbox_collection_manager.gui.track_table import TableChipAddEditor
+
+        editor = TableChipAddEditor(self.table.viewport())
+        target_rect = QRect(100, 5, 150, 24)
+
+        editor.show_at(
+            rect=target_rect,
+            category="tags",
+            row=0,
+            col=self.table._tags_col_idx,
+            existing_items=["Melodic"],
+            available_items=["Melodic", "Techno"],
+        )
+
+        created_signals = []
+        editor.tag_create_requested.connect(lambda r, tag: created_signals.append((r, tag)))
+
+        # 1. Test textChanged adds Create option to completer
+        editor.input_edit.setText("Afro Tech")
+        candidates = editor.completer_model.stringList()
+        self.assertIn('＋ Create "Afro Tech"...', candidates)
+
+        # 2. Test returnPressed on custom tag triggers tag_create_requested
+        editor._on_return_pressed()
+        self.assertEqual(created_signals, [(0, "Afro Tech")])
+        self.assertFalse(editor.isVisible())
+
     def test_double_click_on_empty_space_opens_editor(self):
         from PySide6.QtCore import QPoint, Qt
         from PySide6.QtGui import QMouseEvent
@@ -2023,6 +2052,54 @@ class TestTableChipInteractions(unittest.TestCase):
 
         self.table.sync_saved_track({"id": "trk_1", "tags": ["Techno"]})
         self.assertFalse(self.table.has_staged_changes())
+
+    def test_table_on_tag_create_requested_stages_and_emits_tag_created(self):
+        from unittest.mock import MagicMock
+        self.table.engine = MagicMock()
+
+        tag_created_signals = []
+        db_saved_signals = []
+        self.table.tag_created.connect(tag_created_signals.append)
+        self.table.db_saved.connect(db_saved_signals.append)
+
+        mock_dialog_instance = MagicMock()
+        mock_dialog_instance.exec.return_value = 1
+        mock_dialog_instance.created_tag = {"id": "105", "name": "Deep Tech", "category_name": "Genre"}
+
+        with patch("rekordbox_collection_manager.gui.track_table.is_rekordbox_running", return_value=False), \
+             patch("rekordbox_collection_manager.gui.track_table.CreateTagDialog", return_value=mock_dialog_instance):
+            self.table._on_tag_create_requested(0, "Deep Tech")
+
+        # Must emit tag_created but NOT db_saved (to prevent wiping staged edits prematurely)
+        self.assertEqual(tag_created_signals, ["Deep Tech"])
+        self.assertEqual(len(db_saved_signals), 0)
+
+        # Must be staged on row 0
+        self.assertTrue(self.table.has_staged_changes())
+        self.assertIn("Deep Tech", self.table.records[0]["tags"])
+
+    def test_tracks_view_new_tag_button_and_toolbar(self):
+        from rekordbox_collection_manager.gui.tracks_view import TracksView
+        from unittest.mock import MagicMock
+
+        view = TracksView()
+        self.assertTrue(hasattr(view, "btn_new_tag"))
+        self.assertEqual(view.btn_new_tag.text(), "🏷️ ＋ New Tag...")
+
+        mock_dialog = MagicMock()
+        mock_dialog.exec.return_value = 1
+        mock_dialog.created_tag = {"id": "106", "name": "Minimal", "category_name": "Genre"}
+
+        view.table.set_engine(MagicMock())
+        view.table.set_tracks([{"id": "t1", "title": "Track 1", "tags": []}])
+        view.table.selectRow(0)
+
+        with patch("rekordbox_collection_manager.gui.track_table.is_rekordbox_running", return_value=False), \
+             patch("rekordbox_collection_manager.gui.track_table.CreateTagDialog", return_value=mock_dialog):
+            view.btn_new_tag.click()
+
+        self.assertIn("Minimal", view.table.records[0]["tags"])
+        view.close()
 
 
 if __name__ == "__main__":
