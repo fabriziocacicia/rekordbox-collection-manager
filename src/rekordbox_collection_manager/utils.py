@@ -852,6 +852,11 @@ def is_aiff_track(track_dict_or_path: Any) -> bool:
     return False
 
 
+def is_replaceable_track(track_dict_or_path: Any) -> bool:
+    """Check if a track dictionary or file path represents a replaceable format (MP3 or AIFF)."""
+    return is_mp3_track(track_dict_or_path) or is_aiff_track(track_dict_or_path)
+
+
 def resolve_file_type(
     raw_file_type: Any,
     filename: Optional[str] = None,

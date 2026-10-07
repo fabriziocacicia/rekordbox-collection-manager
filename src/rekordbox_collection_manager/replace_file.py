@@ -1,8 +1,8 @@
 """Replace File Tool for Rekordbox Collection Manager.
 
-Enables upgrading collection MP3 tracks to AIFF while preserving 100% of
-history session entries, play counts, original "Date Added" (StockDate),
-cue points, playlists, and tags.
+Enables upgrading collection MP3 tracks to AIFF, or replacing AIFF tracks with AIFF,
+while preserving 100% of history session entries, play counts, original "Date Added"
+(StockDate), cue points, playlists, and tags.
 """
 
 import argparse
@@ -291,12 +291,17 @@ def replace_track_audio_file(
         old_file_name = old_track.get("FileNameL") or ""
         old_file_type = old_track.get("FileType")
 
-        # Enforce: Source track must be MP3
+        # Enforce: Source track must be MP3 or AIFF
         old_ext = os.path.splitext(old_file_name or old_file_path)[1].lower()
-        if old_file_type != 1 and old_ext != ".mp3":
+        if old_file_type not in (1, 12) and old_ext not in (".mp3", ".aiff", ".aif"):
             old_fmt = resolve_file_type(old_file_type, old_file_name, old_file_path)
             raise ValueError(
-                f"Only MP3 tracks can be replaced. The selected track is {old_fmt}."
+                f"Only MP3 and AIFF tracks can be replaced. The selected track is {old_fmt}."
+            )
+
+        if old_file_path and os.path.abspath(old_file_path) == resolved_new_path:
+            raise ValueError(
+                "The replacement audio file is identical to the current track's audio file path."
             )
 
         old_bitrate = old_track.get("BitRate")
@@ -489,11 +494,14 @@ def merge_imported_tracks(
         src_dict = dict(src)
         tgt_dict = dict(tgt)
 
-        # Enforce: Source must be MP3 and Target must be AIFF
+        if str(source_content_id) == str(target_content_id):
+            raise ValueError("Source and target track cannot be the same track.")
+
+        # Enforce: Source must be MP3 or AIFF, and Target must be AIFF
         src_ext = os.path.splitext(src_dict.get("FileNameL") or src_dict.get("FolderPath") or "")[1].lower()
-        if src_dict.get("FileType") != 1 and src_ext != ".mp3":
+        if src_dict.get("FileType") not in (1, 12) and src_ext not in (".mp3", ".aiff", ".aif"):
             src_fmt = resolve_file_type(src_dict.get("FileType"), src_dict.get("FileNameL"), src_dict.get("FolderPath"))
-            raise ValueError(f"Source track must be an MP3 file (selected track is {src_fmt}).")
+            raise ValueError(f"Source track must be an MP3 or AIFF file (selected track is {src_fmt}).")
 
         tgt_ext = os.path.splitext(tgt_dict.get("FileNameL") or tgt_dict.get("FolderPath") or "")[1].lower()
         if tgt_dict.get("FileType") != 12 and tgt_ext not in (".aiff", ".aif"):
@@ -643,10 +651,10 @@ def merge_imported_tracks(
 def main() -> None:
     """Command-line interface for the Replace File tool."""
     parser = argparse.ArgumentParser(
-        description="Rekordbox Collection Manager - Replace Audio File Tool (MP3 to AIFF)",
+        description="Rekordbox Collection Manager - Replace Audio File Tool (MP3/AIFF to AIFF)",
     )
     parser.add_argument("--db-path", dest="db_path_flag", help="Path to master.db")
-    parser.add_argument("--track-id", help="Content ID of MP3 track to replace")
+    parser.add_argument("--track-id", help="Content ID of MP3 or AIFF track to replace")
     parser.add_argument("--new-file", help="Path to replacement AIFF audio file (.aiff, .aif)")
     parser.add_argument(
         "--action",

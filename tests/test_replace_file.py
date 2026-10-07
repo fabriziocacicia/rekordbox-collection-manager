@@ -290,8 +290,8 @@ class TestReplaceFileBackend(unittest.TestCase):
             ).fetchone()
             self.assertEqual(src[0], 1)
 
-    def test_replace_track_rejects_non_mp3_source(self):
-        """Verify that replacing a non-MP3 track (e.g. WAV or FLAC) raises ValueError."""
+    def test_replace_track_rejects_unsupported_source(self):
+        """Verify that replacing a non-MP3 and non-AIFF track (e.g. WAV or FLAC) raises ValueError."""
         with self.engine.begin() as conn:
             conn.execute(
                 text("""
@@ -307,7 +307,99 @@ class TestReplaceFileBackend(unittest.TestCase):
 
         with self.assertRaises(ValueError) as ctx:
             replace_track_audio_file(self.engine, "track-wav", self.new_aiff_path)
-        self.assertIn("Only MP3 tracks can be replaced", str(ctx.exception))
+        self.assertIn("Only MP3 and AIFF tracks can be replaced", str(ctx.exception))
+
+    def test_replace_track_aiff_to_aiff_preserves_everything(self):
+        """Verify replacing an existing AIFF track with another AIFF preserves all metadata and relations."""
+        old_aiff_path = os.path.join(self.temp_dir, "OriginalSong.aiff")
+        with open(old_aiff_path, "wb") as f:
+            f.write(b"FORM" + b"\x00\x00\x04\x00" + b"AIFF" + b"\x00" * 1024)
+
+        updated_aiff_path = os.path.join(self.temp_dir, "RemasteredSong.aiff")
+        with open(updated_aiff_path, "wb") as f:
+            f.write(b"FORM" + b"\x00\x00\x08\x00" + b"AIFF" + b"\x00" * 2048)
+
+        with self.engine.begin() as conn:
+            conn.execute(
+                text("""
+                    INSERT INTO djmdContent (
+                        ID, FolderPath, FileNameL, FileNameS, Title, Length, BitRate, BitDepth,
+                        SampleRate, FileSize, FileType, DJPlayCount, StockDate, AnalysisDataPath,
+                        TrackInfoUpdated, rb_local_deleted, created_at, updated_at
+                    ) VALUES (
+                        'track-aiff-1', :folder_path, 'OriginalSong.aiff', '', 'Hi-Res Anthem',
+                        300, 1411, 16, 44100, 2048, 12, 25, '2023-06-01', '/PIONEER/ANLZ/OLD.DAT',
+                        '1', 0, '2023-06-01 10:00:00', '2023-06-01 10:00:00'
+                    );
+                """),
+                {"folder_path": old_aiff_path},
+            )
+
+            conn.execute(
+                text("""
+                    INSERT INTO djmdSongHistory (ID, HistoryID, ContentID, TrackNo)
+                    VALUES ('sh-aiff-1', 'hist-1', 'track-aiff-1', 1);
+                """)
+            )
+            conn.execute(
+                text("""
+                    INSERT INTO djmdCue (ID, ContentID, InMsec, Kind, Comment)
+                    VALUES ('cue-aiff-1', 'track-aiff-1', 12000, 1, 'Intro');
+                """)
+            )
+            conn.execute(
+                text("""
+                    INSERT INTO djmdSongPlaylist (ID, PlaylistID, ContentID, TrackNo)
+                    VALUES ('sp-aiff-1', 'pl-1', 'track-aiff-1', 1);
+                """)
+            )
+
+        res = replace_track_audio_file(
+            self.engine,
+            "track-aiff-1",
+            updated_aiff_path,
+            options={"old_file_action": "keep"},
+        )
+
+        self.assertTrue(res["success"])
+        self.assertEqual(res["content_id"], "track-aiff-1")
+        self.assertEqual(res["play_count"], 25)
+        self.assertEqual(res["stock_date"], "2023-06-01")
+        self.assertEqual(res["history_plays_preserved"], 1)
+        self.assertEqual(res["cues_preserved"], 1)
+        self.assertEqual(res["playlists_preserved"], 1)
+        self.assertEqual(res["new_file"]["format"], "AIFF")
+
+        with self.engine.connect() as conn:
+            row = conn.execute(
+                text("SELECT * FROM djmdContent WHERE ID = 'track-aiff-1';")
+            ).mappings().fetchone()
+            self.assertEqual(row["FolderPath"], updated_aiff_path)
+            self.assertEqual(row["FileNameL"], "RemasteredSong.aiff")
+            self.assertEqual(row["FileType"], 12)
+            self.assertEqual(row["DJPlayCount"], 25)
+            self.assertEqual(row["StockDate"], "2023-06-01")
+            self.assertEqual(row["AnalysisDataPath"], "")
+
+    def test_replace_track_rejects_identical_file(self):
+        """Verify that replacing a track with its own existing file path raises ValueError."""
+        with self.engine.begin() as conn:
+            conn.execute(
+                text("""
+                    INSERT INTO djmdContent (
+                        ID, FolderPath, FileNameL, FileNameS, Title, Length, BitRate, BitDepth,
+                        SampleRate, FileSize, FileType, DJPlayCount, StockDate, rb_local_deleted
+                    ) VALUES (
+                        'track-aiff-same', :folder_path, 'NewSong.aiff', '', 'Same Track',
+                        240, 1411, 16, 44100, 2048, 12, 5, '2024-01-01', 0
+                    );
+                """),
+                {"folder_path": self.new_aiff_path},
+            )
+
+        with self.assertRaises(ValueError) as ctx:
+            replace_track_audio_file(self.engine, "track-aiff-same", self.new_aiff_path)
+        self.assertIn("identical to the current track's audio file path", str(ctx.exception))
 
     def test_replace_track_rejects_non_aiff_replacement(self):
         """Verify that passing a non-AIFF replacement file raises ValueError."""
@@ -320,7 +412,7 @@ class TestReplaceFileBackend(unittest.TestCase):
         self.assertIn("Currently only AIFF files", str(ctx.exception))
 
     def test_merge_rejects_invalid_formats(self):
-        """Verify merge raises ValueError if source is not MP3 or target is not AIFF."""
+        """Verify merge raises ValueError if source is not MP3 or AIFF, or target is not AIFF."""
         with self.engine.begin() as conn:
             conn.execute(
                 text("""
@@ -337,10 +429,41 @@ class TestReplaceFileBackend(unittest.TestCase):
                 """)
             )
 
-        # Non-MP3 source
+        # Non-MP3 / Non-AIFF source
         with self.assertRaises(ValueError) as ctx:
             merge_imported_tracks(self.engine, "track-wav-src", "track-100")
-        self.assertIn("Source track must be an MP3 file", str(ctx.exception))
+        self.assertIn("Source track must be an MP3 or AIFF file", str(ctx.exception))
+
+    def test_merge_imported_tracks_aiff_to_aiff(self):
+        """Verify merging an existing AIFF track into a new AIFF track transfers metadata cleanly."""
+        with self.engine.begin() as conn:
+            conn.execute(
+                text("""
+                    INSERT INTO djmdContent (
+                        ID, FolderPath, FileNameL, FileNameS, Title, Length, BitRate, BitDepth,
+                        SampleRate, FileSize, FileType, DJPlayCount, StockDate, rb_local_deleted,
+                        created_at, updated_at
+                    ) VALUES (
+                        'track-aiff-src', '/path/to/old.aiff', 'old.aiff', '', 'AIFF Source',
+                        240, 1411, 16, 44100, 4096, 12, 18, '2023-01-10', 0,
+                        '2023-01-10 10:00:00', '2023-01-10 10:00:00'
+                    ), (
+                        'track-aiff-tgt', '/path/to/new.aiff', 'new.aiff', '', 'AIFF Target',
+                        240, 1411, 24, 48000, 8192, 12, 0, '2026-09-25', 0,
+                        '2026-09-25 10:00:00', '2026-09-25 10:00:00'
+                    );
+                """)
+            )
+
+        res = merge_imported_tracks(
+            self.engine,
+            source_content_id="track-aiff-src",
+            target_content_id="track-aiff-tgt",
+            options={"old_file_action": "keep"},
+        )
+        self.assertTrue(res["success"])
+        self.assertEqual(res["play_count_transferred"], 18)
+        self.assertEqual(res["stock_date_transferred"], "2023-01-10")
 
 
 class TestReplaceFileGUI(unittest.TestCase):
@@ -438,8 +561,8 @@ class TestReplaceFileGUI(unittest.TestCase):
         self.assertIn("Perfect Timing Match", self.view.duration_match_banner.text())
         self.assertTrue(self.view.btn_execute_replace.isEnabled())
 
-    def test_gui_preselect_rejects_non_mp3(self):
-        """Verify preselecting a non-MP3 track is rejected."""
+    def test_gui_preselect_rejects_unsupported_format(self):
+        """Verify preselecting an unsupported track (e.g. WAV) is rejected."""
         wav_track = {
             "id": "trk-wav",
             "title": "WAV Anthem",
@@ -451,6 +574,43 @@ class TestReplaceFileGUI(unittest.TestCase):
             self.view.preselect_track(wav_track)
             mock_warn.assert_called_once()
             self.assertIsNone(self.view.selected_track)
+
+    def test_gui_preselect_accepts_aiff(self):
+        """Verify preselecting an AIFF track successfully populates UI for AIFF to AIFF replacement."""
+        aiff_track = {
+            "id": "trk-aiff",
+            "content_id": "trk-aiff",
+            "title": "Lossless Master",
+            "artist": "Audiophile",
+            "file_type": "AIFF",
+            "bitrate": 1411,
+            "play_count": 14,
+            "date_added": "2024-08-01",
+            "duration_sec": 360,
+            "duration_str": "06:00",
+            "file_path": "/Music/Master.aiff",
+            "file_size": 60000000,
+        }
+        self.view.preselect_track(aiff_track)
+        self.assertEqual(self.view.mode1_track_title.text(), "Lossless Master")
+        self.assertEqual(self.view.mode1_track_artist.text(), "Audiophile")
+        self.assertIn("14 plays", self.view.mode1_plays_chip.text())
+        self.assertIn("AIFF", self.view.mode1_format_chip.text())
+        self.assertEqual(self.view.selected_track["id"], "trk-aiff")
+
+    def test_gui_rejects_identical_replacement_file(self):
+        """Verify selecting the same file as current track shows warning and does not proceed."""
+        sample_track = {
+            "id": "trk-aiff",
+            "title": "Master",
+            "file_type": "AIFF",
+            "file_path": "/Music/Same.aiff",
+        }
+        self.view.selected_track = sample_track
+        with patch("PySide6.QtWidgets.QMessageBox.warning") as mock_warn:
+            self.view._on_new_file_selected("/Music/Same.aiff")
+            mock_warn.assert_called_once()
+            self.assertIsNone(self.view.replacement_file_path)
 
 
 if __name__ == "__main__":

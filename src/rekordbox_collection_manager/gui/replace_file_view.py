@@ -75,6 +75,7 @@ from rekordbox_collection_manager.utils import (
     is_aiff_track,
     is_mp3_track,
     is_rekordbox_running,
+    is_replaceable_track,
     open_in_folder,
     resolve_artwork_path,
     reveal_in_file_manager,
@@ -238,12 +239,12 @@ class ReplaceFileView(QWidget):
         """Pre-populate a track for replacement (e.g. from Track Details or context menu)."""
         self.tab_group.button(0).setChecked(True)
         self.stacked_modes.setCurrentIndex(0)
-        if not is_mp3_track(track_dict):
-            fmt = track_dict.get("file_type") or "non-MP3"
+        if not is_replaceable_track(track_dict):
+            fmt = track_dict.get("file_type") or "non-MP3/AIFF"
             QMessageBox.warning(
                 self,
                 "Unsupported File Format",
-                f"Currently, Replace File only supports upgrading MP3 tracks to AIFF.\n\n"
+                f"Currently, Replace File supports MP3 and AIFF tracks.\n\n"
                 f"The selected track '{track_dict.get('title')}' is a {fmt} file.",
             )
             return
@@ -280,7 +281,7 @@ class ReplaceFileView(QWidget):
         title_col.addWidget(main_title)
 
         sub_title = QLabel(
-            "Upgrade collection tracks from MP3 to lossless AIFF while preserving 100% of "
+            "Upgrade MP3 tracks or replace AIFF tracks with lossless AIFF audio while preserving 100% of "
             "play counts, history sessions, original date added, cues, and playlists."
         )
         sub_title.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY}; font-size: 12px; border: none;")
@@ -325,7 +326,7 @@ class ReplaceFileView(QWidget):
         self.btn_mode_file.setCheckable(True)
         self.btn_mode_file.setChecked(True)
         self.btn_mode_file.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_mode_file.setToolTip("Pick an existing MP3 track and choose a new AIFF audio file on disk to replace it directly.")
+        self.btn_mode_file.setToolTip("Pick an existing MP3 or AIFF track and choose a new AIFF audio file on disk to replace it directly.")
         self.tab_group.addButton(self.btn_mode_file, 0)
         mode_btn_row.addWidget(self.btn_mode_file)
 
@@ -333,7 +334,7 @@ class ReplaceFileView(QWidget):
         self.btn_mode_merge.setStyleSheet(tab_btn_style)
         self.btn_mode_merge.setCheckable(True)
         self.btn_mode_merge.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_mode_merge.setToolTip("If you already imported the AIFF into Rekordbox, transfer history & plays from the old MP3 track into the new AIFF track.")
+        self.btn_mode_merge.setToolTip("If you already imported the AIFF into Rekordbox, transfer history & plays from the old MP3 or AIFF track into the new AIFF track.")
         self.tab_group.addButton(self.btn_mode_merge, 1)
         mode_btn_row.addWidget(self.btn_mode_merge)
 
@@ -380,7 +381,7 @@ class ReplaceFileView(QWidget):
         # ----------------------------------------------------------------------
         # Section 1: Choose Track to Replace
         # ----------------------------------------------------------------------
-        sec1_header = QLabel("1. SELECT MP3 TRACK IN COLLECTION TO REPLACE")
+        sec1_header = QLabel("1. SELECT TRACK IN COLLECTION TO REPLACE (MP3 OR AIFF)")
         sec1_header.setStyleSheet(
             f"color: {COLOR_TEXT_MUTED}; font-size: 11px; font-weight: 700; letter-spacing: 0.8px;"
         )
@@ -391,7 +392,7 @@ class ReplaceFileView(QWidget):
         search_box.setSpacing(10)
 
         self.mode1_search_input = QLineEdit()
-        self.mode1_search_input.setPlaceholderText("🔍 Search MP3 track by title, artist, or filename to replace...")
+        self.mode1_search_input.setPlaceholderText("🔍 Search MP3 or AIFF track by title, artist, or filename to replace...")
         self.mode1_search_input.setClearButtonEnabled(True)
         self.mode1_search_input.textChanged.connect(lambda: self.mode1_search_timer.start())
         search_box.addWidget(self.mode1_search_input, stretch=1)
@@ -441,7 +442,7 @@ class ReplaceFileView(QWidget):
         self.mode1_track_title.setStyleSheet(f"color: {COLOR_TEXT_PRIMARY}; font-size: 14px; font-weight: bold;")
         track_meta_col.addWidget(self.mode1_track_title)
 
-        self.mode1_track_artist = QLabel("Select an MP3 track from search results above")
+        self.mode1_track_artist = QLabel("Select an MP3 or AIFF track from search results above")
         self.mode1_track_artist.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY}; font-size: 12px;")
         track_meta_col.addWidget(self.mode1_track_artist)
 
@@ -494,7 +495,7 @@ class ReplaceFileView(QWidget):
         diff_layout.setContentsMargins(14, 12, 14, 12)
         diff_layout.setSpacing(10)
 
-        diff_title = QLabel("Comparison & Audio Upgrade Details")
+        diff_title = QLabel("Comparison & Audio Replacement Details")
         diff_title.setStyleSheet(f"color: {COLOR_BLUE}; font-size: 13px; font-weight: bold;")
         diff_layout.addWidget(diff_title)
 
@@ -662,7 +663,7 @@ class ReplaceFileView(QWidget):
         desc = QLabel(
             "Use this mode if you have already dragged the new AIFF track into Rekordbox, resulting in "
             "a duplicate track. This tool transfers all history plays, play count, and date added "
-            "from the old track to the new track, and soft-deletes the old duplicate."
+            "from the old track (MP3 or AIFF) to the new AIFF track, and soft-deletes the old duplicate."
         )
         desc.setWordWrap(True)
         desc.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY}; font-size: 12px;")
@@ -674,12 +675,12 @@ class ReplaceFileView(QWidget):
         # Left: Source Old Track
         left_box = QVBoxLayout()
         left_box.setSpacing(8)
-        left_title = QLabel("1. SOURCE TRACK (Old MP3 with History & Plays)")
+        left_title = QLabel("1. SOURCE TRACK (Old MP3 or AIFF with History & Plays)")
         left_title.setStyleSheet(f"color: {COLOR_AMBER}; font-size: 11px; font-weight: bold;")
         left_box.addWidget(left_title)
 
         self.merge_src_input = QLineEdit()
-        self.merge_src_input.setPlaceholderText("Search source track...")
+        self.merge_src_input.setPlaceholderText("Search source track (MP3 or AIFF)...")
         self.merge_src_input.textChanged.connect(lambda: self.merge_src_search_timer.start())
         left_box.addWidget(self.merge_src_input)
 
@@ -814,15 +815,15 @@ class ReplaceFileView(QWidget):
     def _on_mode1_search_success(self, query: str, records: List[Dict[str, Any]]) -> None:
         self.mode1_search_btn.setEnabled(True)
         self.mode1_results_table.setRowCount(0)
-        mp3_records = [r for r in records if is_mp3_track(r)]
-        if records and not mp3_records:
+        matching_records = [r for r in records if is_replaceable_track(r)]
+        if records and not matching_records:
             self.mode1_status_label.setText(
-                f"ℹ️ Found {len(records)} track(s) matching '{query}', but none are MP3 format. (Currently only MP3 tracks can be replaced)."
+                f"ℹ️ Found {len(records)} track(s) matching '{query}', but none are MP3 or AIFF format. (Currently only MP3 and AIFF tracks can be replaced)."
             )
         else:
             self.mode1_status_label.setText("")
 
-        for row_idx, r in enumerate(mp3_records):
+        for row_idx, r in enumerate(matching_records):
             self.mode1_results_table.insertRow(row_idx)
 
             t_item = QTableWidgetItem(r.get("title") or "")
@@ -846,12 +847,12 @@ class ReplaceFileView(QWidget):
                     self._on_track_selected_mode1(track_data)
 
     def _on_track_selected_mode1(self, track: Dict[str, Any]) -> None:
-        if not is_mp3_track(track):
-            fmt = track.get("file_type") or "non-MP3"
+        if not is_replaceable_track(track):
+            fmt = track.get("file_type") or "non-MP3/AIFF"
             QMessageBox.warning(
                 self,
                 "Unsupported Track Format",
-                f"Currently, Replace File only supports upgrading MP3 tracks to AIFF.\n\n"
+                f"Currently, Replace File supports MP3 and AIFF tracks.\n\n"
                 f"The selected track '{track.get('title')}' is a {fmt} file.",
             )
             return
@@ -865,8 +866,23 @@ class ReplaceFileView(QWidget):
         br = track.get("bitrate")
         br_str = f" · {br} kbps" if br else ""
         self.mode1_format_chip.setText(f"{ft}{br_str}")
+        if is_aiff_track(track):
+            self.mode1_format_chip.setStyleSheet(f"background-color: {COLOR_BLUE_BG}; color: {COLOR_BLUE}; border: 1px solid {COLOR_BLUE}; border-radius: 4px; padding: 2px 8px; font-size: 11px; font-weight: bold;")
+        else:
+            self.mode1_format_chip.setStyleSheet(f"background-color: {COLOR_AMBER_BG}; color: {COLOR_AMBER}; border: 1px solid {COLOR_AMBER_BORDER}; border-radius: 4px; padding: 2px 8px; font-size: 11px; font-weight: bold;")
         self.mode1_plays_chip.setText(f"{track.get('play_count', 0)} plays")
         self.mode1_added_chip.setText(f"Added: {track.get('date_added') or '—'}")
+
+        # Check if already chosen replacement file is identical to this track
+        if self.replacement_file_path and track.get("file_path"):
+            if os.path.abspath(self.replacement_file_path) == os.path.abspath(track.get("file_path") or ""):
+                self.replacement_file_path = None
+                self.replacement_specs = None
+                self.new_specs_label.setText("⚠️ Replacement file was the same as the selected track. Please choose a new AIFF file.")
+                self.duration_match_banner.setText("Waiting for replacement file...")
+                self.duration_match_banner.setStyleSheet(
+                    f"background-color: {COLOR_BG_DARK}; border: 1px solid {COLOR_BORDER}; border-radius: 6px; padding: 8px 12px; font-size: 12px; color: {COLOR_TEXT_SECONDARY};"
+                )
 
         # Artwork
         img_p = resolve_artwork_path(track.get("image_path"), db_path=self.db_path)
@@ -904,6 +920,16 @@ class ReplaceFileView(QWidget):
                 f"The selected file has format '{ext.upper()}'. Please select an AIFF file.",
             )
             return
+
+        if self.selected_track and self.selected_track.get("file_path"):
+            if os.path.abspath(path) == os.path.abspath(self.selected_track["file_path"]):
+                QMessageBox.warning(
+                    self,
+                    "Identical File Selected",
+                    "The selected replacement file is identical to the current track's audio file.\n\n"
+                    "Please choose a different AIFF audio file to replace it.",
+                )
+                return
 
         self.replacement_file_path = path
         self.new_specs_label.setText(f"Inspecting audio file: {os.path.basename(path)}...")
@@ -977,11 +1003,16 @@ class ReplaceFileView(QWidget):
         self._check_mode1_ready()
 
     def _check_mode1_ready(self) -> None:
+        is_same_file = False
+        if self.selected_track and self.replacement_file_path and self.selected_track.get("file_path"):
+            is_same_file = os.path.abspath(self.replacement_file_path) == os.path.abspath(self.selected_track["file_path"])
+
         can_execute = (
             self.engine is not None
             and self.selected_track is not None
-            and is_mp3_track(self.selected_track)
+            and is_replaceable_track(self.selected_track)
             and self.replacement_file_path is not None
+            and not is_same_file
             and self.replacement_specs is not None
             and (self.replacement_specs.get("file_type") == 12 or self.replacement_specs.get("extension") in ("aiff", "aif"))
         )
@@ -1003,11 +1034,13 @@ class ReplaceFileView(QWidget):
         # Confirm replacement dialog
         action_text = self.old_file_combo.currentText()
         title = self.selected_track.get("title") or "Untitled"
+        is_mp3 = is_mp3_track(self.selected_track)
+        transition_mode = "Upgrade: MP3 ➔ AIFF" if is_mp3 else "Replace: AIFF ➔ AIFF"
 
         msg = (
             f"Are you sure you want to replace the audio file for:\n\n"
             f"🎵 {title}\n\n"
-            f"• Upgrade: MP3 ➔ AIFF\n"
+            f"• Action: {transition_mode}\n"
             f"• Play count preserved: {self.selected_track.get('play_count', 0)} plays\n"
             f"• Original Date Added preserved: {self.selected_track.get('date_added')}\n"
             f"• History sessions preserved: 100% intact\n"
@@ -1089,7 +1122,7 @@ class ReplaceFileView(QWidget):
         worker = TrackSearchWorker(self.engine, query, limit=30, parent=self)
         worker.success.connect(
             lambda _, recs: self._populate_merge_table(
-                self.merge_src_table, [r for r in recs if is_mp3_track(r)]
+                self.merge_src_table, [r for r in recs if is_replaceable_track(r)]
             )
         )
         worker.start()
@@ -1124,9 +1157,9 @@ class ReplaceFileView(QWidget):
         if sel:
             track = sel[0].data(Qt.ItemDataRole.UserRole)
             if track:
-                if not is_mp3_track(track):
+                if not is_replaceable_track(track):
                     self.merge_source_track = None
-                    self.merge_src_summary.setText("<span style='color:#ff5252;'>Selected source track must be an MP3 file.</span>")
+                    self.merge_src_summary.setText("<span style='color:#ff5252;'>Selected source track must be an MP3 or AIFF file.</span>")
                 else:
                     self.merge_source_track = track
                     self.merge_src_summary.setText(
@@ -1155,10 +1188,10 @@ class ReplaceFileView(QWidget):
         can_merge = (
             self.engine is not None
             and self.merge_source_track is not None
-            and is_mp3_track(self.merge_source_track)
+            and is_replaceable_track(self.merge_source_track)
             and self.merge_target_track is not None
             and is_aiff_track(self.merge_target_track)
-            and self.merge_source_track.get("id") != self.merge_target_track.get("id")
+            and str(self.merge_source_track.get("id")) != str(self.merge_target_track.get("id"))
         )
         self.btn_execute_merge.setEnabled(can_merge)
 
@@ -1178,13 +1211,14 @@ class ReplaceFileView(QWidget):
         tgt_title = self.merge_target_track.get("title") or "Untitled"
         src_plays = self.merge_source_track.get("play_count", 0)
         src_added = self.merge_source_track.get("date_added", "—")
+        src_fmt = "MP3" if is_mp3_track(self.merge_source_track) else "AIFF"
 
         msg = (
             f"Merge and transfer all collection metadata from:\n\n"
-            f"Old MP3 Track: {src_title} ({src_plays} plays, Added: {src_added})\n"
+            f"Old {src_fmt} Track: {src_title} ({src_plays} plays, Added: {src_added})\n"
             f"➔ Into Target AIFF Track: {tgt_title}\n\n"
             "This will transfer all history plays, play count, original date added, playlists, and cues, "
-            "and soft-delete the old MP3 duplicate track.\n\n"
+            "and soft-delete the old duplicate track.\n\n"
             "Proceed with replacement?"
         )
         reply = QMessageBox.question(

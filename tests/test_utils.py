@@ -25,6 +25,7 @@ from rekordbox_collection_manager.utils import (
     is_aiff_track,
     is_mp3_track,
     is_rekordbox_running,
+    is_replaceable_track,
     is_streaming_track,
     natural_sort_key,
     normalize_date_input,
@@ -409,6 +410,14 @@ class TestUtils(unittest.TestCase):
         self.assertTrue(is_aiff_track({"file_type": "AIFF"}))
         self.assertTrue(is_aiff_track({"raw_file_type": 12}))
         self.assertFalse(is_aiff_track("test.wav"))
+
+        # is_replaceable_track (MP3 and AIFF)
+        self.assertTrue(is_replaceable_track("test.mp3"))
+        self.assertTrue(is_replaceable_track("test.aiff"))
+        self.assertTrue(is_replaceable_track({"file_type": "MP3"}))
+        self.assertTrue(is_replaceable_track({"file_type": "AIFF"}))
+        self.assertFalse(is_replaceable_track("test.wav"))
+        self.assertFalse(is_replaceable_track({"file_type": "FLAC"}))
 
     def test_build_track_record(self):
         row = {

@@ -594,16 +594,26 @@ class TestTrackDetailViewIntegration(unittest.TestCase):
         self.assertEqual(len(back_emitted), 1)
 
     def test_replace_btn_visibility_mp3_only(self):
-        """Verify replace_btn is only visible for MP3 tracks and hidden for other file types."""
+        """Verify replace_btn is visible for MP3 and AIFF tracks and hidden for other file types."""
         flac_track = dict(self.sample_tracks[0])
+        flac_track["file_type"] = "FLAC"
+        flac_track["file_path"] = "/Music/solaris.flac"
+        flac_track["file_name"] = "solaris.flac"
+
         mp3_track = dict(self.sample_tracks[0])
         mp3_track["file_type"] = "MP3"
         mp3_track["file_path"] = "/Music/solaris.mp3"
+        mp3_track["file_name"] = "solaris.mp3"
+
+        aiff_track = dict(self.sample_tracks[0])
+        aiff_track["file_type"] = "AIFF"
+        aiff_track["file_path"] = "/Music/solaris.aiff"
+        aiff_track["file_name"] = "solaris.aiff"
 
         view = TrackDetailView(
             engine=self.engine,
             track_data=flac_track,
-            tracks_list=[flac_track, mp3_track],
+            tracks_list=[flac_track, mp3_track, aiff_track],
             current_index=0,
         )
         self.assertTrue(view.replace_btn.isHidden())
@@ -612,8 +622,19 @@ class TestTrackDetailViewIntegration(unittest.TestCase):
         view._on_next_track()
         self.assertFalse(view.replace_btn.isHidden())
         self.assertTrue(view.replace_btn.isEnabled())
+        self.assertIn("MP3 ➔ AIFF", view.replace_btn.text())
 
-        # Back to previous track (FLAC)
+        # Advance to next track (AIFF)
+        view._on_next_track()
+        self.assertFalse(view.replace_btn.isHidden())
+        self.assertTrue(view.replace_btn.isEnabled())
+        self.assertIn("AIFF ➔ AIFF", view.replace_btn.text())
+
+        # Back to previous track (MP3)
+        view._on_prev_track()
+        self.assertFalse(view.replace_btn.isHidden())
+
+        # Back to FLAC
         view._on_prev_track()
         self.assertTrue(view.replace_btn.isHidden())
 

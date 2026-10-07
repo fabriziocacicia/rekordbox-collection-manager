@@ -88,6 +88,8 @@ from rekordbox_collection_manager.gui.theme import (
     COLOR_TEXT_SECONDARY,
 )
 from rekordbox_collection_manager.utils import (
+    is_aiff_track,
+    is_mp3_track,
     is_rekordbox_running,
     open_in_folder,
     reveal_in_file_manager,
@@ -2606,15 +2608,12 @@ class TracksTableWidget(QTableView):
         menu = QMenu(self)
         act_details = menu.addAction("ℹ️ View Track Details...")
 
-        is_mp3 = (
-            str(track.get("file_type", "")).upper() == "MP3"
-            or str(track.get("file_name", "")).lower().endswith(".mp3")
-            or str(file_path).lower().endswith(".mp3")
-        )
-        if is_mp3:
+        if is_mp3_track(track) or str(file_path).lower().endswith(".mp3"):
             act_replace = menu.addAction("🔄 Upgrade MP3 to AIFF...")
+        elif is_aiff_track(track) or str(file_path).lower().endswith((".aiff", ".aif")):
+            act_replace = menu.addAction("🔄 Replace AIFF Audio File...")
         else:
-            act_replace = menu.addAction("🔄 Upgrade to AIFF (MP3 only)")
+            act_replace = menu.addAction("🔄 Replace Audio File (MP3 / AIFF only)")
             act_replace.setEnabled(False)
 
         playlists = track.get("playlists") or []

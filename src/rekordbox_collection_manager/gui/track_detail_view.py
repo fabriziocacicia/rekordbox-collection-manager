@@ -92,6 +92,8 @@ from rekordbox_collection_manager.gui.workers import TrackDetailWorker, stop_wor
 from rekordbox_collection_manager.utils import (
     format_file_size,
     format_rating_stars,
+    is_aiff_track,
+    is_mp3_track,
     is_rekordbox_running,
     open_in_folder,
     parse_history_name,
@@ -196,9 +198,9 @@ class TrackDetailView(QWidget):
         self.next_btn.clicked.connect(self._on_next_track)
         top_bar.addWidget(self.next_btn)
 
-        self.replace_btn = QPushButton("🔄 Replace File (MP3 ➔ AIFF)...")
+        self.replace_btn = QPushButton("🔄 Replace File...")
         self.replace_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.replace_btn.setToolTip("Upgrade this MP3 track to AIFF while preserving plays, date added, cues, and history")
+        self.replace_btn.setToolTip("Replace or upgrade audio file while preserving plays, date added, cues, and history")
         self.replace_btn.clicked.connect(lambda: self.replace_file_requested.emit(self.track))
         self.replace_btn.setVisible(False)
         top_bar.addWidget(self.replace_btn)
@@ -786,17 +788,17 @@ class TrackDetailView(QWidget):
             self.prev_btn.setEnabled(False)
             self.next_btn.setEnabled(False)
 
-        # Replace File Button (MP3 to AIFF only - visible only for MP3 tracks)
-        is_mp3 = (
-            str(file_type).upper() == "MP3"
-            or str(t.get("file_name", "")).lower().endswith(".mp3")
-            or str(fp).lower().endswith(".mp3")
-        )
-        if is_mp3:
+        # Replace File Button (visible for MP3 and AIFF tracks)
+        if is_mp3_track(t) or str(fp).lower().endswith(".mp3"):
             self.replace_btn.setVisible(True)
             self.replace_btn.setEnabled(True)
             self.replace_btn.setText("🔄 Replace File (MP3 ➔ AIFF)...")
             self.replace_btn.setToolTip("Upgrade this MP3 track to AIFF while preserving plays, date added, cues, and history")
+        elif is_aiff_track(t) or str(fp).lower().endswith((".aiff", ".aif")):
+            self.replace_btn.setVisible(True)
+            self.replace_btn.setEnabled(True)
+            self.replace_btn.setText("🔄 Replace File (AIFF ➔ AIFF)...")
+            self.replace_btn.setToolTip("Replace this AIFF audio file with another AIFF while preserving plays, date added, cues, and history")
         else:
             self.replace_btn.setVisible(False)
 
