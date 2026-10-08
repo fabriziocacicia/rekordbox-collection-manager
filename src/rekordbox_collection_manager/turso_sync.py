@@ -897,6 +897,52 @@ def apply_changelog_events(engine: Engine, client: TursoHttpClient) -> int:
                         },
                     )
 
+                elif action == "DELETE_PLAYLIST":
+                    playlist_id = payload.get("playlist_id")
+                    if not playlist_id:
+                        raise ValueError("Missing 'playlist_id'")
+                    conn.exec_driver_sql(
+                        """
+                        UPDATE djmdPlaylist
+                        SET rb_local_deleted = 1, updated_at = :now
+                        WHERE ID = :id;
+                        """,
+                        {"id": str(playlist_id), "now": now_str},
+                    )
+                    if "djmdSongPlaylist" in existing_tables:
+                        conn.exec_driver_sql(
+                            """
+                            UPDATE djmdSongPlaylist
+                            SET rb_local_deleted = 1, updated_at = :now
+                            WHERE PlaylistID = :id;
+                            """,
+                            {"id": str(playlist_id), "now": now_str},
+                        )
+
+                elif action == "DELETE_TAG":
+                    tag_id = payload.get("tag_id")
+                    if not tag_id:
+                        raise ValueError("Missing 'tag_id'")
+                    matching_ids = _resolve_tag_matching_ids(str(tag_id)) or [str(tag_id)]
+                    for mid in matching_ids:
+                        conn.exec_driver_sql(
+                            """
+                            UPDATE djmdMyTag
+                            SET rb_local_deleted = 1, updated_at = :now
+                            WHERE ID = :id;
+                            """,
+                            {"id": mid, "now": now_str},
+                        )
+                        if "djmdSongMyTag" in existing_tables:
+                            conn.exec_driver_sql(
+                                """
+                                UPDATE djmdSongMyTag
+                                SET rb_local_deleted = 1, updated_at = :now
+                                WHERE MyTagID = :id;
+                                """,
+                                {"id": mid, "now": now_str},
+                            )
+
                 elif action == "SET_TRACK_TAGS":
                     track_id = payload.get("track_id")
                     tag_ids = list(dict.fromkeys(payload.get("tag_ids", [])))

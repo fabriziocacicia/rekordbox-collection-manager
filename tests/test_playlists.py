@@ -2,8 +2,8 @@
 
 import unittest
 from unittest.mock import patch
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QPoint, Qt
+from PySide6.QtWidgets import QApplication, QMenu
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
@@ -14,6 +14,7 @@ from rekordbox_collection_manager.gui.playlists_view import PlaylistsView
 from rekordbox_collection_manager.gui.track_table import TrackColumn, TrackTableConfig, TracksTableWidget
 from rekordbox_collection_manager.playlists import (
     create_playlist,
+    delete_playlist,
     fetch_playlist_folders,
     fetch_playlist_tracks,
     fetch_playlists_tree,
@@ -184,6 +185,41 @@ class TestPlaylistsBackend(unittest.TestCase):
         # Should convert negative 32-bit int to unsigned 2323633077
         self.assertIn("2323633077", params.values())
         self.assertIn("-1971334219", params.values())
+
+    def test_delete_playlist_empty_success(self):
+        res = create_playlist(self.engine, "Brand New Empty PL")
+        pl_id = res["id"]
+        ok = delete_playlist(self.engine, pl_id)
+        self.assertTrue(ok)
+        from sqlalchemy import text
+        with self.engine.connect() as conn:
+            del_val = conn.execute(
+                text("SELECT rb_local_deleted FROM djmdPlaylist WHERE ID = :pid;"),
+                {"pid": pl_id},
+            ).scalar()
+            self.assertEqual(del_val, 1)
+
+    def test_delete_playlist_non_empty_raises(self):
+        # pl_velvet has 1 track in setUp
+        with self.assertRaises(ValueError) as ctx:
+            delete_playlist(self.engine, "pl_velvet")
+        self.assertIn("not empty", str(ctx.exception).lower())
+
+    def test_delete_folder_empty_success(self):
+        res = create_playlist(self.engine, "Empty House Folder", is_folder=True)
+        fld_id = res["id"]
+        ok = delete_playlist(self.engine, fld_id)
+        self.assertTrue(ok)
+
+    def test_delete_folder_non_empty_raises(self):
+        # fld_house contains pl_afro in setUp
+        with self.assertRaises(ValueError) as ctx:
+            delete_playlist(self.engine, "fld_house")
+        self.assertIn("not empty", str(ctx.exception).lower())
+
+    def test_delete_playlist_not_found_raises(self):
+        with self.assertRaises(ValueError):
+            delete_playlist(self.engine, "invalid_id_999999")
 
 
 class TestPlaylistsGUI(unittest.TestCase):
@@ -586,6 +622,103 @@ class TestCreatePlaylist(unittest.TestCase):
                 view.btn_new_playlist.click()
 
             self.assertTrue(any("Created playlist 'Live Set'" in s for s in status_emitted))
+        finally:
+            view.cleanup()
+            view.close()
+
+    def test_playlists_view_context_menu_delete_enabled_for_empty(self):
+        view = PlaylistsView()
+        try:
+            view.engine = self.engine
+            tree_data = [
+                {
+                    "id": "pl_empty",
+                    "name": "Empty PL",
+                    "seq": 1,
+                    "attribute": 0,
+                    "parent_id": None,
+                    "track_count": 0,
+                    "children": [],
+                },
+                {
+                    "id": "pl_full",
+                    "name": "Full PL",
+                    "seq": 2,
+                    "attribute": 0,
+                    "parent_id": None,
+                    "track_count": 5,
+                    "children": [],
+                },
+            ]
+            view.playlists_tree_data = tree_data
+            view._on_tree_loaded(tree_data)
+
+            empty_item = None
+            full_item = None
+            for i in range(view.tree.topLevelItemCount()):
+                item = view.tree.topLevelItem(i)
+                node = item.data(0, Qt.ItemDataRole.UserRole)
+                if node and node["id"] == "pl_empty":
+                    empty_item = item
+                elif node and node["id"] == "pl_full":
+                    full_item = item
+
+            self.assertIsNotNone(empty_item)
+            self.assertIsNotNone(full_item)
+
+            created_menus = []
+            RealQMenu = QMenu
+            class SpyMenu(RealQMenu):
+                def __init__(self, *args, **kwargs):
+                    super().__init__(*args, **kwargs)
+                    created_menus.append(self)
+                def exec(self, *args, **kwargs):
+                    return None
+                def exec_(self, *args, **kwargs):
+                    return None
+
+            with patch.object(view.tree, "itemAt", return_value=empty_item), \
+                 patch("rekordbox_collection_manager.gui.playlists_view.QMenu", SpyMenu):
+                view._on_tree_context_menu(QPoint(10, 10))
+
+            self.assertTrue(len(created_menus) > 0)
+            empty_menu = created_menus[-1]
+            del_actions = [a for a in empty_menu.actions() if "Delete Playlist" in a.text()]
+            self.assertEqual(len(del_actions), 1)
+            self.assertTrue(del_actions[0].isEnabled())
+
+            # Test non-empty playlist context menu -> Delete action is DISABLED (grayed out)
+            with patch.object(view.tree, "itemAt", return_value=full_item), \
+                 patch("rekordbox_collection_manager.gui.playlists_view.QMenu", SpyMenu):
+                view._on_tree_context_menu(QPoint(10, 10))
+
+            full_menu = created_menus[-1]
+            del_full_actions = [a for a in full_menu.actions() if "Delete Playlist" in a.text()]
+            self.assertEqual(len(del_full_actions), 1)
+            self.assertFalse(del_full_actions[0].isEnabled())
+        finally:
+            view.cleanup()
+            view.close()
+
+    def test_playlists_view_delete_item_success(self):
+        view = PlaylistsView()
+        try:
+            view.engine = self.engine
+            res = create_playlist(self.engine, "To Delete PL")
+            pl_id = res["id"]
+
+            db_saved_emitted = []
+            status_emitted = []
+            view.db_saved.connect(lambda: db_saved_emitted.append(True))
+            view.notify_status.connect(status_emitted.append)
+
+            from PySide6.QtWidgets import QMessageBox
+            with patch("rekordbox_collection_manager.gui.playlists_view.is_rekordbox_running", return_value=False), \
+                 patch("PySide6.QtWidgets.QMessageBox.question", return_value=QMessageBox.StandardButton.Yes):
+                view._delete_playlist_item(pl_id, "To Delete PL", "playlist")
+
+            self.assertTrue(len(db_saved_emitted) > 0)
+            self.assertTrue(any("Deleted playlist 'To Delete PL'" in s for s in status_emitted))
         finally:
             view.cleanup()
             view.close()

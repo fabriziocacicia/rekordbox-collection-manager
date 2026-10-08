@@ -835,3 +835,141 @@ def create_tag(
             "reactivated": False,
         }
 
+
+def delete_tag(engine: Engine, tag_id: str) -> bool:
+    """Soft-delete an empty MyTag or category in the Rekordbox database.
+
+    Only empty tags (0 tracks) or empty categories (0 tags) can be deleted.
+
+    Args:
+        engine: SQLAlchemy Engine connected to Rekordbox SQLite database.
+        tag_id: ID of the MyTag or category to delete.
+
+    Returns:
+        bool: True if deletion was successful.
+
+    Raises:
+        ValueError: If tag is not found or is not empty.
+    """
+    now_utc = get_rekordbox_timestamp()
+    with engine.begin() as conn:
+        existing_tables = {
+            r[0]
+            for r in conn.exec_driver_sql(
+                "SELECT name FROM sqlite_master WHERE type='table';"
+            ).fetchall()
+        }
+        if "djmdMyTag" not in existing_tables:
+            raise ValueError("Table djmdMyTag not found in database.")
+
+        tag_cols = {
+            r[1]
+            for r in conn.exec_driver_sql("PRAGMA table_info(djmdMyTag);").fetchall()
+        }
+
+        # 1. Fetch tag record (handling signed/unsigned tag IDs)
+        matching_ids = _resolve_tag_matching_ids(str(tag_id)) or [str(tag_id)]
+        m_placeholders = ", ".join(f":mid_{i}" for i in range(len(matching_ids)))
+        m_params = {f"mid_{i}": mid for i, mid in enumerate(matching_ids)}
+
+        check_cols = ["ID", "Name", "Attribute"]
+        if "ParentID" in tag_cols:
+            check_cols.append("ParentID")
+        if "rb_local_deleted" in tag_cols:
+            check_cols.append("rb_local_deleted")
+
+        tag_row = conn.execute(
+            text(f"SELECT {', '.join(check_cols)} FROM djmdMyTag WHERE ID IN ({m_placeholders}) LIMIT 1;"),
+            m_params,
+        ).mappings().fetchone()
+
+        if not tag_row:
+            raise ValueError(f"Tag with ID '{tag_id}' not found.")
+
+        if "rb_local_deleted" in tag_cols and tag_row.get("rb_local_deleted") == 1:
+            return True
+
+        name = tag_row.get("Name") or "Untitled"
+        attr = int(tag_row.get("Attribute") or 0)
+        parent_id = str(tag_row.get("ParentID") or "")
+        is_category = (attr == 1 or parent_id in ("root", ""))
+
+        # 2. Check if empty
+        if is_category:
+            cat_del = (
+                "AND (rb_local_deleted = 0 OR rb_local_deleted IS NULL)"
+                if "rb_local_deleted" in tag_cols
+                else ""
+            )
+            cat_params = {f"c_id_{i}": mid for i, mid in enumerate(matching_ids)}
+            cat_holders = ", ".join(f":c_id_{i}" for i in range(len(matching_ids)))
+            child_cnt = conn.execute(
+                text(f"SELECT COUNT(*) FROM djmdMyTag WHERE ParentID IN ({cat_holders}) {cat_del};"),
+                cat_params,
+            ).scalar() or 0
+            if child_cnt > 0:
+                raise ValueError(
+                    f"Category '{name}' is not empty ({child_cnt} tag(s)). Only empty categories can be deleted."
+                )
+        else:
+            if "djmdSongMyTag" in existing_tables:
+                smt_cols = {
+                    r[1]
+                    for r in conn.exec_driver_sql("PRAGMA table_info(djmdSongMyTag);").fetchall()
+                }
+                smt_del = (
+                    "AND (rb_local_deleted = 0 OR rb_local_deleted IS NULL)"
+                    if "rb_local_deleted" in smt_cols
+                    else ""
+                )
+                track_cnt = conn.execute(
+                    text(f"SELECT COUNT(*) FROM djmdSongMyTag WHERE MyTagID IN ({m_placeholders}) {smt_del};"),
+                    m_params,
+                ).scalar() or 0
+                if track_cnt > 0:
+                    raise ValueError(
+                        f"Tag '{name}' is not empty ({track_cnt} track(s)). Only empty tags can be deleted."
+                    )
+
+        # 3. Perform soft delete or hard delete
+        if "rb_local_deleted" in tag_cols:
+            update_fields = ["rb_local_deleted = 1"]
+            params = dict(m_params)
+            if "updated_at" in tag_cols:
+                update_fields.append("updated_at = :now")
+                params["now"] = now_utc
+            if "rb_local_data_status" in tag_cols:
+                update_fields.append("rb_local_data_status = 1")
+            if "rb_data_status" in tag_cols:
+                update_fields.append("rb_data_status = 2")
+            if "rb_local_synced" in tag_cols:
+                update_fields.append("rb_local_synced = 1")
+
+            conn.execute(
+                text(f"UPDATE djmdMyTag SET {', '.join(update_fields)} WHERE ID IN ({m_placeholders});"),
+                params,
+            )
+            if "djmdSongMyTag" in existing_tables:
+                smt_cols = {
+                    r[1]
+                    for r in conn.exec_driver_sql("PRAGMA table_info(djmdSongMyTag);").fetchall()
+                }
+                if "rb_local_deleted" in smt_cols:
+                    smt_updates = ["rb_local_deleted = 1"]
+                    if "updated_at" in smt_cols:
+                        smt_updates.append("updated_at = :now")
+                    if "rb_local_data_status" in smt_cols:
+                        smt_updates.append("rb_local_data_status = 1")
+                    if "rb_data_status" in smt_cols:
+                        smt_updates.append("rb_data_status = 2")
+                    conn.execute(
+                        text(f"UPDATE djmdSongMyTag SET {', '.join(smt_updates)} WHERE MyTagID IN ({m_placeholders});"),
+                        {**m_params, "now": now_utc},
+                    )
+        else:
+            conn.execute(text(f"DELETE FROM djmdMyTag WHERE ID IN ({m_placeholders});"), m_params)
+            if "djmdSongMyTag" in existing_tables:
+                conn.execute(text(f"DELETE FROM djmdSongMyTag WHERE MyTagID IN ({m_placeholders});"), m_params)
+
+        return True
+

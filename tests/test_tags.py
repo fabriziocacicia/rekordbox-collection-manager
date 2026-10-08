@@ -2,8 +2,8 @@
 
 import unittest
 from unittest.mock import patch
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QPoint, Qt
+from PySide6.QtWidgets import QApplication, QMenu
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
@@ -17,6 +17,7 @@ from rekordbox_collection_manager.tags import (
     _resolve_tag_matching_ids,
     cleanup_duplicate_song_tags,
     create_tag,
+    delete_tag,
     fetch_tag_categories,
     fetch_tag_tracks,
     fetch_tags_tree,
@@ -214,6 +215,35 @@ class TestTagsBackend(unittest.TestCase):
     def test_sort_tags_in_folder_empty_or_nonexistent(self):
         count = sort_tags_in_folder(self.engine, "999999", descending=False)
         self.assertEqual(count, 0)
+
+    def test_delete_tag_empty_success(self):
+        res = create_tag(self.engine, "Brand New Empty Tag", parent_id_or_name="Genre")
+        tag_id = res["id"]
+        ok = delete_tag(self.engine, tag_id)
+        self.assertTrue(ok)
+        from sqlalchemy import text
+        with self.engine.connect() as conn:
+            del_val = conn.execute(
+                text("SELECT rb_local_deleted FROM djmdMyTag WHERE ID = :tid;"),
+                {"tid": tag_id},
+            ).scalar()
+            self.assertEqual(del_val, 1)
+
+    def test_delete_tag_non_empty_raises(self):
+        # tag_afro has content t1 in setUp
+        with self.assertRaises(ValueError) as ctx:
+            delete_tag(self.engine, "tag_afro")
+        self.assertIn("not empty", str(ctx.exception).lower())
+
+    def test_delete_tag_not_found_raises(self):
+        with self.assertRaises(ValueError):
+            delete_tag(self.engine, "non_existent_999999")
+
+    def test_delete_category_non_empty_raises(self):
+        # Genre (ID 1) has active children
+        with self.assertRaises(ValueError) as ctx:
+            delete_tag(self.engine, "1")
+        self.assertIn("not empty", str(ctx.exception).lower())
 
 
 class TestTagsGUI(unittest.TestCase):
@@ -788,6 +818,117 @@ class TestCreateTag(unittest.TestCase):
 
         self.assertEqual(emitted_tags, ["Progressive"])
         container.close()
+
+    def test_tags_view_context_menu_delete_enabled_for_empty(self):
+        view = TagsView()
+        try:
+            view.engine = self.engine
+            tree_data = [
+                {
+                    "id": "1",
+                    "name": "Genre",
+                    "seq": 1,
+                    "attribute": 1,
+                    "parent_id": "root",
+                    "track_count": 5,
+                    "children": [
+                        {
+                            "id": "t_empty",
+                            "name": "Empty Tag",
+                            "seq": 1,
+                            "attribute": 0,
+                            "parent_id": "1",
+                            "category_name": "Genre",
+                            "track_count": 0,
+                            "children": [],
+                        },
+                        {
+                            "id": "t_full",
+                            "name": "Full Tag",
+                            "seq": 2,
+                            "attribute": 0,
+                            "parent_id": "1",
+                            "category_name": "Genre",
+                            "track_count": 3,
+                            "children": [],
+                        },
+                    ],
+                }
+            ]
+            view.tags_tree_data = tree_data
+            view._on_tree_loaded(tree_data)
+
+            empty_item = None
+            full_item = None
+            cat_item = view.tree.topLevelItem(0)
+            for i in range(cat_item.childCount()):
+                child = cat_item.child(i)
+                node = child.data(0, Qt.ItemDataRole.UserRole)
+                if node and node["id"] == "t_empty":
+                    empty_item = child
+                elif node and node["id"] == "t_full":
+                    full_item = child
+
+            self.assertIsNotNone(empty_item)
+            self.assertIsNotNone(full_item)
+
+            created_menus = []
+            RealQMenu = QMenu
+            class SpyMenu(RealQMenu):
+                def __init__(self, *args, **kwargs):
+                    super().__init__(*args, **kwargs)
+                    created_menus.append(self)
+                def exec(self, *args, **kwargs):
+                    return None
+                def exec_(self, *args, **kwargs):
+                    return None
+
+            # Test empty tag context menu -> Delete Tag is ENABLED (selectable)
+            with patch.object(view.tree, "itemAt", return_value=empty_item), \
+                 patch("rekordbox_collection_manager.gui.tags_view.QMenu", SpyMenu):
+                view._on_tree_context_menu(QPoint(10, 10))
+
+            self.assertTrue(len(created_menus) > 0)
+            empty_menu = created_menus[-1]
+            del_actions = [a for a in empty_menu.actions() if "Delete Tag" in a.text()]
+            self.assertEqual(len(del_actions), 1)
+            self.assertTrue(del_actions[0].isEnabled())
+
+            # Test non-empty tag context menu -> Delete Tag is DISABLED (grayed out)
+            with patch.object(view.tree, "itemAt", return_value=full_item), \
+                 patch("rekordbox_collection_manager.gui.tags_view.QMenu", SpyMenu):
+                view._on_tree_context_menu(QPoint(10, 10))
+
+            full_menu = created_menus[-1]
+            del_full_actions = [a for a in full_menu.actions() if "Delete Tag" in a.text()]
+            self.assertEqual(len(del_full_actions), 1)
+            self.assertFalse(del_full_actions[0].isEnabled())
+        finally:
+            view.cleanup()
+            view.close()
+
+    def test_tags_view_delete_item_success(self):
+        view = TagsView()
+        try:
+            view.engine = self.engine
+            res = create_tag(self.engine, "To Delete Tag", parent_id_or_name="Genre")
+            tag_id = res["id"]
+
+            db_saved_emitted = []
+            status_emitted = []
+            view.db_saved.connect(lambda: db_saved_emitted.append(True))
+            view.notify_status.connect(status_emitted.append)
+
+            from PySide6.QtWidgets import QMessageBox
+            with patch("rekordbox_collection_manager.gui.tags_view.is_rekordbox_running", return_value=False), \
+                 patch("PySide6.QtWidgets.QMessageBox.question", return_value=QMessageBox.StandardButton.Yes):
+                view._delete_tag_item(tag_id, "To Delete Tag", "tag")
+
+            self.assertTrue(len(db_saved_emitted) > 0)
+            self.assertTrue(any("Deleted tag 'To Delete Tag'" in s for s in status_emitted))
+        finally:
+            view.cleanup()
+            view.close()
 
 
 if __name__ == "__main__":

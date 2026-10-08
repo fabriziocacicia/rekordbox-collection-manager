@@ -387,11 +387,22 @@ QMenu::item {{
     padding: 6px 20px 6px 12px;
     border-radius: 4px;
     font-size: 12px;
+    color: {COLOR_TEXT_PRIMARY};
 }}
 
 QMenu::item:selected {{
     background-color: {COLOR_BLUE};
     color: #ffffff;
+}}
+
+QMenu::item:disabled {{
+    color: {COLOR_TEXT_MUTED};
+    background-color: transparent;
+}}
+
+QMenu::item:disabled:selected {{
+    color: {COLOR_TEXT_MUTED};
+    background-color: transparent;
 }}
 
 QMenu::separator {{
@@ -526,6 +537,11 @@ def apply_dark_theme(app: QApplication) -> None:
         palette.setColor(QPalette.ColorRole.Accent, QColor(COLOR_BLUE))
     if hasattr(QPalette.ColorRole, "PlaceholderText"):
         palette.setColor(QPalette.ColorRole.PlaceholderText, QColor(COLOR_TEXT_MUTED))
+
+    # Disabled color group for native and fallback elements
+    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text, QColor(COLOR_TEXT_MUTED))
+    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.WindowText, QColor(COLOR_TEXT_MUTED))
+    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText, QColor(COLOR_TEXT_MUTED))
 
     app.setPalette(palette)
     app.setStyleSheet(MODERN_DARK_QSS)

@@ -932,3 +932,191 @@ def create_playlist(
             "uuid": new_uuid,
             "reactivated": False,
         }
+
+
+def delete_playlist(engine: Engine, playlist_id: str) -> bool:
+    """Soft-delete an empty playlist or folder in the Rekordbox database.
+
+    Only empty playlists (0 tracks) or empty folders (0 children) can be deleted.
+
+    Args:
+        engine: SQLAlchemy Engine connected to Rekordbox SQLite database.
+        playlist_id: ID of the playlist or folder to delete.
+
+    Returns:
+        bool: True if deletion was successful.
+
+    Raises:
+        ValueError: If playlist is not found or is not empty.
+    """
+    now_utc = get_rekordbox_timestamp()
+    with engine.begin() as conn:
+        existing_tables = {
+            r[0]
+            for r in conn.exec_driver_sql(
+                "SELECT name FROM sqlite_master WHERE type='table';"
+            ).fetchall()
+        }
+        if "djmdPlaylist" not in existing_tables:
+            raise ValueError("Table djmdPlaylist not found in database.")
+
+        pl_cols = {
+            r[1]
+            for r in conn.exec_driver_sql("PRAGMA table_info(djmdPlaylist);").fetchall()
+        }
+
+        # 1. Fetch playlist record
+        check_cols = ["ID", "Name", "Attribute"]
+        if "ParentID" in pl_cols:
+            check_cols.append("ParentID")
+        if "SmartList" in pl_cols:
+            check_cols.append("SmartList")
+        if "rb_local_deleted" in pl_cols:
+            check_cols.append("rb_local_deleted")
+
+        pl_row = conn.execute(
+            text(f"SELECT {', '.join(check_cols)} FROM djmdPlaylist WHERE ID = :pid;"),
+            {"pid": str(playlist_id)},
+        ).mappings().fetchone()
+
+        if not pl_row:
+            raise ValueError(f"Playlist with ID '{playlist_id}' not found.")
+
+        # If already deleted, return True
+        if "rb_local_deleted" in pl_cols and pl_row.get("rb_local_deleted") == 1:
+            return True
+
+        name = pl_row.get("Name") or "Untitled"
+        attr = int(pl_row.get("Attribute") or 0)
+        smart_list = pl_row.get("SmartList") if "SmartList" in pl_cols else None
+        is_folder = (attr == 1)
+
+        # 2. Check if empty
+        if is_folder:
+            child_del = (
+                "AND (rb_local_deleted = 0 OR rb_local_deleted IS NULL)"
+                if "rb_local_deleted" in pl_cols
+                else ""
+            )
+            child_cnt = conn.execute(
+                text(f"SELECT COUNT(*) FROM djmdPlaylist WHERE ParentID = :pid {child_del};"),
+                {"pid": str(playlist_id)},
+            ).scalar() or 0
+            if child_cnt > 0:
+                raise ValueError(
+                    f"Folder '{name}' is not empty ({child_cnt} item(s)). Only empty folders can be deleted."
+                )
+        else:
+            # Check djmdSongPlaylist
+            if "djmdSongPlaylist" in existing_tables:
+                sp_cols = {
+                    r[1]
+                    for r in conn.exec_driver_sql("PRAGMA table_info(djmdSongPlaylist);").fetchall()
+                }
+                sp_del = (
+                    "AND (rb_local_deleted = 0 OR rb_local_deleted IS NULL)"
+                    if "rb_local_deleted" in sp_cols
+                    else ""
+                )
+                track_cnt = conn.execute(
+                    text(f"SELECT COUNT(*) FROM djmdSongPlaylist WHERE PlaylistID = :pid {sp_del};"),
+                    {"pid": str(playlist_id)},
+                ).scalar() or 0
+                if track_cnt > 0:
+                    raise ValueError(
+                        f"Playlist '{name}' is not empty ({track_cnt} track(s)). Only empty playlists can be deleted."
+                    )
+
+            # If Smart Playlist (Attribute == 4), also evaluate smart list criteria if available
+            if attr == 4 and smart_list and "djmdContent" in existing_tables:
+                c_cols = {
+                    r[1]
+                    for r in conn.exec_driver_sql("PRAGMA table_info(djmdContent);").fetchall()
+                }
+                c_del = "AND (c.rb_local_deleted = 0 OR c.rb_local_deleted IS NULL)" if "rb_local_deleted" in c_cols else ""
+                streaming_filter = build_exclude_streaming_clause(c_cols, table_alias="c")
+
+                artist_name_expr = (
+                    "COALESCE(a.Name, c.SrcArtistName, 'Unknown Artist')"
+                    if "djmdArtist" in existing_tables
+                    else "COALESCE(c.SrcArtistName, 'Unknown Artist')"
+                )
+                album_expr = "al.Name" if "djmdAlbum" in existing_tables else "NULL"
+                genre_expr = "g.Name" if "djmdGenre" in existing_tables else "NULL"
+                key_expr = "k.ScaleName" if "djmdKey" in existing_tables else "NULL"
+                join_a = "LEFT JOIN djmdArtist a ON c.ArtistID = a.ID" if "djmdArtist" in existing_tables else ""
+                join_al = "LEFT JOIN djmdAlbum al ON c.AlbumID = al.ID" if "djmdAlbum" in existing_tables else ""
+                join_g = "LEFT JOIN djmdGenre g ON c.GenreID = g.ID" if "djmdGenre" in existing_tables else ""
+                join_k = "LEFT JOIN djmdKey k ON c.KeyID = k.ID" if "djmdKey" in existing_tables else ""
+
+                try:
+                    clause, p_dict = parse_smartlist_to_sql(
+                        smart_list,
+                        artist_expr=artist_name_expr,
+                        album_expr=album_expr,
+                        genre_expr=genre_expr,
+                        key_expr=key_expr,
+                        param_prefix="sl_del_",
+                    )
+                    cnt_sql = f"""
+                        SELECT count(c.ID)
+                        FROM djmdContent c
+                        {join_a}
+                        {join_al}
+                        {join_g}
+                        {join_k}
+                        WHERE {clause}
+                          {c_del}
+                          {streaming_filter};
+                    """
+                    smart_cnt = int(conn.execute(text(cnt_sql), p_dict).scalar() or 0)
+                    if smart_cnt > 0:
+                        raise ValueError(
+                            f"Smart playlist '{name}' is not empty ({smart_cnt} track(s)). Only empty playlists can be deleted."
+                        )
+                except ValueError:
+                    raise
+                except Exception:
+                    pass
+
+        # 3. Soft-delete or hard-delete
+        if "rb_local_deleted" in pl_cols:
+            update_fields = ["rb_local_deleted = 1"]
+            params: Dict[str, Any] = {"pid": str(playlist_id)}
+            if "updated_at" in pl_cols:
+                update_fields.append("updated_at = :now")
+                params["now"] = now_utc
+            if "rb_local_data_status" in pl_cols:
+                update_fields.append("rb_local_data_status = 1")
+            if "rb_data_status" in pl_cols:
+                update_fields.append("rb_data_status = 2")
+            if "rb_local_synced" in pl_cols:
+                update_fields.append("rb_local_synced = 1")
+
+            conn.execute(
+                text(f"UPDATE djmdPlaylist SET {', '.join(update_fields)} WHERE ID = :pid;"),
+                params,
+            )
+            if "djmdSongPlaylist" in existing_tables:
+                sp_cols = {
+                    r[1]
+                    for r in conn.exec_driver_sql("PRAGMA table_info(djmdSongPlaylist);").fetchall()
+                }
+                if "rb_local_deleted" in sp_cols:
+                    sp_updates = ["rb_local_deleted = 1"]
+                    if "updated_at" in sp_cols:
+                        sp_updates.append("updated_at = :now")
+                    if "rb_local_data_status" in sp_cols:
+                        sp_updates.append("rb_local_data_status = 1")
+                    if "rb_data_status" in sp_cols:
+                        sp_updates.append("rb_data_status = 2")
+                    conn.execute(
+                        text(f"UPDATE djmdSongPlaylist SET {', '.join(sp_updates)} WHERE PlaylistID = :pid;"),
+                        {"pid": str(playlist_id), "now": now_utc},
+                    )
+        else:
+            conn.execute(text("DELETE FROM djmdPlaylist WHERE ID = :pid;"), {"pid": str(playlist_id)})
+            if "djmdSongPlaylist" in existing_tables:
+                conn.execute(text("DELETE FROM djmdSongPlaylist WHERE PlaylistID = :pid;"), {"pid": str(playlist_id)})
+
+        return True

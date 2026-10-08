@@ -404,6 +404,7 @@ class TestTrackDetailDialogUI(unittest.TestCase):
     """Test TrackDetailDialog UI components, table rendering, and user interactions."""
 
     def setUp(self):
+        self._dialogs = []
         self.engine = create_engine("sqlite:///:memory:")
         with self.engine.begin() as conn:
             conn.exec_driver_sql("""
@@ -475,6 +476,16 @@ class TestTrackDetailDialogUI(unittest.TestCase):
             },
         ]
 
+    def tearDown(self):
+        for dlg in getattr(self, "_dialogs", []):
+            try:
+                if hasattr(dlg, "detail_view") and dlg.detail_view:
+                    dlg.detail_view.cleanup()
+                dlg.close()
+            except Exception:
+                pass
+        self._dialogs.clear()
+
     def test_dialog_renders_track_metadata(self):
         """Verify dialog initializes with title, artist, key, bpm, and tags."""
         dlg = TrackDetailDialog(
@@ -483,6 +494,7 @@ class TestTrackDetailDialogUI(unittest.TestCase):
             tracks_list=self.sample_tracks,
             current_index=0,
         )
+        self._dialogs.append(dlg)
 
         self.assertEqual(dlg.title_label.text(), "Track One")
         self.assertEqual(dlg.artist_label.text(), "Artist Alpha")
@@ -514,6 +526,7 @@ class TestTrackDetailDialogUI(unittest.TestCase):
             tracks_list=self.sample_tracks,
             current_index=0,
         )
+        self._dialogs.append(dlg)
 
         emitted_session = []
         dlg.open_history_session_requested.connect(lambda hid: emitted_session.append(hid))
@@ -531,6 +544,7 @@ class TestTrackDetailDialogUI(unittest.TestCase):
             tracks_list=self.sample_tracks,
             current_index=0,
         )
+        self._dialogs.append(dlg)
 
         dlg._on_next_track()
         self.assertEqual(dlg.current_index, 1)
@@ -552,6 +566,7 @@ class TestTrackDetailViewIntegration(unittest.TestCase):
     """Test embedded TrackDetailView interactions, back signals, and stack transitions."""
 
     def setUp(self):
+        self._views = []
         self.engine = create_engine("sqlite:///:memory:")
         self.sample_tracks = [
             {
@@ -575,6 +590,19 @@ class TestTrackDetailViewIntegration(unittest.TestCase):
             }
         ]
 
+    def tearDown(self):
+        for v in getattr(self, "_views", []):
+            try:
+                if hasattr(v, "cleanup"):
+                    v.cleanup()
+                elif hasattr(v, "detail_view") and hasattr(v.detail_view, "cleanup"):
+                    v.detail_view.cleanup()
+                elif hasattr(v, "track_detail_view") and hasattr(v.track_detail_view, "cleanup"):
+                    v.track_detail_view.cleanup()
+            except Exception:
+                pass
+        self._views.clear()
+
     def test_view_renders_track_and_emits_back_button(self):
         """Verify TrackDetailView renders correctly and emits back_clicked signal on back button click."""
         view = TrackDetailView(
@@ -584,6 +612,7 @@ class TestTrackDetailViewIntegration(unittest.TestCase):
             current_index=0,
             back_button_text="← Back to Tracks",
         )
+        self._views.append(view)
         self.assertEqual(view.title_label.text(), "Solaris")
         self.assertEqual(view.artist_label.text(), "Argy")
         self.assertEqual(view.back_btn.text(), "← Back to Tracks")
@@ -616,6 +645,7 @@ class TestTrackDetailViewIntegration(unittest.TestCase):
             tracks_list=[flac_track, mp3_track, aiff_track],
             current_index=0,
         )
+        self._views.append(view)
         self.assertTrue(view.replace_btn.isHidden())
 
         # Advance to next track (MP3)
@@ -646,6 +676,7 @@ class TestTrackDetailViewIntegration(unittest.TestCase):
             tracks_list=self.sample_tracks,
             current_index=0,
         )
+        self._views.append(view)
         back_emitted = []
         view.back_clicked.connect(lambda: back_emitted.append(True))
 
@@ -656,6 +687,7 @@ class TestTrackDetailViewIntegration(unittest.TestCase):
     def test_tracks_view_stacked_navigation(self):
         """Verify TracksView switches to detail view at stack index 1 and returns to index 0 on back."""
         tracks_view = TracksView()
+        self._views.append(tracks_view)
         tracks_view.engine = self.engine
         tracks_view.records = list(self.sample_tracks)
 
@@ -678,6 +710,7 @@ class TestTrackDetailViewIntegration(unittest.TestCase):
     def test_history_view_stacked_navigation(self):
         """Verify HistoryView switches to detail view at stack index 2 and returns to index 1 on back."""
         history_view = HistoryView()
+        self._views.append(history_view)
         history_view.engine = self.engine
 
         self.assertEqual(history_view.stack.currentIndex(), 0)
@@ -694,6 +727,7 @@ class TestTrackDetailViewIntegration(unittest.TestCase):
     def test_play_count_view_stacked_navigation(self):
         """Verify PlayCountView switches to detail view at stack index 1 and returns to index 0 on back."""
         pc_view = PlayCountView()
+        self._views.append(pc_view)
         pc_view.engine = self.engine
         pc_view.records = list(self.sample_tracks)
 
@@ -710,6 +744,7 @@ class TestTrackDetailViewIntegration(unittest.TestCase):
             tracks_list=[],
             current_index=0,
         )
+        self._views.append(view)
         self.assertEqual(view.history_kpi_val.text(), "0 sessions")
         self.assertEqual(view.history_table.rowCount(), 0)
 
@@ -840,6 +875,7 @@ class TestPlaylistChipsUI(unittest.TestCase):
                 INSERT INTO djmdSongMyTag (ID, MyTagID, ContentID) VALUES ('smt_1', 'tag_1', '10');
             """)
 
+        self._views = []
         self.track_data = {
             "id": "10",
             "content_id": "10",
@@ -848,6 +884,15 @@ class TestPlaylistChipsUI(unittest.TestCase):
             "playlists": ["Afro House"],
             "tags": ["Melodic"],
         }
+
+    def tearDown(self):
+        for v in getattr(self, "_views", []):
+            try:
+                if hasattr(v, "cleanup"):
+                    v.cleanup()
+            except Exception:
+                pass
+        self._views.clear()
 
     def test_playlist_chip_hover_and_delete(self):
         """Verify '✕' button becomes visible on hover and emits delete_requested on click."""
@@ -932,6 +977,7 @@ class TestPlaylistChipsUI(unittest.TestCase):
             tracks_list=[self.track_data],
             current_index=0,
         )
+        self._views.append(view)
         view.show()
         self.assertFalse(view.bottom_bar.isVisible(), "Bottom bar should be hidden initially")
 
@@ -973,6 +1019,7 @@ class TestPlaylistChipsUI(unittest.TestCase):
             tracks_list=[self.track_data],
             current_index=0,
         )
+        self._views.append(view)
         view.show()
         view.playlists_container.show_add_input()
         self.assertTrue(view.playlists_container.is_input_active())
@@ -1061,6 +1108,7 @@ class TestPlaylistChipsUI(unittest.TestCase):
             tracks_list=[self.track_data],
             current_index=0,
         )
+        self._views.append(view)
         view.show()
         self.assertFalse(view.bottom_bar.isVisible(), "Bottom bar should be hidden initially")
 
@@ -1108,6 +1156,7 @@ class TestPlaylistChipsUI(unittest.TestCase):
             tracks_list=[self.track_data],
             current_index=0,
         )
+        self._views.append(view)
         view.show()
         view.tags_container.show_add_input()
         self.assertTrue(view.tags_container.is_input_active())

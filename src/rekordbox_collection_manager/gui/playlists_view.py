@@ -38,6 +38,7 @@ from rekordbox_collection_manager.gui.theme import (
     COLOR_TEXT_SECONDARY,
 )
 from rekordbox_collection_manager.gui.create_playlist_dialog import CreatePlaylistDialog
+from rekordbox_collection_manager.playlists import delete_playlist
 from rekordbox_collection_manager.gui.track_detail_view import TrackDetailView
 from rekordbox_collection_manager.gui.track_table import (
     DEFAULT_COLLECTION_COLUMNS,
@@ -324,7 +325,7 @@ class PlaylistsView(QWidget):
         self.db_saved.emit()
 
     def _on_tree_context_menu(self, pos: QPoint) -> None:
-        """Context menu for playlist tree items (New Playlist, New Folder)."""
+        """Context menu for playlist tree items (New Playlist, New Folder, Delete Playlist/Folder)."""
         item = self.tree.itemAt(pos)
         menu = QMenu(self)
         global_pos = self.tree.mapToGlobal(pos)
@@ -332,6 +333,7 @@ class PlaylistsView(QWidget):
         target_parent = None
         target_name = "Root"
         is_folder = False
+        node = None
 
         if item:
             node = item.data(0, Qt.ItemDataRole.UserRole)
@@ -354,11 +356,105 @@ class PlaylistsView(QWidget):
             act_new_pl = menu.addAction("📑 ＋ New Playlist...")
             act_new_folder = menu.addAction("📁 ＋ New Folder...")
 
+        act_delete = None
+        target_pl_id = None
+        target_pl_name = None
+        target_kind = "playlist"
+
+        if item and node:
+            pl_id = str(node.get("id"))
+            pl_name = node.get("name", "Untitled")
+            attr = node.get("attribute", 0)
+
+            menu.addSeparator()
+
+            if attr == 1:
+                # Folder: empty if no child items in tree
+                child_count = item.childCount()
+                is_empty = (child_count == 0)
+                target_kind = "folder"
+                act_delete = menu.addAction(f"🗑️ Delete Folder '{pl_name}'")
+                act_delete.setEnabled(is_empty)
+                if not is_empty:
+                    act_delete.setToolTip(f"Cannot delete folder containing {child_count} item(s).")
+            elif attr == 4:
+                # Smart Playlist
+                track_count = node.get("track_count", 0)
+                is_empty = (track_count == 0)
+                target_kind = "smart playlist"
+                act_delete = menu.addAction(f"🗑️ Delete Smart Playlist '{pl_name}'")
+                act_delete.setEnabled(is_empty)
+                if not is_empty:
+                    act_delete.setToolTip(f"Cannot delete smart playlist containing {track_count} track(s).")
+            else:
+                # Standard Playlist
+                track_count = node.get("track_count", 0)
+                is_empty = (track_count == 0)
+                target_kind = "playlist"
+                act_delete = menu.addAction(f"🗑️ Delete Playlist '{pl_name}'")
+                act_delete.setEnabled(is_empty)
+                if not is_empty:
+                    act_delete.setToolTip(f"Cannot delete playlist containing {track_count} track(s).")
+
+            target_pl_id = pl_id
+            target_pl_name = pl_name
+
         chosen = menu.exec(global_pos)
         if chosen == act_new_pl:
             self._open_create_playlist_dialog(default_parent=target_parent, is_folder=False)
         elif chosen == act_new_folder:
             self._open_create_playlist_dialog(default_parent=target_parent, is_folder=True)
+        elif act_delete and chosen == act_delete and target_pl_id:
+            self._delete_playlist_item(target_pl_id, target_pl_name, target_kind)
+
+    def _delete_playlist_item(
+        self, playlist_id: str, playlist_name: str, kind: str = "playlist"
+    ) -> None:
+        """Confirm and delete an empty playlist or folder from the database."""
+        if is_rekordbox_running():
+            QMessageBox.warning(
+                self,
+                "Rekordbox is Running",
+                f"Please close Rekordbox before deleting {kind}s in the database.",
+            )
+            return
+
+        if not self.engine:
+            QMessageBox.warning(self, "Database Error", "No active database connection.")
+            return
+
+        reply = QMessageBox.question(
+            self,
+            f"Delete {kind.capitalize()}",
+            f"Are you sure you want to delete {kind} '{playlist_name}'?\n\n"
+            "This will remove it from your Rekordbox collection.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            delete_playlist(self.engine, playlist_id)
+            msg = f"Deleted {kind} '{playlist_name}'."
+            self.notify_status.emit(f"🗑️ {msg}")
+
+            if self.current_playlist and str(self.current_playlist.get("id")) == str(playlist_id):
+                self.current_playlist = None
+                self.playlist_title_label.setText("Select a Playlist")
+                self.playlist_meta_label.setText("")
+                self.records = []
+                self.table.set_tracks([])
+                self.status_label.setText("Select a playlist to view tracks.")
+
+            self._load_playlists_tree(force_reload_selected=False)
+            self.db_saved.emit()
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                f"Error Deleting {kind.capitalize()}",
+                f"Failed to delete {kind} '{playlist_name}':\n{e}",
+            )
 
     def _on_new_playlist_clicked(self) -> None:
         """Handler for header '＋' button."""

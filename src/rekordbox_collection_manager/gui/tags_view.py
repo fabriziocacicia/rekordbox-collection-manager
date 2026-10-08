@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
 )
 from sqlalchemy.engine import Engine
 
-from rekordbox_collection_manager.tags import sort_tags_in_folder
+from rekordbox_collection_manager.tags import delete_tag, sort_tags_in_folder
 from rekordbox_collection_manager.utils import is_rekordbox_running
 
 from rekordbox_collection_manager.gui.create_tag_dialog import CreateTagDialog
@@ -544,7 +544,7 @@ class TagsView(QWidget):
         self.status_label.setText("Select a tag inside this category to view its tracks.")
 
     def _on_tree_context_menu(self, pos: QPoint) -> None:
-        """Right-click context menu on tree items (e.g. sort folder tags)."""
+        """Right-click context menu on tree items (e.g. sort folder tags, delete tag)."""
         item = self.tree.itemAt(pos)
         if not item:
             return
@@ -556,6 +556,11 @@ class TagsView(QWidget):
         attr = node.get("attribute", 0)
         menu = QMenu(self)
         global_pos = self.tree.mapToGlobal(pos)
+
+        act_delete = None
+        target_tag_id = None
+        target_tag_name = None
+        target_kind = "tag"
 
         if attr == 1:
             # Right-clicked a category folder
@@ -578,19 +583,86 @@ class TagsView(QWidget):
             # Right-clicked a child tag
             parent_id = str(node.get("parent_id", ""))
             category_name = node.get("category_name") or "Folder"
+            tag_name = node.get("name", "Tag")
+            tag_id = str(node.get("id"))
+            track_count = node.get("track_count", 0)
+            is_empty = (track_count == 0)
+
+            act_new_tag = None
+            act_sort_folder = None
+            act_sort_folder_desc = None
+
             if parent_id and parent_id != "root":
                 act_new_tag = menu.addAction(f"＋ New Tag in '{category_name}'...")
                 menu.addSeparator()
                 act_sort_folder = menu.addAction(f"Sort Folder '{category_name}' Alphabetically (A to Z)")
                 act_sort_folder_desc = menu.addAction(f"Sort Folder '{category_name}' Alphabetically (Z to A)")
 
-                chosen = menu.exec(global_pos)
-                if chosen == act_new_tag:
-                    self._open_create_tag_dialog(default_category=category_name)
-                elif chosen == act_sort_folder:
-                    self._sort_folder_tags(parent_id, category_name, descending=False)
-                elif chosen == act_sort_folder_desc:
-                    self._sort_folder_tags(parent_id, category_name, descending=True)
+            menu.addSeparator()
+            act_delete = menu.addAction(f"🗑️ Delete Tag '{tag_name}'")
+            act_delete.setEnabled(is_empty)
+            if not is_empty:
+                act_delete.setToolTip(f"Cannot delete tag containing {track_count} track(s).")
+
+            chosen = menu.exec(global_pos)
+            if act_new_tag and chosen == act_new_tag:
+                self._open_create_tag_dialog(default_category=category_name)
+            elif act_sort_folder and chosen == act_sort_folder:
+                self._sort_folder_tags(parent_id, category_name, descending=False)
+            elif act_sort_folder_desc and chosen == act_sort_folder_desc:
+                self._sort_folder_tags(parent_id, category_name, descending=True)
+            elif act_delete and chosen == act_delete and tag_id:
+                self._delete_tag_item(tag_id, tag_name)
+
+    def _delete_tag_item(
+        self, tag_id: str, tag_name: str, kind: str = "tag"
+    ) -> None:
+        """Confirm and delete an empty tag or category from the database."""
+        if is_rekordbox_running():
+            QMessageBox.warning(
+                self,
+                "Rekordbox is Running",
+                f"Please close Rekordbox before deleting {kind}s in the database.",
+            )
+            return
+
+        if not self.engine:
+            QMessageBox.warning(self, "Database Error", "No active database connection.")
+            return
+
+        reply = QMessageBox.question(
+            self,
+            f"Delete {kind.capitalize()}",
+            f"Are you sure you want to delete {kind} '{tag_name}'?\n\n"
+            "This will remove it from your Rekordbox collection.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            delete_tag(self.engine, tag_id)
+            msg = f"Deleted {kind} '{tag_name}'."
+            self.notify_status.emit(f"🗑️ {msg}")
+            self.status_label.setText(f"✅ {msg}")
+
+            if self.current_tag and str(self.current_tag.get("id")) == str(tag_id):
+                self.current_tag = None
+                self.tag_title_label.setText("Select a Tag")
+                self.tag_meta_label.setText("")
+                self.records = []
+                self.table.set_tracks([])
+                self.status_label.setText("Select a tag to view its tracks.")
+
+            self._load_tags_tree()
+            self.db_saved.emit()
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                f"Error Deleting {kind.capitalize()}",
+                f"Failed to delete {kind} '{tag_name}':\n{e}",
+            )
 
     def _on_new_tag_clicked(self) -> None:
         """Handler for header '＋' button."""
