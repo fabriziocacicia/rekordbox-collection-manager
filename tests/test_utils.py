@@ -24,6 +24,8 @@ from rekordbox_collection_manager.utils import (
     get_rekordbox_timestamp,
     is_aiff_track,
     is_mp3_track,
+    is_purchased_path,
+    is_purchased_track,
     is_rekordbox_running,
     is_replaceable_track,
     is_streaming_track,
@@ -454,6 +456,31 @@ class TestUtils(unittest.TestCase):
         self.assertEqual(record["file_type"], "MP3")
         self.assertEqual(record["year"], 2024)
         self.assertEqual(record["release_year"], 2024)
+        self.assertFalse(record["is_purchased"])
+
+        # Purchased record
+        purchased_row = dict(row, FolderPath="/Users/dj/Music/Purchased/Artist - Track.aiff")
+        purchased_record = build_track_record(purchased_row)
+        self.assertTrue(purchased_record["is_purchased"])
+
+    def test_is_purchased_path_and_track(self):
+        # Paths
+        self.assertTrue(is_purchased_path("/Users/dj/Music/Purchased/Song.aiff"))
+        self.assertTrue(is_purchased_path("C:\\Music\\Purchased\\Song.mp3"))
+        self.assertTrue(is_purchased_path("/Purchased/Song.wav"))
+        self.assertTrue(is_purchased_path("/Users/dj/Purchased"))
+        self.assertFalse(is_purchased_path("/Users/dj/Music/Downloaded/Song.mp3"))
+        self.assertFalse(is_purchased_path("/Users/dj/Music/PurchasedTracks/Song.mp3"))
+        self.assertFalse(is_purchased_path(None))
+        self.assertFalse(is_purchased_path(""))
+
+        # Dict / Track representation
+        self.assertTrue(is_purchased_track({"folder_path": "/Music/Purchased"}))
+        self.assertTrue(is_purchased_track({"FolderPath": "/Music/Purchased/Deep"}))
+        self.assertTrue(is_purchased_track({"file_path": "/Purchased/Deep/song.aiff"}))
+        self.assertFalse(is_purchased_track({"folder_path": "/Music/Downloaded"}))
+        self.assertFalse(is_purchased_track("some string without purchased/"))
+        self.assertTrue(is_purchased_track("/Volumes/Drive/Purchased/Track.flac"))
 
 
 if __name__ == "__main__":

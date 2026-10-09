@@ -94,6 +94,7 @@ from rekordbox_collection_manager.utils import (
     format_rating_stars,
     is_aiff_track,
     is_mp3_track,
+    is_purchased_track,
     is_rekordbox_running,
     open_in_folder,
     parse_history_name,
@@ -286,6 +287,13 @@ class TrackDetailView(QWidget):
             "border-radius: 4px; padding: 2px 8px; font-size: 11px; font-weight: 700;"
         )
         self.badges_layout.addWidget(self.format_badge)
+
+        self.purchased_badge = QLabel("—")
+        self.purchased_badge.setStyleSheet(
+            "background-color: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.5); "
+            "border-radius: 4px; padding: 2px 8px; font-size: 11px; font-weight: 700;"
+        )
+        self.badges_layout.addWidget(self.purchased_badge)
 
         self.key_badge = QLabel("Key: —")
         self.key_badge.setStyleSheet(
@@ -712,6 +720,23 @@ class TrackDetailView(QWidget):
         self.format_badge.setText(file_type)
         self._style_format_badge(file_type)
 
+        # Purchased badge
+        is_purchased = is_purchased_track(t)
+        if is_purchased:
+            self.purchased_badge.setText("🛒 Purchased")
+            self.purchased_badge.setStyleSheet(
+                "background-color: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.5); "
+                "border-radius: 4px; padding: 2px 8px; font-size: 11px; font-weight: 700;"
+            )
+            self.purchased_badge.setToolTip("Purchased track: located inside a 'Purchased' directory in folder tree.")
+        else:
+            self.purchased_badge.setText("📥 Downloaded")
+            self.purchased_badge.setStyleSheet(
+                "background-color: rgba(148, 163, 184, 0.12); color: #94a3b8; border: 1px solid rgba(148, 163, 184, 0.25); "
+                "border-radius: 4px; padding: 2px 8px; font-size: 11px; font-weight: 700;"
+            )
+            self.purchased_badge.setToolTip("Downloaded track: not located inside a 'Purchased' directory.")
+
         # Key badge
         key = t.get("key") or "—"
         self.key_badge.setText(f"Key: {key}")
@@ -922,7 +947,7 @@ class TrackDetailView(QWidget):
 
     def _terminate_worker(self) -> None:
         """Safely terminate any running detail worker thread."""
-        stop_worker(self.active_worker, wait_ms=500)
+        stop_worker(self.active_worker, wait_ms=1000)
         self.active_worker = None
 
     cleanup = _terminate_worker

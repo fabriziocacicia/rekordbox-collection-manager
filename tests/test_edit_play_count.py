@@ -9,6 +9,8 @@ from sqlalchemy import create_engine
 from rekordbox_collection_manager.edit_play_count import (
     batch_update_track_play_counts,
     detect_content_table,
+    fetch_distinct_file_types,
+    fetch_distinct_keys,
     format_location_display,
     main,
     parse_args,
@@ -167,6 +169,156 @@ class TestEditPlayCount(unittest.TestCase):
         self.assertIn("3", unplayed_ids)
         self.assertIn("5", unplayed_ids)
         self.assertNotIn("1", unplayed_ids)
+
+    def test_search_tracks_purchased_filter(self):
+        # Insert a purchased track into the test database
+        with self.engine.begin() as conn:
+            conn.exec_driver_sql("""
+                INSERT INTO djmdContent (
+                    ID, Title, ArtistID, SrcArtistName, SearchStr, DJPlayCount,
+                    FolderPath, FileNameL, FileType, rb_local_deleted, updated_at
+                ) VALUES (
+                    '10', 'Purchased Hit', 'art-1', 'David Guetta', 'purchased hit', 3,
+                    '/Music/Purchased/bought.aiff', 'bought.aiff', 12, 0, '2026-01-01'
+                );
+            """)
+
+        # 1. Filter: "purchased" only
+        purchased = search_tracks(self.engine, "", purchased_filter="purchased")
+        self.assertEqual(len(purchased), 1)
+        self.assertEqual(purchased[0]["id"], "10")
+        self.assertTrue(purchased[0]["is_purchased"])
+
+        # 2. Filter: "downloaded" / "unpurchased" only
+        downloaded = search_tracks(self.engine, "", purchased_filter="downloaded")
+        self.assertTrue(len(downloaded) > 0)
+        self.assertNotIn("10", {t["id"] for t in downloaded})
+        for t in downloaded:
+            self.assertFalse(t["is_purchased"])
+
+        # 3. Filter: "all"
+        all_tracks = search_tracks(self.engine, "", purchased_filter="all")
+        all_ids = {t["id"] for t in all_tracks}
+        self.assertIn("10", all_ids)
+        self.assertIn("1", all_ids)
+
+        # 4. Sorting by purchased descending (purchased track first)
+        sorted_res = search_tracks(self.engine, "", sort_by="purchased", sort_order="desc")
+        self.assertEqual(sorted_res[0]["id"], "10")
+
+        # 5. File type filter: AIFF vs MP3
+        aiff_tracks = search_tracks(self.engine, "", file_type_filter="AIFF")
+        self.assertEqual(len(aiff_tracks), 1)
+        self.assertEqual(aiff_tracks[0]["id"], "10")
+
+        mp3_tracks = search_tracks(self.engine, "", file_type_filter="MP3")
+        self.assertNotIn("10", {t["id"] for t in mp3_tracks})
+
+        # Multi-format filter: ["AIFF", "MP3"]
+        multi_tracks = search_tracks(self.engine, "", file_type_filter=["AIFF", "MP3"])
+        multi_ids = {t["id"] for t in multi_tracks}
+        self.assertIn("10", multi_ids)
+        self.assertIn("1", multi_ids)
+
+    def test_fetch_distinct_keys(self):
+        # Without djmdKey table
+        keys_empty = fetch_distinct_keys(self.engine)
+        self.assertEqual(keys_empty, [])
+
+        # Create djmdKey and populate
+        with self.engine.begin() as conn:
+            conn.exec_driver_sql("""
+                CREATE TABLE djmdKey (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    ScaleName VARCHAR(255)
+                );
+            """)
+            conn.exec_driver_sql("""
+                INSERT INTO djmdKey (ID, ScaleName)
+                VALUES ('k1', '8A'), ('k2', '11B'), ('k3', '8A'), ('k4', '');
+            """)
+
+        keys = fetch_distinct_keys(self.engine)
+        self.assertEqual(keys, ["11B", "8A"])
+
+        # When KeyID is present in djmdContent
+        engine_with_content = create_engine("sqlite:///:memory:")
+        with engine_with_content.begin() as conn:
+            conn.exec_driver_sql("""
+                CREATE TABLE djmdKey (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    ScaleName VARCHAR(255)
+                );
+            """)
+            conn.exec_driver_sql("""
+                INSERT INTO djmdKey (ID, ScaleName)
+                VALUES ('k1', '8A'), ('k2', '11B'), ('k3', '4A');
+            """)
+            conn.exec_driver_sql("""
+                CREATE TABLE djmdContent (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    Title VARCHAR(255),
+                    KeyID VARCHAR(255),
+                    rb_local_deleted INTEGER DEFAULT 0
+                );
+            """)
+            conn.exec_driver_sql("""
+                INSERT INTO djmdContent (ID, Title, KeyID, rb_local_deleted)
+                VALUES 
+                    ('1', 'Track 1', 'k1', 0),
+                    ('2', 'Track 2', 'k2', 1),
+                    ('3', 'Track 3', NULL, 0);
+            """)
+
+        # Only k1 (8A) should be returned (k2 is deleted, k3 is NULL, 4A not in collection)
+        filtered_keys = fetch_distinct_keys(engine_with_content)
+        self.assertEqual(filtered_keys, ["8A"])
+
+        # Test search_tracks with single key
+        results_single = search_tracks(engine_with_content, "", key_filter="8A")
+        self.assertEqual(len(results_single), 1)
+        self.assertEqual(results_single[0]["id"], "1")
+
+        # Test search_tracks with multi-key
+        results_multi = search_tracks(engine_with_content, "", key_filter=["8A", "11B"])
+        self.assertEqual(len(results_multi), 1)  # Track 2 is deleted
+
+    def test_fetch_distinct_file_types(self):
+        # 1. Base test db has MP3 tracks, 1 deleted MP3 track, and streaming tracks
+        fmts = fetch_distinct_file_types(self.engine)
+        self.assertEqual(fmts, ["MP3"])
+
+        # 2. Insert an AIFF track
+        with self.engine.begin() as conn:
+            conn.exec_driver_sql("""
+                INSERT INTO djmdContent (
+                    ID, Title, SearchStr, DJPlayCount,
+                    FolderPath, FileNameL, FileType, rb_local_deleted, updated_at
+                ) VALUES (
+                    '99', 'AIFF Song', 'aiff song', 0,
+                    '/music/song.aiff', 'song.aiff', 12, 0, '2026-01-01'
+                );
+            """)
+        fmts = fetch_distinct_file_types(self.engine)
+        self.assertEqual(fmts, ["AIFF", "MP3"])
+
+        # 3. Insert a track where FileType is NULL but FileNameL has .flac
+        with self.engine.begin() as conn:
+            conn.exec_driver_sql("""
+                INSERT INTO djmdContent (
+                    ID, Title, SearchStr, DJPlayCount,
+                    FolderPath, FileNameL, FileType, rb_local_deleted, updated_at
+                ) VALUES (
+                    '100', 'Lossless FLAC', 'lossless flac', 0,
+                    '/music/track.flac', 'track.flac', NULL, 0, '2026-01-01'
+                );
+            """)
+        fmts = fetch_distinct_file_types(self.engine)
+        self.assertEqual(fmts, ["AIFF", "FLAC", "MP3"])
+
+        # 4. Empty engine or missing table returns []
+        empty_engine = create_engine("sqlite:///:memory:")
+        self.assertEqual(fetch_distinct_file_types(empty_engine), [])
 
     def test_search_tracks_excludes_streaming_by_default(self):
         # Default exclude_streaming=True
@@ -402,6 +554,38 @@ class TestEditPlayCount(unittest.TestCase):
         pl_match = search_tracks(self.engine, "Festival")
         self.assertEqual(len(pl_match), 1)
         self.assertEqual(pl_match[0]["id"], "1")
+
+        # --- Multi-tag & Multi-playlist filtering tests ---
+        with self.engine.begin() as conn:
+            conn.exec_driver_sql("INSERT INTO djmdMyTag (ID, Name, Seq) VALUES ('tag-3', 'Chill', 3);")
+            conn.exec_driver_sql("INSERT INTO djmdSongMyTag (ID, MyTagID, ContentID) VALUES ('smt-3', 'tag-3', '2');")
+            conn.exec_driver_sql("INSERT INTO djmdPlaylist (ID, Name, Attribute) VALUES ('pl-2', 'Club Night', 0);")
+            conn.exec_driver_sql("INSERT INTO djmdSongPlaylist (ID, PlaylistID, ContentID) VALUES ('sp-2', 'pl-2', '2');")
+
+        # Multi-tag ANY: Track 1 has Peak Time & Vocal, Track 2 has Chill
+        any_tags = search_tracks(self.engine, "", tag_filter=["Peak Time", "Chill"], tag_match_mode="any")
+        any_ids = {t["id"] for t in any_tags}
+        self.assertIn("1", any_ids)
+        self.assertIn("2", any_ids)
+
+        # Multi-tag ALL: Track 1 has both Peak Time AND Vocal
+        all_tags_1 = search_tracks(self.engine, "", tag_filter=["Peak Time", "Vocal"], tag_match_mode="all")
+        self.assertEqual(len(all_tags_1), 1)
+        self.assertEqual(all_tags_1[0]["id"], "1")
+
+        # Multi-tag ALL: No track has both Peak Time AND Chill
+        all_tags_none = search_tracks(self.engine, "", tag_filter=["Peak Time", "Chill"], tag_match_mode="all")
+        self.assertEqual(len(all_tags_none), 0)
+
+        # Multi-playlist ANY: Track 1 in Festival 2026, Track 2 in Club Night
+        any_pls = search_tracks(self.engine, "", playlist_filter=["Festival 2026", "Club Night"], playlist_match_mode="any")
+        any_pl_ids = {t["id"] for t in any_pls}
+        self.assertIn("1", any_pl_ids)
+        self.assertIn("2", any_pl_ids)
+
+        # Multi-playlist ALL: No track in both Festival 2026 AND Club Night
+        all_pls_none = search_tracks(self.engine, "", playlist_filter=["Festival 2026", "Club Night"], playlist_match_mode="all")
+        self.assertEqual(len(all_pls_none), 0)
 
     def test_main_running_check(self):
         with patch("rekordbox_collection_manager.edit_play_count.ensure_rekordbox_not_running") as mock_check, \

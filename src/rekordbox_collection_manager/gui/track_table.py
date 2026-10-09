@@ -110,6 +110,7 @@ class TrackColumn:
     PLAYS = "Plays"
     BITRATE = "Bitrate"
     FILE_TYPE = "Type"
+    PURCHASED = "Purchased"
     TAGS = "Tags"
     PLAYLISTS = "Playlists"
     FOLDER = "Folder"
@@ -962,6 +963,66 @@ class FileTypeBadgeDelegate(QStyledItemDelegate):
         return QSize(fm.horizontalAdvance(text_str) + 24, 36)
 
 
+class PurchasedBadgeDelegate(QStyledItemDelegate):
+    """Renders purchased track status as a green badge or muted indicator."""
+
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.badge_font = QFont()
+        self.badge_font.setPointSize(9)
+        self.badge_font.setBold(True)
+        self.fm = QFontMetrics(self.badge_font)
+
+    def paint(
+        self,
+        painter: QPainter,
+        option: QStyleOptionViewItem,
+        index: QModelIndex,
+    ) -> None:
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        widget = option.widget
+        style = widget.style() if widget else QApplication.style()
+        style.drawPrimitive(
+            QStyle.PrimitiveElement.PE_PanelItemViewItem, opt, painter, widget
+        )
+
+        is_purchased = bool(index.data(Qt.ItemDataRole.UserRole))
+        if not is_purchased:
+            painter.setPen(QColor(COLOR_TEXT_MUTED))
+            painter.drawText(option.rect, Qt.AlignmentFlag.AlignCenter, "—")
+            painter.restore()
+            return
+
+        text_str = "🛒 Purchased"
+        bg_color = QColor(16, 185, 129, 35)
+        border_color = QColor(52, 211, 153, 120)
+        text_color = QColor("#34d399")
+
+        painter.setFont(self.badge_font)
+        fm = self.fm
+
+        badge_w = fm.horizontalAdvance(text_str) + 14
+        badge_h = 20
+        badge_x = option.rect.x() + (option.rect.width() - badge_w) // 2
+        badge_y = option.rect.y() + (option.rect.height() - badge_h) // 2
+        badge_rect = QRectF(badge_x, badge_y, badge_w, badge_h)
+
+        painter.setBrush(QBrush(bg_color))
+        painter.setPen(QPen(border_color, 1))
+        painter.drawRoundedRect(badge_rect, 4, 4)
+
+        painter.setPen(text_color)
+        painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, text_str)
+        painter.restore()
+
+    def sizeHint(self, option: QStyleOptionViewItem, index: QModelIndex) -> QSize:
+        return QSize(95, 36)
+
+
 class _TableItemProxy:
     """Lightweight compatibility proxy simulating QTableWidgetItem for legacy callers/tests."""
 
@@ -1144,6 +1205,7 @@ class TracksTableModel(QAbstractTableModel):
                     TrackColumn.PLAYS,
                     TrackColumn.BITRATE,
                     TrackColumn.FILE_TYPE,
+                    TrackColumn.PURCHASED,
                 ):
                     return Qt.AlignmentFlag.AlignCenter
                 return int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
@@ -1164,6 +1226,7 @@ class TracksTableModel(QAbstractTableModel):
             TrackColumn.PLAYS: "Sort by Play Count",
             TrackColumn.BITRATE: "Sort by Audio Bitrate",
             TrackColumn.FILE_TYPE: "Sort by File Type (MP3, AIFF, FLAC, etc.)",
+            TrackColumn.PURCHASED: "Sort by Purchased status (inside Purchased folder vs Downloaded)",
             TrackColumn.TAGS: "Sort by Tags",
             TrackColumn.PLAYLISTS: "Sort by Real Playlists",
             TrackColumn.FOLDER: "Sort by Folder (Ctrl+Click or Cmd+Click cell to open in Finder)",
@@ -1313,6 +1376,24 @@ class TracksTableModel(QAbstractTableModel):
             elif role == Qt.ItemDataRole.TextAlignmentRole:
                 return Qt.AlignmentFlag.AlignCenter
 
+        # PURCHASED
+        elif col_name == TrackColumn.PURCHASED:
+            is_purchased = bool(t.get("is_purchased"))
+            if role == Qt.ItemDataRole.DisplayRole:
+                return "🛒 Purchased" if is_purchased else "—"
+            elif role == Qt.ItemDataRole.ToolTipRole:
+                return (
+                    "Purchased track (located in Purchased folder)"
+                    if is_purchased
+                    else "Downloaded track (not in Purchased folder)"
+                )
+            elif role == Qt.ItemDataRole.UserRole:
+                return is_purchased
+            elif role == Qt.ItemDataRole.TextAlignmentRole:
+                return Qt.AlignmentFlag.AlignCenter
+            elif role == Qt.ItemDataRole.ForegroundRole:
+                return QColor("#34d399") if is_purchased else self._color_muted
+
         # 11. TAGS
         elif col_name == TrackColumn.TAGS:
             tags = list(dict.fromkeys(t.get("tags") or []))
@@ -1407,6 +1488,8 @@ class TracksTableModel(QAbstractTableModel):
                 return int(t.get("bitrate") or 0)
             elif col_name == TrackColumn.FILE_TYPE:
                 return (t.get("file_type") or "").lower()
+            elif col_name == TrackColumn.PURCHASED:
+                return 1 if t.get("is_purchased") else 0
             elif col_name == TrackColumn.TAGS:
                 tags = t.get("tags") or []
                 return ", ".join(tags).lower()
@@ -1606,6 +1689,7 @@ class TracksTableWidget(QTableView):
 
         # Delegate singletons
         file_type_delegate = FileTypeBadgeDelegate(parent=self)
+        purchased_delegate = PurchasedBadgeDelegate(parent=self)
         self._tags_delegate = ChipBadgeDelegate(
             bg_color=QColor(139, 92, 246, 38),
             border_color=QColor(167, 139, 250, 95),
@@ -1657,6 +1741,9 @@ class TracksTableWidget(QTableView):
                 TrackColumn.FILE_TYPE,
             ):
                 header.setSectionResizeMode(col_idx, QHeaderView.ResizeMode.ResizeToContents)
+            elif col_name == TrackColumn.PURCHASED:
+                header.setSectionResizeMode(col_idx, QHeaderView.ResizeMode.Interactive)
+                self.setColumnWidth(col_idx, 105)
             elif col_name == TrackColumn.TAGS:
                 header.setSectionResizeMode(col_idx, QHeaderView.ResizeMode.Interactive)
                 self.setColumnWidth(col_idx, 220)
@@ -1673,6 +1760,8 @@ class TracksTableWidget(QTableView):
             # Assign delegates
             if col_name == TrackColumn.FILE_TYPE:
                 self.setItemDelegateForColumn(col_idx, file_type_delegate)
+            elif col_name == TrackColumn.PURCHASED:
+                self.setItemDelegateForColumn(col_idx, purchased_delegate)
             elif col_name == TrackColumn.TAGS:
                 self.setItemDelegateForColumn(col_idx, self._tags_delegate)
                 self._tags_col_idx = col_idx
@@ -2370,6 +2459,7 @@ class TracksTableWidget(QTableView):
             TrackColumn.PLAYS: "play_count",
             TrackColumn.BITRATE: "bitrate",
             TrackColumn.FILE_TYPE: "file_type",
+            TrackColumn.PURCHASED: "purchased",
             TrackColumn.TAGS: "tags",
             TrackColumn.PLAYLISTS: "playlists",
             TrackColumn.FOLDER: "folder",
@@ -2389,6 +2479,7 @@ class TracksTableWidget(QTableView):
                 TrackColumn.TIME,
                 TrackColumn.PLAYS,
                 TrackColumn.BITRATE,
+                TrackColumn.PURCHASED,
             ):
                 self.current_sort_order = Qt.SortOrder.DescendingOrder
             else:

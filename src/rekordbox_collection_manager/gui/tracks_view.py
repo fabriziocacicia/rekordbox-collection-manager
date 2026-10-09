@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QComboBox,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -22,10 +23,21 @@ from PySide6.QtWidgets import (
 )
 from sqlalchemy.engine import Engine
 
+from rekordbox_collection_manager.edit_play_count import (
+    fetch_all_playlists,
+    fetch_all_tags,
+    fetch_distinct_file_types,
+    fetch_distinct_keys,
+)
 from rekordbox_collection_manager.gui.theme import (
+    COLOR_BG_INPUT,
+    COLOR_BORDER,
+    COLOR_BORDER_FOCUS,
     COLOR_TEXT_MUTED,
+    COLOR_TEXT_PRIMARY,
     COLOR_TEXT_SECONDARY,
 )
+from rekordbox_collection_manager.gui.multi_select_filter import MultiSelectSearchFilter
 from rekordbox_collection_manager.gui.track_detail_view import TrackDetailView
 from rekordbox_collection_manager.gui.track_table import (
     DEFAULT_COLLECTION_COLUMNS,
@@ -80,52 +92,178 @@ class TracksView(QWidget):
         main_layout.setContentsMargins(16, 16, 16, 16)
         main_layout.setSpacing(12)
 
-        # 1. Search and Filter Toolbar
-        toolbar = QHBoxLayout()
-        toolbar.setSpacing(10)
+        # 1. Search and Action Toolbar (Top Row)
+        top_toolbar = QHBoxLayout()
+        top_toolbar.setSpacing(10)
 
         self.tracks_header_label = QLabel("TRACKS")
         self.tracks_header_label.setStyleSheet(
             f"color: {COLOR_TEXT_MUTED}; font-size: 11px; font-weight: 700; letter-spacing: 0.8px;"
         )
-        toolbar.addWidget(self.tracks_header_label)
+        top_toolbar.addWidget(self.tracks_header_label)
 
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("🔍 Search title, artist, key, tags, playlist, or filename...")
         self.search_input.setClearButtonEnabled(True)
         self.search_input.textChanged.connect(self._on_search_text_changed)
-        toolbar.addWidget(self.search_input, stretch=3)
-
-        self.filter_combo = QComboBox()
-        self.filter_combo.addItems(["All Tracks", "Played Tracks (> 0)", "Unplayed (0)"])
-        self.filter_combo.currentIndexChanged.connect(lambda _: self._execute_search())
-        toolbar.addWidget(self.filter_combo, stretch=1)
-
-        self.limit_combo = QComboBox()
-        self.limit_combo.currentIndexChanged.connect(lambda _: self._execute_search())
-        self.update_limit_options(0)  # Initially hidden until total collection size is loaded
-        toolbar.addWidget(self.limit_combo, stretch=1)
+        top_toolbar.addWidget(self.search_input, stretch=3)
 
         self.search_btn = QPushButton("Search")
         self.search_btn.clicked.connect(self._execute_search)
-        toolbar.addWidget(self.search_btn)
+        top_toolbar.addWidget(self.search_btn)
+
+        self.btn_toggle_filters = QPushButton("🎛️ Filters")
+        self.btn_toggle_filters.setToolTip("Toggle filter row visibility")
+        self.btn_toggle_filters.setStyleSheet(
+            f"QPushButton {{ background-color: {COLOR_BG_INPUT}; color: {COLOR_TEXT_SECONDARY}; "
+            f"border: 1px solid {COLOR_BORDER}; border-radius: 4px; padding: 4px 10px; font-size: 11px; font-weight: 600; }} "
+            f"QPushButton:hover {{ border-color: {COLOR_BORDER_FOCUS}; color: {COLOR_TEXT_PRIMARY}; }}"
+        )
+        self.btn_toggle_filters.clicked.connect(self._toggle_filter_panel)
+        top_toolbar.addWidget(self.btn_toggle_filters)
 
         self.copy_btn = QPushButton("📋 Copy Tracklist")
         self.copy_btn.setToolTip("Copy formatted tracklist to clipboard (e.g. 01. Artist - Title)")
         self.copy_btn.clicked.connect(self._on_copy_tracklist)
-        toolbar.addWidget(self.copy_btn)
+        top_toolbar.addWidget(self.copy_btn)
 
         self.btn_new_tag = QPushButton("🏷️ ＋ New Tag...")
         self.btn_new_tag.setToolTip("Create a new My Tag in the database (stages on selected track if one is selected)")
         self.btn_new_tag.clicked.connect(self._on_create_tag_clicked)
-        toolbar.addWidget(self.btn_new_tag)
+        top_toolbar.addWidget(self.btn_new_tag)
 
         self.btn_new_playlist = QPushButton("📑 ＋ New Playlist...")
         self.btn_new_playlist.setToolTip("Create a new Playlist in the database (stages on selected track if one is selected)")
         self.btn_new_playlist.clicked.connect(self._on_create_playlist_clicked)
-        toolbar.addWidget(self.btn_new_playlist)
+        top_toolbar.addWidget(self.btn_new_playlist)
 
-        main_layout.addLayout(toolbar)
+        main_layout.addLayout(top_toolbar)
+
+        # 2. Dedicated Filtering Row Panel
+        self.filter_panel = QFrame()
+        self.filter_panel.setObjectName("filterPanel")
+        self.filter_panel.setStyleSheet(
+            f"QFrame#filterPanel {{ background-color: #14141a; border: 1px solid {COLOR_BORDER}; "
+            "border-radius: 6px; }"
+        )
+        filter_layout = QHBoxLayout(self.filter_panel)
+        filter_layout.setContentsMargins(10, 6, 10, 6)
+        filter_layout.setSpacing(8)
+
+        lbl_filter = QLabel("🎛️ FILTERS:")
+        lbl_filter.setStyleSheet(
+            f"color: {COLOR_TEXT_MUTED}; font-size: 10px; font-weight: 700; letter-spacing: 0.6px;"
+        )
+        filter_layout.addWidget(lbl_filter)
+
+        # Combo styling helper templates
+        self._filter_style_base = (
+            f"QComboBox {{ background-color: {COLOR_BG_INPUT}; color: {COLOR_TEXT_PRIMARY}; "
+            f"border: 1px solid {COLOR_BORDER}; border-radius: 4px; padding: 2px 8px; font-size: 11px; min-height: 24px; }} "
+            f"QComboBox:hover {{ border-color: {COLOR_BORDER_FOCUS}; }} "
+            "QComboBox::drop-down { border: none; width: 14px; }"
+        )
+        self._filter_style_active = (
+            "QComboBox { background-color: rgba(56, 189, 248, 0.12); color: #38bdf8; "
+            "border: 1px solid #38bdf8; border-radius: 4px; padding: 2px 8px; font-size: 11px; font-weight: 600; min-height: 24px; } "
+            "QComboBox::drop-down { border: none; width: 14px; }"
+        )
+
+        # Purchase Filter (User Feature Request)
+        self.purchase_combo = QComboBox()
+        self.purchase_combo.addItem("All Statuses", userData="all")
+        self.purchase_combo.addItem("📥 Downloaded (Exclude Purchased)", userData="downloaded")
+        self.purchase_combo.addItem("🛒 Purchased Only", userData="purchased")
+        self.purchase_combo.setStyleSheet(self._filter_style_base)
+        self.purchase_combo.setToolTip("Filter by purchase status (inside Purchased folder vs Downloaded)")
+        self.purchase_combo.currentIndexChanged.connect(self._on_filter_changed)
+        filter_layout.addWidget(self.purchase_combo)
+
+        # Play Count Filter
+        self.play_filter_combo = QComboBox()
+        self.play_filter_combo.addItem("All Tracks", userData="all")
+        self.play_filter_combo.addItem("Played Tracks (> 0)", userData="played")
+        self.play_filter_combo.addItem("Unplayed (0)", userData="unplayed")
+        self.play_filter_combo.setStyleSheet(self._filter_style_base)
+        self.play_filter_combo.setToolTip("Filter by play count")
+        self.play_filter_combo.currentIndexChanged.connect(self._on_filter_changed)
+        self.filter_combo = self.play_filter_combo  # Backwards compatibility alias
+        filter_layout.addWidget(self.play_filter_combo)
+
+        # Audio Format Filter (Multi-select with live search)
+        self.format_filter_widget = MultiSelectSearchFilter(
+            title="Format", icon="🎵", enable_match_mode=False, parent=self
+        )
+        self.format_filter_widget.filter_changed.connect(self._on_filter_changed)
+        self.format_filter_combo = self.format_filter_widget  # Backwards compatibility alias
+        filter_layout.addWidget(self.format_filter_widget)
+
+        # Musical Key Filter (Multi-select with live search)
+        self.key_filter_widget = MultiSelectSearchFilter(
+            title="Key", icon="🎹", enable_match_mode=False, parent=self
+        )
+        self.key_filter_widget.filter_changed.connect(self._on_filter_changed)
+        self.key_filter_combo = self.key_filter_widget  # Backwards compatibility alias
+        filter_layout.addWidget(self.key_filter_widget)
+
+        # BPM Range Filter
+        self.bpm_filter_combo = QComboBox()
+        self.bpm_filter_combo.addItem("All BPM", userData=(None, None))
+        self.bpm_filter_combo.addItem("< 120 BPM", userData=(0.0, 119.9))
+        self.bpm_filter_combo.addItem("120 – 124 BPM", userData=(120.0, 124.9))
+        self.bpm_filter_combo.addItem("124 – 128 BPM", userData=(124.0, 128.9))
+        self.bpm_filter_combo.addItem("128 – 132 BPM", userData=(128.0, 132.9))
+        self.bpm_filter_combo.addItem("> 132 BPM", userData=(133.0, 999.0))
+        self.bpm_filter_combo.setStyleSheet(self._filter_style_base)
+        self.bpm_filter_combo.setToolTip("Filter by tempo (BPM)")
+        self.bpm_filter_combo.currentIndexChanged.connect(self._on_filter_changed)
+        filter_layout.addWidget(self.bpm_filter_combo)
+
+        # Tag Filter (Multi-select with live search & ANY/ALL match mode)
+        self.tag_filter_widget = MultiSelectSearchFilter(
+            title="Tags", icon="🏷️", enable_match_mode=True, parent=self
+        )
+        self.tag_filter_widget.filter_changed.connect(self._on_filter_changed)
+        self.tag_filter_combo = self.tag_filter_widget  # Backwards compatibility alias
+        filter_layout.addWidget(self.tag_filter_widget)
+
+        # Playlist Filter (Multi-select with live search & ANY/ALL match mode)
+        self.playlist_filter_widget = MultiSelectSearchFilter(
+            title="Playlists", icon="📁", enable_match_mode=True, parent=self
+        )
+        self.playlist_filter_widget.filter_changed.connect(self._on_filter_changed)
+        self.playlist_filter_combo = self.playlist_filter_widget  # Backwards compatibility alias
+        filter_layout.addWidget(self.playlist_filter_widget)
+
+        # Limit Dropdown
+        self.limit_combo = QComboBox()
+        self.limit_combo.setStyleSheet(self._filter_style_base)
+        self.limit_combo.setToolTip("Result count limit")
+        self.limit_combo.currentIndexChanged.connect(lambda _: self._execute_search())
+        self.update_limit_options(0)  # Initially hidden until total collection size is loaded
+        filter_layout.addWidget(self.limit_combo)
+
+        filter_layout.addStretch(1)
+
+        # Active Filters Counter Badge & Reset Button
+        self.active_filters_badge = QLabel("")
+        self.active_filters_badge.setStyleSheet(
+            "color: #38bdf8; font-size: 11px; font-weight: 600; padding: 0 4px;"
+        )
+        filter_layout.addWidget(self.active_filters_badge)
+
+        self.btn_reset_filters = QPushButton("✕ Clear Filters")
+        self.btn_reset_filters.setToolTip("Reset all filters to defaults")
+        self.btn_reset_filters.setStyleSheet(
+            "QPushButton { background-color: transparent; color: #f87171; border: 1px solid rgba(248, 113, 113, 0.4); "
+            "border-radius: 4px; padding: 2px 8px; font-size: 11px; font-weight: 600; min-height: 24px; } "
+            "QPushButton:hover { background-color: rgba(248, 113, 113, 0.15); border-color: #f87171; color: #ffffff; }"
+        )
+        self.btn_reset_filters.clicked.connect(self._on_reset_filters)
+        self.btn_reset_filters.setVisible(False)
+        filter_layout.addWidget(self.btn_reset_filters)
+
+        main_layout.addWidget(self.filter_panel)
 
         # 2. Main Tracks Table (13 Columns via shared TracksTableWidget)
         table_config = TrackTableConfig(
@@ -209,7 +347,106 @@ class TracksView(QWidget):
         self.db_path = db_path
         self.table.set_engine(engine)
         self.update_limit_options(total_tracks)
+        self.populate_filter_options()
         self._execute_search()
+
+    def _toggle_filter_panel(self) -> None:
+        """Toggle visibility of the secondary filtering toolbar."""
+        is_vis = self.filter_panel.isVisible()
+        self.filter_panel.setVisible(not is_vis)
+
+    def _on_filter_changed(self) -> None:
+        """Handle any filter combo change: update active styling and query."""
+        self._update_all_filter_styles()
+        self._execute_search()
+
+    def _update_all_filter_styles(self) -> None:
+        """Highlight active filters with an accent border and show badge/clear button."""
+        combos = [
+            self.purchase_combo,
+            self.play_filter_combo,
+            self.bpm_filter_combo,
+        ]
+        active_count = 0
+        for c in combos:
+            if c.currentIndex() > 0:
+                c.setStyleSheet(self._filter_style_active)
+                active_count += 1
+            else:
+                c.setStyleSheet(self._filter_style_base)
+
+        if self.format_filter_widget.is_active():
+            active_count += 1
+        if self.key_filter_widget.is_active():
+            active_count += 1
+        if self.tag_filter_widget.is_active():
+            active_count += 1
+        if self.playlist_filter_widget.is_active():
+            active_count += 1
+
+        if active_count > 0:
+            self.active_filters_badge.setText(f"{active_count} active")
+            self.btn_reset_filters.setVisible(True)
+            self.btn_toggle_filters.setText(f"🎛️ Filters ({active_count})")
+        else:
+            self.active_filters_badge.setText("")
+            self.btn_reset_filters.setVisible(False)
+            self.btn_toggle_filters.setText("🎛️ Filters")
+
+    def _on_reset_filters(self) -> None:
+        """Reset all filtering dropdowns to default ('All') in one operation."""
+        combos = [
+            self.purchase_combo,
+            self.play_filter_combo,
+            self.bpm_filter_combo,
+        ]
+        for c in combos:
+            c.blockSignals(True)
+            c.setCurrentIndex(0)
+            c.blockSignals(False)
+
+        self.format_filter_widget.clear_selection()
+        self.key_filter_widget.clear_selection()
+        self.tag_filter_widget.clear_selection()
+        self.playlist_filter_widget.clear_selection()
+
+        self._update_all_filter_styles()
+        self._execute_search()
+
+    def populate_filter_options(self) -> None:
+        """Populate Format, Key, Tag, and Playlist filter dropdowns dynamically from the active database."""
+        if not self.engine:
+            return
+
+        # 1. Formats (only audio file formats present in active database)
+        try:
+            formats = fetch_distinct_file_types(self.engine)
+            self.format_filter_widget.set_items(formats)
+        except Exception:
+            pass
+
+        # 2. Keys (only musical keys present on tracks in active database)
+        try:
+            keys = fetch_distinct_keys(self.engine)
+            self.key_filter_widget.set_items(keys)
+        except Exception:
+            pass
+
+        # 3. Tags
+        try:
+            tags = fetch_all_tags(self.engine)
+            tag_names = [t.get("name") if isinstance(t, dict) else str(t) for t in tags]
+            self.tag_filter_widget.set_items([n for n in tag_names if n])
+        except Exception:
+            pass
+
+        # 4. Playlists
+        try:
+            playlists = fetch_all_playlists(self.engine)
+            pl_names = [p.get("name") if isinstance(p, dict) else str(p) for p in playlists]
+            self.playlist_filter_widget.set_items([n for n in pl_names if n])
+        except Exception:
+            pass
 
     def _on_search_text_changed(self, text: str) -> None:
         self.search_debounce_timer.start()
@@ -285,14 +522,17 @@ class TracksView(QWidget):
             limit_data = self.limit_combo.currentData()
             limit = int(limit_data) if (limit_data is not None and limit_data > 0) else None
 
-        # Filter mode
-        filter_mode_idx = self.filter_combo.currentIndex()
-        if filter_mode_idx == 1:
-            play_filter = "played"
-        elif filter_mode_idx == 2:
-            play_filter = "unplayed"
-        else:
-            play_filter = "all"
+        # Filter mode from dropdowns
+        play_filter = self.play_filter_combo.currentData() or "all"
+        purchased_filter = self.purchase_combo.currentData() or "all"
+        format_filter = self.format_filter_widget.get_selected()
+        key_filter = self.key_filter_widget.get_selected()
+        bpm_data = self.bpm_filter_combo.currentData()
+        bpm_min, bpm_max = bpm_data if isinstance(bpm_data, tuple) else (None, None)
+        tag_filter = self.tag_filter_widget.get_selected()
+        tag_match_mode = self.tag_filter_widget.get_match_mode()
+        playlist_filter = self.playlist_filter_widget.get_selected()
+        playlist_match_mode = self.playlist_filter_widget.get_match_mode()
 
         sort_order_str = "desc" if self.current_sort_order == Qt.SortOrder.DescendingOrder else "asc"
         stop_worker(self.active_search_worker)
@@ -305,6 +545,15 @@ class TracksView(QWidget):
             sort_by=self.current_sort_field,
             sort_order=sort_order_str,
             play_count_filter=play_filter,
+            purchased_filter=purchased_filter,
+            key_filter=key_filter,
+            bpm_min=bpm_min,
+            bpm_max=bpm_max,
+            file_type_filter=format_filter,
+            tag_filter=tag_filter,
+            playlist_filter=playlist_filter,
+            tag_match_mode=tag_match_mode,
+            playlist_match_mode=playlist_match_mode,
             parent=self,
         )
         self.active_search_worker.success.connect(self._on_search_success)
@@ -318,13 +567,27 @@ class TracksView(QWidget):
 
         total_cnt = self.total_collection_tracks or len(records)
         disp_cnt = len(records)
+
+        # Informative filter breakdown in status text
+        p_filter = self.purchase_combo.currentData() or "all"
+        info_extras = []
+        if p_filter == "downloaded":
+            diff = total_cnt - disp_cnt
+            if diff > 0 and not query:
+                info_extras.append(f"{diff} purchased excluded")
+            else:
+                info_extras.append("purchased excluded")
+        elif p_filter == "purchased":
+            info_extras.append("purchased only")
+
+        extra_str = f" • {', '.join(info_extras)}" if info_extras else ""
         if query:
             self.status_label.setText(
-                f"Showing {disp_cnt} tracks matching '{query}' (Total collection: {total_cnt})"
+                f"Showing {disp_cnt} tracks matching '{query}'{extra_str} (Total collection: {total_cnt})"
             )
         else:
             self.status_label.setText(
-                f"Showing {disp_cnt} tracks (Total collection: {total_cnt})"
+                f"Showing {disp_cnt} tracks{extra_str} (Total collection: {total_cnt})"
             )
 
     def _on_search_error(self, err_msg: str) -> None:
@@ -417,7 +680,7 @@ class TracksView(QWidget):
         if hasattr(self, "search_debounce_timer"):
             self.search_debounce_timer.stop()
         if getattr(self, "active_search_worker", None):
-            stop_worker(self.active_search_worker, wait_ms=100)
+            stop_worker(self.active_search_worker, wait_ms=1000)
             self.active_search_worker = None
         if hasattr(self, "detail_view") and hasattr(self.detail_view, "cleanup"):
             self.detail_view.cleanup()

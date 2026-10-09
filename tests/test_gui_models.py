@@ -1306,6 +1306,113 @@ class TestTracksView(unittest.TestCase):
             mock_reveal.assert_called_once_with("/Music/Titanium.mp3")
             self.assertIn("Revealed in Finder", self.view.status_label.text())
 
+    def test_tracks_view_format_multi_select_filter(self):
+        self.view.format_filter_widget.set_items(["AIFF", "MP3", "WAV"])
+        self.assertFalse(self.view.format_filter_widget.is_active())
+        self.assertEqual(self.view.format_filter_widget.button.text(), "🎵 Format: All ▾")
+
+        # Select AIFF
+        self.view.format_filter_widget.set_selected(["AIFF"])
+        self.assertTrue(self.view.format_filter_widget.is_active())
+        self.assertEqual(self.view.format_filter_widget.get_selected(), ["AIFF"])
+        self.assertEqual(self.view.format_filter_widget.button.text(), "🎵 Format: AIFF ▾")
+
+        # Multi-select AIFF and MP3
+        self.view.format_filter_widget.set_selected(["AIFF", "MP3"])
+        self.assertTrue(self.view.format_filter_widget.is_active())
+        self.assertEqual(self.view.format_filter_widget.get_selected(), ["AIFF", "MP3"])
+        self.assertEqual(self.view.format_filter_widget.button.text(), "🎵 Format (2) ▾")
+
+        # Reset filters clears format selection
+        self.view._on_reset_filters()
+        self.assertFalse(self.view.format_filter_widget.is_active())
+        self.assertEqual(self.view.format_filter_widget.get_selected(), [])
+        self.assertEqual(self.view.format_filter_widget.button.text(), "🎵 Format: All ▾")
+
+    def test_tracks_view_format_filter_dynamically_populated_from_db(self):
+        # Create an in-memory DB with only AIFF and MP3 tracks (no FLAC, WAV, OGG, etc.)
+        engine = create_engine("sqlite:///:memory:")
+        with engine.begin() as conn:
+            conn.exec_driver_sql("""
+                CREATE TABLE djmdContent (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    Title VARCHAR(255),
+                    FileType INTEGER,
+                    FileNameL VARCHAR(255),
+                    rb_local_deleted INTEGER DEFAULT 0
+                );
+            """)
+            conn.exec_driver_sql("""
+                INSERT INTO djmdContent (ID, Title, FileType, FileNameL, rb_local_deleted)
+                VALUES 
+                    ('1', 'Track 1', 1, 'track1.mp3', 0),
+                    ('2', 'Track 2', 12, 'track2.aiff', 0);
+            """)
+
+        self.view.engine = engine
+        self.view.populate_filter_options()
+
+        # Check that ONLY formats from DB are available in the popup
+        available_formats = self.view.format_filter_widget.popup._all_items
+        self.assertEqual(available_formats, ["AIFF", "MP3"])
+        # Ensure generic/prefixed formats not in DB (FLAC, WAV, OGG, ALAC, AAC, etc.) are NOT present
+        for unpresent_fmt in ["FLAC", "WAV", "OGG", "ALAC", "AAC", "M4A"]:
+            self.assertNotIn(unpresent_fmt, available_formats)
+
+    def test_tracks_view_key_filter_dynamically_populated_from_db(self):
+        # Create an in-memory DB with keys in djmdKey, but only a subset used in djmdContent
+        engine = create_engine("sqlite:///:memory:")
+        with engine.begin() as conn:
+            conn.exec_driver_sql("""
+                CREATE TABLE djmdKey (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    ScaleName VARCHAR(255)
+                );
+            """)
+            conn.exec_driver_sql("""
+                INSERT INTO djmdKey (ID, ScaleName)
+                VALUES ('k1', '8A'), ('k2', '11B'), ('k3', '4A');
+            """)
+            conn.exec_driver_sql("""
+                CREATE TABLE djmdContent (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    Title VARCHAR(255),
+                    KeyID VARCHAR(255),
+                    rb_local_deleted INTEGER DEFAULT 0
+                );
+            """)
+            conn.exec_driver_sql("""
+                INSERT INTO djmdContent (ID, Title, KeyID, rb_local_deleted)
+                VALUES 
+                    ('1', 'Track 1', 'k1', 0),
+                    ('2', 'Track 2', 'k2', 0);
+            """)
+
+        self.view.engine = engine
+        self.view.populate_filter_options()
+
+        # Check that ONLY keys from active tracks in DB are available in the popup
+        available_keys = self.view.key_filter_widget.popup._all_items
+        self.assertEqual(available_keys, ["11B", "8A"])
+        # Ensure generic/unused keys from djmdKey (e.g. 4A) are NOT present
+        self.assertNotIn("4A", available_keys)
+        # Ensure no "Key: " prefix exists on items
+        for k in available_keys:
+            self.assertFalse(k.startswith("Key: "))
+
+        # Test multi-selection
+        self.view.key_filter_widget.set_selected(["8A", "11B"])
+        self.assertTrue(self.view.key_filter_widget.is_active())
+        self.assertEqual(set(self.view.key_filter_widget.get_selected()), {"8A", "11B"})
+        self.assertEqual(self.view.key_filter_widget.button.text(), "🎹 Key (2) ▾")
+
+        # Reset clears key filter
+        self.view._on_reset_filters()
+        self.assertFalse(self.view.key_filter_widget.is_active())
+        self.assertEqual(self.view.key_filter_widget.get_selected(), [])
+        self.assertEqual(self.view.key_filter_widget.button.text(), "🎹 Key: All ▾")
+
+
 
 
 class TestMainWindowDbBadge(unittest.TestCase):
@@ -2187,6 +2294,79 @@ class TestTableChipInteractions(unittest.TestCase):
 
         self.assertIn("Festival Mainstage", view.table.records[0]["playlists"])
         view.close()
+
+    def test_multi_select_search_filter(self):
+        from rekordbox_collection_manager.gui.multi_select_filter import MultiSelectSearchFilter
+
+        widget = MultiSelectSearchFilter(title="Tags", icon="🏷️", enable_match_mode=True)
+        self.assertEqual(widget.button.text(), "🏷️ Tags: All ▾")
+        self.assertFalse(widget.is_active())
+
+        # Set items
+        items = ["Acid House", "Afro House", "Deep House", "Tech House"]
+        widget.set_items(items)
+        self.assertEqual(widget.popup.list_widget.count(), 4)
+
+        # Search filter in popup
+        widget.popup.search_input.setText("afro")
+        widget.popup._apply_filter()
+        visible = [
+            widget.popup.list_widget.item(i).text()
+            for i in range(widget.popup.list_widget.count())
+            if not widget.popup.list_widget.item(i).isHidden()
+        ]
+        self.assertEqual(visible, ["Afro House"])
+
+        # Check item
+        widget.set_selected(["Afro House"], match_mode="any")
+        self.assertTrue(widget.is_active())
+        self.assertEqual(widget.get_selected(), ["Afro House"])
+        self.assertEqual(widget.button.text(), "🏷️ Tags: Afro House ▾")
+
+        # Multi-select & Match Mode
+        widget.set_selected(["Afro House", "Tech House"], match_mode="any")
+        self.assertEqual(widget.get_match_mode(), "any")
+        self.assertEqual(widget.button.text(), "🏷️ Tags (2 [ANY]) ▾")
+
+        widget.popup._set_match_mode("all")
+        self.assertEqual(widget.get_match_mode(), "all")
+        self.assertEqual(widget.button.text(), "🏷️ Tags (2 [ALL]) ▾")
+
+        # Clear selection
+        widget.clear_selection()
+        self.assertFalse(widget.is_active())
+        self.assertEqual(widget.get_selected(), [])
+        self.assertEqual(widget.button.text(), "🏷️ Tags: All ▾")
+
+        # Test clicking behavior (never auto-unchecks)
+        from PySide6.QtGui import QMouseEvent
+        from PySide6.QtCore import QPoint, QEvent
+
+        widget.popup.search_input.clear()
+        widget.popup._apply_filter()
+        widget.popup.show()
+        item0 = widget.popup.list_widget.item(0)
+        self.assertEqual(item0.checkState(), Qt.CheckState.Unchecked)
+
+        vp = widget.popup.list_widget.viewport()
+        # 1. Click on checkbox (x=10, y=14) -> Checks
+        p1 = QPoint(10, 14)
+        press1 = QMouseEvent(QEvent.Type.MouseButtonPress, p1, p1, Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
+        release1 = QMouseEvent(QEvent.Type.MouseButtonRelease, p1, p1, Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier)
+        QApplication.sendEvent(vp, press1)
+        QApplication.sendEvent(vp, release1)
+        self.assertEqual(item0.checkState(), Qt.CheckState.Checked)
+
+        # 2. Click on row text (x=60, y=14) -> Unchecks
+        p2 = QPoint(60, 14)
+        press2 = QMouseEvent(QEvent.Type.MouseButtonPress, p2, p2, Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
+        release2 = QMouseEvent(QEvent.Type.MouseButtonRelease, p2, p2, Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier)
+        QApplication.sendEvent(vp, press2)
+        QApplication.sendEvent(vp, release2)
+        self.assertEqual(item0.checkState(), Qt.CheckState.Unchecked)
+
+        widget.popup.close()
+        widget.close()
 
 
 if __name__ == "__main__":

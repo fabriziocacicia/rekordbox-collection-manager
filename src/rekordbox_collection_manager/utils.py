@@ -948,6 +948,40 @@ def resolve_file_and_folder_paths(
     return ("—", "", fn or "—", fn or "")
 
 
+def is_purchased_path(path: Optional[str]) -> bool:
+    """Determine if a file or folder path contains a folder named 'Purchased' in its folder tree.
+
+    A track is deemed purchased if any directory component in its containing
+    folder hierarchy is named 'Purchased' (case-insensitive), distinguishing it
+    from downloaded or other tracks.
+    """
+    if not path or path == "—":
+        return False
+    norm = os.path.normpath(str(path))
+    parts = norm.replace("\\", "/").split("/")
+    # Exclude filename at the end if it has an extension
+    if len(parts) > 1 and ("." in parts[-1] and not parts[-1].startswith(".")):
+        dir_parts = parts[:-1]
+    else:
+        dir_parts = parts
+    return any(p.strip().lower() == "purchased" for p in dir_parts)
+
+
+def is_purchased_track(track: Any) -> bool:
+    """Check if a track dictionary or path represents a purchased track."""
+    if isinstance(track, str):
+        return is_purchased_path(track)
+    if not isinstance(track, Mapping):
+        return False
+    if "is_purchased" in track:
+        return bool(track["is_purchased"])
+    for key in ("file_path", "folder_dir", "folder_path", "FolderPath", "FilePath", "FileNameL"):
+        val = track.get(key)
+        if val and is_purchased_path(str(val)):
+            return True
+    return False
+
+
 def build_track_record(
     row: Mapping[str, Any],
     extra: Optional[Dict[str, Any]] = None,
@@ -1000,6 +1034,8 @@ def build_track_record(
     except (ValueError, TypeError):
         year_int = 0
 
+    purchased = is_purchased_path(raw_fp) or is_purchased_path(f_dir) or is_purchased_path(f_full)
+
     record: Dict[str, Any] = {
         "id": content_id,
         "content_id": content_id,
@@ -1019,6 +1055,7 @@ def build_track_record(
         "bitrate": int(row.get("BitRate") or 0),
         "raw_file_type": row.get("FileType"),
         "file_type": file_type_str,
+        "is_purchased": purchased,
         "tags": tags_list,
         "playlists": playlists_list,
         "folder": f_name,

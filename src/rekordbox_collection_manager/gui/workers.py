@@ -1,7 +1,7 @@
 """Background worker threads for non-blocking database operations."""
 
 import threading
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Sequence, Union
 from PySide6.QtCore import QObject, QThread, Signal
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
@@ -92,7 +92,10 @@ def stop_worker(worker: Optional[Any], wait_ms: int = 50) -> None:
         if hasattr(worker, "quit"):
             worker.quit()
         if hasattr(worker, "wait"):
-            worker.wait(wait_ms)
+            if not worker.wait(wait_ms):
+                if hasattr(worker, "terminate"):
+                    worker.terminate()
+                    worker.wait(500)
 
 
 def wait_for_retired_workers(timeout_ms: int = 1000) -> None:
@@ -185,6 +188,15 @@ class TrackSearchWorker(QThread):
         sort_order: str = "asc",
         play_count_filter: Optional[str] = "all",
         exclude_streaming: bool = True,
+        purchased_filter: Optional[str] = "all",
+        key_filter: Optional[Union[str, Sequence[str]]] = None,
+        bpm_min: Optional[float] = None,
+        bpm_max: Optional[float] = None,
+        file_type_filter: Optional[Union[str, Sequence[str]]] = None,
+        tag_filter: Optional[Union[str, Sequence[str]]] = None,
+        playlist_filter: Optional[Union[str, Sequence[str]]] = None,
+        tag_match_mode: str = "any",
+        playlist_match_mode: str = "any",
         parent: Optional[Any] = None,
     ):
         super().__init__(parent)
@@ -195,6 +207,15 @@ class TrackSearchWorker(QThread):
         self.sort_order = sort_order
         self.play_count_filter = play_count_filter
         self.exclude_streaming = exclude_streaming
+        self.purchased_filter = purchased_filter
+        self.key_filter = key_filter
+        self.bpm_min = bpm_min
+        self.bpm_max = bpm_max
+        self.file_type_filter = file_type_filter
+        self.tag_filter = tag_filter
+        self.playlist_filter = playlist_filter
+        self.tag_match_mode = tag_match_mode
+        self.playlist_match_mode = playlist_match_mode
 
     def run(self) -> None:
         try:
@@ -208,6 +229,15 @@ class TrackSearchWorker(QThread):
                 sort_order=self.sort_order,
                 play_count_filter=self.play_count_filter,
                 exclude_streaming=self.exclude_streaming,
+                purchased_filter=self.purchased_filter,
+                key_filter=self.key_filter,
+                bpm_min=self.bpm_min,
+                bpm_max=self.bpm_max,
+                file_type_filter=self.file_type_filter,
+                tag_filter=self.tag_filter,
+                playlist_filter=self.playlist_filter,
+                tag_match_mode=self.tag_match_mode,
+                playlist_match_mode=self.playlist_match_mode,
             )
             if self.isInterruptionRequested():
                 return

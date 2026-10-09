@@ -5,13 +5,14 @@ import os
 import sys
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import questionary
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from rekordbox_collection_manager.utils import (
+    EXTENSION_TO_FILE_TYPE,
     _resolve_tag_matching_ids,
     build_exclude_streaming_clause,
     build_track_record,
@@ -81,13 +82,24 @@ def search_tracks(
     play_count_filter: Optional[str] = "all",
     content_id: Optional[str] = None,
     exclude_streaming: bool = True,
+    purchased_filter: Optional[str] = "all",
+    key_filter: Optional[Union[str, Sequence[str]]] = None,
+    bpm_min: Optional[float] = None,
+    bpm_max: Optional[float] = None,
+    file_type_filter: Optional[Union[str, Sequence[str]]] = None,
+    tag_filter: Optional[Union[str, Sequence[str]]] = None,
+    playlist_filter: Optional[Union[str, Sequence[str]]] = None,
+    tag_match_mode: str = "any",
+    playlist_match_mode: str = "any",
 ) -> List[Dict[str, Any]]:
-    """Search for tracks matching query string with rich metadata support.
+    """Search for tracks matching query string with rich metadata and filter support.
 
     Dynamically queries djmdContent (or generic content table) and joins
     artist, album, genre, key, tags, and real playlists when present.
-    Supports text searching, play count filtering ('all', 'played', 'unplayed'),
-    streaming track exclusion (Spotify, Apple Music, etc.), and column sorting.
+    Supports text searching, purchased filtering ('all', 'purchased', 'downloaded'),
+    play count filtering ('all', 'played', 'unplayed'), musical key, tempo/BPM range,
+    file format, multi-tag filtering with match mode ('any'/'all'), multi-playlist
+    filtering with match mode ('any'/'all'), streaming exclusion, and column sorting.
     """
     if table_name is None:
         table_name = detect_content_table(engine)
@@ -244,6 +256,172 @@ def search_tracks(
             elif play_count_filter == "unplayed":
                 play_filter = f"AND ({play_col} = 0 OR {play_col} IS NULL)"
 
+            # Purchased filter (inside folder named Purchased)
+            purchased_sql = """(
+                c.FolderPath LIKE '%/Purchased/%' 
+                OR c.FolderPath LIKE '%/Purchased' 
+                OR c.FolderPath LIKE '%\\Purchased\\%' 
+                OR c.FolderPath LIKE '%\\Purchased'
+            )"""
+            purchased_clause = ""
+            p_mode = str(purchased_filter or "all").strip().lower()
+            if p_mode == "purchased":
+                purchased_clause = f"AND {purchased_sql}"
+            elif p_mode in ("downloaded", "unpurchased", "non_purchased", "exclude_purchased"):
+                purchased_clause = f"AND NOT {purchased_sql}"
+
+            # Key filter (supports single or multi-key selection e.g. ["8A", "8B"] or "8A")
+            key_clause = ""
+            key_params: Dict[str, Any] = {}
+            if key_filter:
+                k_list: List[str] = []
+                if isinstance(key_filter, (list, tuple, set)):
+                    k_list = [
+                        str(k).strip()
+                        for k in key_filter
+                        if str(k).strip() and str(k).strip().lower() not in ("all", "all keys", "")
+                    ]
+                else:
+                    k_str = str(key_filter).strip()
+                    if k_str and k_str.lower() not in ("all", "all keys", ""):
+                        k_list = [k_str]
+
+                if k_list and "djmdKey" in existing_tables and "KeyID" in cols:
+                    k_placeholders = [f":key_f_{i}" for i in range(len(k_list))]
+                    for i, k_val in enumerate(k_list):
+                        key_params[f"key_f_{i}"] = k_val
+                    key_clause = f"AND k.ScaleName IN ({', '.join(k_placeholders)})"
+
+            # BPM filter
+            bpm_clause = ""
+            if bpm_min is not None and bpm_min > 0 and "BPM" in cols:
+                bpm_clause += " AND c.BPM >= :bpm_min_int"
+            if bpm_max is not None and bpm_max > 0 and "BPM" in cols:
+                bpm_clause += " AND c.BPM <= :bpm_max_int"
+
+            # File type filter (supports single or multi-format selection e.g. ["AIFF", "MP3"])
+            file_type_clause = ""
+            file_type_params: Dict[str, Any] = {}
+            if file_type_filter:
+                ft_list: List[str] = []
+                if isinstance(file_type_filter, (list, tuple, set)):
+                    ft_list = [
+                        str(f).strip().lower().lstrip(".")
+                        for f in file_type_filter
+                        if str(f).strip() and str(f).strip().lower() not in ("all", "all formats", "")
+                    ]
+                else:
+                    f_str = str(file_type_filter).strip().lower().lstrip(".")
+                    if f_str and f_str not in ("all", "all formats", ""):
+                        ft_list = [f_str]
+
+                if ft_list:
+                    ft_conds = []
+                    for idx, ext in enumerate(ft_list):
+                        ext_variants = [ext]
+                        if ext == "aiff":
+                            ext_variants = ["aiff", "aif"]
+                        elif ext == "aif":
+                            ext_variants = ["aif", "aiff"]
+                        elif ext == "wav":
+                            ext_variants = ["wav", "wave"]
+
+                        sub_conds = []
+                        for v_idx, variant in enumerate(ext_variants):
+                            param_name = f"ft_ext_{idx}_{v_idx}"
+                            sub_conds.append(
+                                f"(lower(c.FileNameL) LIKE :{param_name} OR lower(c.FolderPath) LIKE :{param_name})"
+                            )
+                            file_type_params[param_name] = f"%.{variant}"
+
+                        fmt_upper = ext.upper()
+                        ft_int = EXTENSION_TO_FILE_TYPE.get(fmt_upper)
+                        if ft_int is not None and "FileType" in cols:
+                            sub_conds.append(f"c.FileType = {ft_int}")
+
+                        ft_conds.append(f"({' OR '.join(sub_conds)})")
+                    file_type_clause = f"AND ({' OR '.join(ft_conds)})"
+
+            # Tag filter (supports multi-tag filtering and match mode 'any' / 'all')
+            tag_clause = ""
+            tag_params: Dict[str, Any] = {}
+            tag_names: List[str] = []
+            if tag_filter:
+                if isinstance(tag_filter, (list, tuple, set)):
+                    tag_names = [
+                        str(t).strip()
+                        for t in tag_filter
+                        if str(t).strip() and str(t).strip().lower() not in ("all", "all tags")
+                    ]
+                else:
+                    t_str = str(tag_filter).strip()
+                    if t_str and t_str.lower() not in ("all", "all tags"):
+                        tag_names = [t_str]
+
+            if tag_names and has_my_tag:
+                tag_placeholders = [f":tag_f_{i}" for i in range(len(tag_names))]
+                for i, name in enumerate(tag_names):
+                    tag_params[f"tag_f_{i}"] = name
+
+                if str(tag_match_mode).strip().lower() == "all" and len(tag_names) > 1:
+                    tag_clause = f"""AND c.ID IN (
+                        SELECT smt.ContentID FROM djmdSongMyTag smt
+                        JOIN djmdMyTag t ON smt.MyTagID = t.ID
+                        WHERE t.Name IN ({", ".join(tag_placeholders)})
+                          AND (smt.rb_local_deleted = 0 OR smt.rb_local_deleted IS NULL)
+                          AND (t.rb_local_deleted = 0 OR t.rb_local_deleted IS NULL)
+                        GROUP BY smt.ContentID
+                        HAVING COUNT(DISTINCT t.Name) >= {len(tag_names)}
+                    )"""
+                else:
+                    tag_clause = f"""AND c.ID IN (
+                        SELECT smt.ContentID FROM djmdSongMyTag smt
+                        JOIN djmdMyTag t ON smt.MyTagID = t.ID
+                        WHERE t.Name IN ({", ".join(tag_placeholders)})
+                          AND (smt.rb_local_deleted = 0 OR smt.rb_local_deleted IS NULL)
+                          AND (t.rb_local_deleted = 0 OR t.rb_local_deleted IS NULL)
+                    )"""
+
+            # Playlist filter (supports multi-playlist filtering and match mode 'any' / 'all')
+            playlist_clause = ""
+            playlist_params: Dict[str, Any] = {}
+            playlist_names: List[str] = []
+            if playlist_filter:
+                if isinstance(playlist_filter, (list, tuple, set)):
+                    playlist_names = [
+                        str(p).strip()
+                        for p in playlist_filter
+                        if str(p).strip() and str(p).strip().lower() not in ("all", "all playlists")
+                    ]
+                else:
+                    p_str = str(playlist_filter).strip()
+                    if p_str and p_str.lower() not in ("all", "all playlists"):
+                        playlist_names = [p_str]
+
+            if playlist_names and has_playlist:
+                pl_placeholders = [f":pl_f_{i}" for i in range(len(playlist_names))]
+                for i, name in enumerate(playlist_names):
+                    playlist_params[f"pl_f_{i}"] = name
+
+                if str(playlist_match_mode).strip().lower() == "all" and len(playlist_names) > 1:
+                    playlist_clause = f"""AND c.ID IN (
+                        SELECT sp.ContentID FROM djmdSongPlaylist sp
+                        JOIN djmdPlaylist p ON sp.PlaylistID = p.ID
+                        WHERE p.Attribute = 0 AND p.Name IN ({", ".join(pl_placeholders)})
+                          AND (p.rb_local_deleted = 0 OR p.rb_local_deleted IS NULL)
+                          AND (sp.rb_local_deleted = 0 OR sp.rb_local_deleted IS NULL)
+                        GROUP BY sp.ContentID
+                        HAVING COUNT(DISTINCT p.Name) >= {len(playlist_names)}
+                    )"""
+                else:
+                    playlist_clause = f"""AND c.ID IN (
+                        SELECT sp.ContentID FROM djmdSongPlaylist sp
+                        JOIN djmdPlaylist p ON sp.PlaylistID = p.ID
+                        WHERE p.Attribute = 0 AND p.Name IN ({", ".join(pl_placeholders)})
+                          AND (p.rb_local_deleted = 0 OR p.rb_local_deleted IS NULL)
+                          AND (sp.rb_local_deleted = 0 OR sp.rb_local_deleted IS NULL)
+                    )"""
+
             # Streaming tracks filter (exclude Spotify, Apple Music, and other streaming tracks)
             streaming_filter = ""
             if exclude_streaming and content_id is None:
@@ -304,6 +482,8 @@ def search_tracks(
                 order_clause = f"c.BitRate {order_dir}, c.Title ASC" if "BitRate" in cols else "c.Title ASC"
             elif sort_by in ("file_type", "type"):
                 order_clause = f"c.FileType {order_dir}, c.Title ASC" if "FileType" in cols else "c.Title ASC"
+            elif sort_by in ("purchased", "is_purchased"):
+                order_clause = f"{purchased_sql} {order_dir}, c.Title ASC"
             elif sort_by == "tags" and has_my_tag:
                 order_clause = f"TagNames {order_dir}, c.Title ASC"
             elif sort_by in ("playlists", "playlist") and has_playlist:
@@ -356,7 +536,7 @@ def search_tracks(
                     {color_expr}
                 FROM djmdContent c
                 {join_clause}
-                WHERE 1=1 {deleted_filter} {play_filter} {streaming_filter} {search_condition}
+                WHERE 1=1 {deleted_filter} {play_filter} {purchased_clause} {key_clause} {bpm_clause} {file_type_clause} {tag_clause} {playlist_clause} {streaming_filter} {search_condition}
                 ORDER BY {order_clause}
                 {limit_clause};
             """
@@ -367,6 +547,18 @@ def search_tracks(
             }
             if content_id is not None:
                 params["content_id"] = str(content_id)
+            if key_clause:
+                params.update(key_params)
+            if bpm_min is not None and bpm_min > 0:
+                params["bpm_min_int"] = int(bpm_min * 100)
+            if bpm_max is not None and bpm_max > 0:
+                params["bpm_max_int"] = int(bpm_max * 100)
+            if file_type_clause:
+                params.update(file_type_params)
+            if tag_clause:
+                params.update(tag_params)
+            if playlist_clause:
+                params.update(playlist_params)
             if limit and limit > 0:
                 params["limit"] = limit
 
@@ -386,6 +578,20 @@ def search_tracks(
             elif play_count_filter == "unplayed" and count_col:
                 play_filter = f"AND ({count_col} = 0 OR {count_col} IS NULL)"
 
+            fallback_purchased_clause = ""
+            if "FolderPath" in cols:
+                fb_purchased_sql = """(
+                    FolderPath LIKE '%/Purchased/%' 
+                    OR FolderPath LIKE '%/Purchased' 
+                    OR FolderPath LIKE '%\\Purchased\\%' 
+                    OR FolderPath LIKE '%\\Purchased'
+                )"""
+                p_mode = str(purchased_filter or "all").strip().lower()
+                if p_mode == "purchased":
+                    fallback_purchased_clause = f"AND {fb_purchased_sql}"
+                elif p_mode in ("downloaded", "unpurchased", "non_purchased", "exclude_purchased"):
+                    fallback_purchased_clause = f"AND NOT {fb_purchased_sql}"
+
             if sort_by == "play_count":
                 fallback_order = f"{count_expr} {order_dir}, Title ASC"
             elif sort_by == "title" and is_desc:
@@ -403,7 +609,7 @@ def search_tracks(
                 where_clause = "WHERE ID = :content_id"
                 params = {"content_id": str(content_id)}
             else:
-                where_clause = f"WHERE Title LIKE :pattern {play_filter} {fallback_streaming_filter}"
+                where_clause = f"WHERE Title LIKE :pattern {play_filter} {fallback_purchased_clause} {fallback_streaming_filter}"
                 params = {"pattern": pattern}
 
             if limit and limit > 0:
@@ -489,6 +695,115 @@ def fetch_all_playlists(engine: Engine) -> List[Dict[str, Any]]:
             for r in rows
             if r[1] and str(r[1]).strip()
         ]
+
+
+def fetch_distinct_keys(engine: Engine) -> List[str]:
+    """Fetch distinct musical keys present in the Rekordbox library."""
+    with engine.connect() as conn:
+        tables = {
+            r[0]
+            for r in conn.exec_driver_sql(
+                "SELECT name FROM sqlite_master WHERE type='table';"
+            ).fetchall()
+        }
+        if "djmdKey" not in tables:
+            return []
+
+        table_name = next((t for t in ("djmdContent", "content") if t in tables), None)
+        if table_name:
+            cols = {
+                r[1]
+                for r in conn.exec_driver_sql(f"PRAGMA table_info({table_name});").fetchall()
+            }
+            if "KeyID" in cols:
+                del_clause = (
+                    "AND (c.rb_local_deleted = 0 OR c.rb_local_deleted IS NULL)"
+                    if "rb_local_deleted" in cols
+                    else ""
+                )
+                streaming_clause = build_exclude_streaming_clause(cols, table_alias="c")
+
+                sql = f"""
+                    SELECT DISTINCT k.ScaleName
+                    FROM {table_name} c
+                    JOIN djmdKey k ON c.KeyID = k.ID
+                    WHERE k.ScaleName IS NOT NULL AND TRIM(k.ScaleName) != ''
+                      {del_clause} {streaming_clause}
+                    ORDER BY k.ScaleName;
+                """
+                rows = conn.exec_driver_sql(sql).fetchall()
+                return [str(r[0]).strip() for r in rows if r[0] and str(r[0]).strip()]
+
+        # Fallback if KeyID column is not present in collection table
+        rows = conn.exec_driver_sql(
+            "SELECT DISTINCT ScaleName FROM djmdKey WHERE ScaleName IS NOT NULL AND TRIM(ScaleName) != '' ORDER BY ScaleName;"
+        ).fetchall()
+        return [str(r[0]).strip() for r in rows if r[0] and str(r[0]).strip()]
+
+
+def fetch_distinct_file_types(engine: Engine) -> List[str]:
+    """Fetch distinct audio file formats (e.g. MP3, AIFF, FLAC, WAV, M4A) present in the database.
+
+    Dynamically queries djmdContent / content (ignoring soft-deleted and streaming tracks),
+    mapping Rekordbox FileType IDs and inspecting file extensions.
+    Returns an alphabetically sorted list of uppercase format strings (e.g. ['AIFF', 'M4A', 'MP3', 'WAV']).
+    """
+    with engine.connect() as conn:
+        tables = {
+            r[0]
+            for r in conn.exec_driver_sql(
+                "SELECT name FROM sqlite_master WHERE type='table';"
+            ).fetchall()
+        }
+        table_name = next((t for t in ("djmdContent", "content") if t in tables), None)
+        if not table_name:
+            return []
+
+        cols = {
+            r[1]
+            for r in conn.exec_driver_sql(f"PRAGMA table_info({table_name});").fetchall()
+        }
+        del_filter = (
+            "AND (rb_local_deleted = 0 OR rb_local_deleted IS NULL)"
+            if "rb_local_deleted" in cols
+            else ""
+        )
+        streaming_filter = build_exclude_streaming_clause(cols, table_alias=None)
+
+        formats: Set[str] = set()
+        known_ft_ids: Set[Any] = set()
+
+        # 1. Inspect FileType integer column if present
+        if "FileType" in cols:
+            ft_rows = conn.exec_driver_sql(
+                f"SELECT DISTINCT FileType FROM {table_name} WHERE FileType IS NOT NULL {del_filter} {streaming_filter};"
+            ).fetchall()
+            for r in ft_rows:
+                raw_ft = r[0]
+                fmt_name = resolve_file_type(raw_ft)
+                if fmt_name and fmt_name not in ("—", "Spotify", "Apple Music"):
+                    formats.add(fmt_name)
+                    known_ft_ids.add(raw_ft)
+
+        # 2. Inspect FileNameL or FolderPath for tracks where FileType is NULL or not mapped
+        target_col = "FileNameL" if "FileNameL" in cols else ("FolderPath" if "FolderPath" in cols else None)
+        if target_col:
+            ft_cond = ""
+            if known_ft_ids:
+                ids_str = ", ".join(str(i) for i in known_ft_ids)
+                ft_cond = f"AND (FileType IS NULL OR FileType NOT IN ({ids_str}))"
+            elif "FileType" in cols:
+                ft_cond = "AND FileType IS NULL"
+
+            fn_rows = conn.exec_driver_sql(
+                f"SELECT DISTINCT {target_col} FROM {table_name} WHERE {target_col} IS NOT NULL AND TRIM({target_col}) != '' {ft_cond} {del_filter} {streaming_filter};"
+            ).fetchall()
+            for r in fn_rows:
+                fmt_name = resolve_file_type(None, filename=r[0])
+                if fmt_name and fmt_name not in ("—", "Spotify", "Apple Music"):
+                    formats.add(fmt_name)
+
+        return sorted(list(formats))
 
 
 def add_track_to_playlist(

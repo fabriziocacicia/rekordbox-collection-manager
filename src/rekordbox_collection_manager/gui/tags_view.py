@@ -1089,7 +1089,7 @@ class TagsView(QWidget):
         for attr in ("active_loader_worker", "active_tracks_worker", "active_sort_worker", "active_worker"):
             w = getattr(self, attr, None)
             if w:
-                stop_worker(w, wait_ms=100)
+                stop_worker(w, wait_ms=1000)
                 setattr(self, attr, None)
         if hasattr(self, "detail_view") and hasattr(self.detail_view, "cleanup"):
             self.detail_view.cleanup()
