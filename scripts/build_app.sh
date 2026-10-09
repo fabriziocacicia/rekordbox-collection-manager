@@ -70,22 +70,44 @@ cat << EOF > "$APP_DIR/Contents/Info.plist"
 </plist>
 EOF
 
-# 4. Write Executable Launcher
-cat << 'EOF' > "$APP_DIR/Contents/MacOS/Rekordbox Collection Manager"
-#!/usr/bin/env bash
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-if [ -d "$SCRIPT_DIR/../../../.venv" ]; then
-    PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
-else
-    PROJECT_ROOT="/Users/fabriziocacicia/Projects/Personal/Music/rekordbox-collection-manager"
+# 4. Compile Native Mach-O Executable Launcher
+echo "⚙️  Compiling native Mach-O executable launcher..."
+PYTHON_BIN="$PROJECT_ROOT/.venv/bin/python"
+if [ ! -x "$PYTHON_BIN" ]; then
+    PYTHON_BIN="$(which python3)"
 fi
 
-export PATH="$PROJECT_ROOT/.venv/bin:$PATH"
-cd "$PROJECT_ROOT"
-exec "$PROJECT_ROOT/.venv/bin/python" -m rekordbox_collection_manager.gui.app "$@"
-EOF
+PYTHON_HOME=$("$PYTHON_BIN" -c "import sys; print(sys.base_prefix)")
+PYTHON_LIBDIR=$("$PYTHON_BIN" -c "import sysconfig; print(sysconfig.get_config_var('LIBDIR') or '')")
+PYTHON_LDLIBRARY=$("$PYTHON_BIN" -c "import sysconfig; print(sysconfig.get_config_var('LDLIBRARY') or '')")
+PYTHON_VERSION_STR=$("$PYTHON_BIN" -c "import sys; print(f'python{sys.version_info.major}.{sys.version_info.minor}')")
+
+DYLIB_PATH=""
+if [ -n "$PYTHON_LIBDIR" ] && [ -n "$PYTHON_LDLIBRARY" ] && [ -f "$PYTHON_LIBDIR/$PYTHON_LDLIBRARY" ]; then
+    DYLIB_PATH="$PYTHON_LIBDIR/$PYTHON_LDLIBRARY"
+fi
+
+mkdir -p "$APP_DIR/Contents/Frameworks"
+if [ -n "$DYLIB_PATH" ] && [ -f "$DYLIB_PATH" ]; then
+    echo "📦 Bundling Python runtime library ($PYTHON_LDLIBRARY)..."
+    cp "$DYLIB_PATH" "$APP_DIR/Contents/Frameworks/"
+fi
+
+clang -O2 \
+    -DDEFAULT_PROJECT_ROOT="\"$PROJECT_ROOT\"" \
+    -DDEFAULT_PYTHON_HOME="\"$PYTHON_HOME\"" \
+    -DDEFAULT_DYLIB_PATH="\"$DYLIB_PATH\"" \
+    -DPYTHON_VERSION_STR="\"$PYTHON_VERSION_STR\"" \
+    -DAPP_MODULE="\"rekordbox_collection_manager.gui.app\"" \
+    -DAPP_NAME="\"Rekordbox Collection Manager\"" \
+    "$PROJECT_ROOT/scripts/launcher.c" \
+    -o "$APP_DIR/Contents/MacOS/Rekordbox Collection Manager"
 
 chmod +x "$APP_DIR/Contents/MacOS/Rekordbox Collection Manager"
+
+# 5. Ad-hoc Code Sign App Bundle
+echo "🔏 Code signing app bundle..."
+codesign --force --deep -s - "$APP_DIR" > /dev/null 2>&1 || true
 
 echo "✅ App bundle successfully built at:"
 echo "   $APP_DIR"
@@ -93,3 +115,7 @@ echo ""
 echo "🚀 You can now:"
 echo "   • Open it with: open \"$APP_DIR\""
 echo "   • Drag it into your Applications folder or Dock to keep it permanently."
+if [ -d "/Applications/Rekordbox Collection Manager.app" ]; then
+    echo "   ⚠️  Note: If you previously copied this app to /Applications, replace it with:"
+    echo "      cp -R \"$APP_DIR\" /Applications/"
+fi
