@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
     QComboBox,
+    QDialog,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -42,6 +43,11 @@ from PySide6.QtWidgets import (
 from sqlalchemy.engine import Engine
 
 from rekordbox_collection_manager.edit_play_count import fetch_track_full_details, search_tracks
+from rekordbox_collection_manager.gui.replacement_diff_dialog import (
+    TrackReplacementDiffDialog,
+    calculate_metadata_diff,
+)
+from rekordbox_collection_manager.replace_file import fetch_track_full_info
 from rekordbox_collection_manager.gui.theme import (
     COLOR_AMBER,
     COLOR_AMBER_BG,
@@ -538,6 +544,43 @@ class ReplaceFileView(QWidget):
         )
         diff_layout.addWidget(self.duration_match_banner)
 
+        # Conflict Status & Diff Summary Banner
+        self.mode1_diff_summary = QLabel("Select both a track and a replacement file to compare metadata.")
+        self.mode1_diff_summary.setStyleSheet(
+            f"background-color: {COLOR_BG_CARD}; border: 1px solid {COLOR_BORDER}; border-radius: 6px; padding: 8px 12px; font-size: 12px; color: {COLOR_TEXT_SECONDARY};"
+        )
+        diff_layout.addWidget(self.mode1_diff_summary)
+
+        # Inspect 3-column diff tool button
+        self.btn_mode1_inspect_diff = QPushButton("🔍  Inspect 3-Column Metadata Diff & Resolve Conflicts...")
+        self.btn_mode1_inspect_diff.setStyleSheet(
+            f"""
+            QPushButton {{
+                background-color: {COLOR_BG_CARD};
+                color: {COLOR_BLUE};
+                border: 1px solid {COLOR_BORDER_LIGHT};
+                border-radius: 6px;
+                padding: 8px 14px;
+                font-size: 12px;
+                font-weight: 600;
+            }}
+            QPushButton:hover {{
+                background-color: {COLOR_BLUE_BG};
+                border-color: {COLOR_BLUE};
+                color: #ffffff;
+            }}
+            QPushButton:disabled {{
+                background-color: transparent;
+                color: {COLOR_TEXT_MUTED};
+                border-color: {COLOR_BORDER};
+            }}
+            """
+        )
+        self.btn_mode1_inspect_diff.setEnabled(False)
+        self.btn_mode1_inspect_diff.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_mode1_inspect_diff.clicked.connect(self._on_execute_replace)
+        diff_layout.addWidget(self.btn_mode1_inspect_diff)
+
         layout.addWidget(self.diff_card)
 
         # ----------------------------------------------------------------------
@@ -616,7 +659,8 @@ class ReplaceFileView(QWidget):
         action_bar = QHBoxLayout()
         action_bar.setSpacing(12)
 
-        self.btn_execute_replace = QPushButton("🔄  Replace Audio File Now")
+        self.btn_execute_replace = QPushButton("🔍  Review Differences & Replace Audio File...")
+        self.btn_execute_replace.setToolTip("Opens the 3-column metadata diff screen to inspect conflicts and confirm replacement.")
         self.btn_execute_replace.setStyleSheet(
             f"""
             QPushButton {{
@@ -729,11 +773,64 @@ class ReplaceFileView(QWidget):
         cols_layout.addLayout(right_box, stretch=1)
         layout.addLayout(cols_layout)
 
+        # Mode 2 Metadata Comparison & Diff Card
+        self.mode2_diff_card = QFrame()
+        self.mode2_diff_card.setObjectName("mode2DiffCard")
+        self.mode2_diff_card.setStyleSheet(
+            f"QFrame#mode2DiffCard {{ background-color: #181822; border: 1px solid {COLOR_BORDER}; border-radius: 8px; padding: 14px; }}"
+        )
+        m2_diff_layout = QVBoxLayout(self.mode2_diff_card)
+        m2_diff_layout.setContentsMargins(14, 12, 14, 12)
+        m2_diff_layout.setSpacing(10)
+
+        m2_diff_title = QLabel("Metadata Comparison & Merge Diff")
+        m2_diff_title.setStyleSheet(f"color: {COLOR_GREEN}; font-size: 13px; font-weight: bold;")
+        m2_diff_layout.addWidget(m2_diff_title)
+
+        self.mode2_diff_summary = QLabel("Select both source track and target AIFF track above to compare metadata.")
+        self.mode2_diff_summary.setStyleSheet(
+            f"background-color: {COLOR_BG_CARD}; border: 1px solid {COLOR_BORDER}; border-radius: 6px; padding: 8px 12px; font-size: 12px; color: {COLOR_TEXT_SECONDARY};"
+        )
+        m2_diff_layout.addWidget(self.mode2_diff_summary)
+
+        # Inspect 3-column diff tool button
+        self.btn_mode2_inspect_diff = QPushButton("🔍  Inspect 3-Column Metadata Diff & Resolve Conflicts...")
+        self.btn_mode2_inspect_diff.setStyleSheet(
+            f"""
+            QPushButton {{
+                background-color: {COLOR_BG_CARD};
+                color: {COLOR_GREEN};
+                border: 1px solid {COLOR_BORDER_LIGHT};
+                border-radius: 6px;
+                padding: 8px 14px;
+                font-size: 12px;
+                font-weight: 600;
+            }}
+            QPushButton:hover {{
+                background-color: {COLOR_GREEN_BG};
+                border-color: {COLOR_GREEN};
+                color: #ffffff;
+            }}
+            QPushButton:disabled {{
+                background-color: transparent;
+                color: {COLOR_TEXT_MUTED};
+                border-color: {COLOR_BORDER};
+            }}
+            """
+        )
+        self.btn_mode2_inspect_diff.setEnabled(False)
+        self.btn_mode2_inspect_diff.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_mode2_inspect_diff.clicked.connect(self._on_execute_merge)
+        m2_diff_layout.addWidget(self.btn_mode2_inspect_diff)
+
+        layout.addWidget(self.mode2_diff_card)
+
         # Merge Action Button
         merge_action_row = QHBoxLayout()
         merge_action_row.setSpacing(12)
 
-        self.btn_execute_merge = QPushButton("🔀  Replace with Imported Track (Transfer History)")
+        self.btn_execute_merge = QPushButton("🔍  Review Differences & Replace Track...")
+        self.btn_execute_merge.setToolTip("Opens the 3-column metadata diff screen to inspect conflicts and confirm replacement.")
         self.btn_execute_merge.setStyleSheet(
             f"""
             QPushButton {{
@@ -787,6 +884,13 @@ class ReplaceFileView(QWidget):
         self.duration_match_banner.setStyleSheet(
             f"background-color: {COLOR_BG_DARK}; border: 1px solid {COLOR_BORDER}; border-radius: 6px; padding: 8px 12px; font-size: 12px; color: {COLOR_TEXT_SECONDARY};"
         )
+        if hasattr(self, "mode1_diff_summary"):
+            self.mode1_diff_summary.setText("Select both a track and a replacement file to compare metadata.")
+            self.mode1_diff_summary.setStyleSheet(
+                f"background-color: {COLOR_BG_CARD}; border: 1px solid {COLOR_BORDER}; border-radius: 6px; padding: 8px 12px; font-size: 12px; color: {COLOR_TEXT_SECONDARY};"
+            )
+        if hasattr(self, "btn_mode1_inspect_diff"):
+            self.btn_mode1_inspect_diff.setEnabled(False)
         self.btn_execute_replace.setEnabled(False)
         self.mode1_results_table.setRowCount(0)
 
@@ -795,6 +899,13 @@ class ReplaceFileView(QWidget):
         self.merge_target_track = None
         self.merge_src_summary.setText("No source track selected")
         self.merge_tgt_summary.setText("No target track selected")
+        if hasattr(self, "mode2_diff_summary"):
+            self.mode2_diff_summary.setText("Select both source track and target AIFF track above to compare metadata.")
+            self.mode2_diff_summary.setStyleSheet(
+                f"background-color: {COLOR_BG_CARD}; border: 1px solid {COLOR_BORDER}; border-radius: 6px; padding: 8px 12px; font-size: 12px; color: {COLOR_TEXT_SECONDARY};"
+            )
+        if hasattr(self, "btn_mode2_inspect_diff"):
+            self.btn_mode2_inspect_diff.setEnabled(False)
         self.btn_execute_merge.setEnabled(False)
         self.merge_src_table.setRowCount(0)
         self.merge_tgt_table.setRowCount(0)
@@ -1017,9 +1128,54 @@ class ReplaceFileView(QWidget):
             and (self.replacement_specs.get("file_type") == 12 or self.replacement_specs.get("extension") in ("aiff", "aif"))
         )
         self.btn_execute_replace.setEnabled(can_execute)
+        if hasattr(self, "btn_mode1_inspect_diff"):
+            self.btn_mode1_inspect_diff.setEnabled(can_execute)
+
+        if hasattr(self, "mode1_diff_summary"):
+            if can_execute and self.engine:
+                try:
+                    content_id = str(self.selected_track.get("id") or self.selected_track.get("content_id"))
+                    full_old = fetch_track_full_info(self.engine, content_id) or self.selected_track
+                    diffs = calculate_metadata_diff(full_old, self.replacement_specs, mode="file")
+                    conflicts = [d for d in diffs if d.category == "info" and d.status == "conflict"]
+                    new_tags = [d for d in diffs if d.category == "info" and d.status == "new_data"]
+                    if conflicts:
+                        conflict_names = ", ".join(d.label for d in conflicts[:4])
+                        more_str = f" (+{len(conflicts) - 4} more)" if len(conflicts) > 4 else ""
+                        self.mode1_diff_summary.setText(
+                            f"⚠️ <b>{len(conflicts)} Metadata conflict(s) detected:</b> {conflict_names}{more_str}.<br>"
+                            "<span style='color:#a0a0b2;'>Click below to review the 3-column diff and choose which values to keep.</span>"
+                        )
+                        self.mode1_diff_summary.setStyleSheet(
+                            f"background-color: {COLOR_AMBER_BG}; border: 1px solid {COLOR_AMBER_BORDER}; border-radius: 6px; padding: 8px 12px; font-size: 12px; color: {COLOR_TEXT_PRIMARY};"
+                        )
+                    elif new_tags:
+                        self.mode1_diff_summary.setText(
+                            f"⚡ <b>{len(new_tags)} New metadata tag(s) found in replacement file.</b> All existing tags match."
+                        )
+                        self.mode1_diff_summary.setStyleSheet(
+                            f"background-color: {COLOR_BLUE_BG}; border: 1px solid {COLOR_BLUE}; border-radius: 6px; padding: 8px 12px; font-size: 12px; color: {COLOR_TEXT_PRIMARY};"
+                        )
+                    else:
+                        self.mode1_diff_summary.setText("✅ <b>All track metadata tags match perfectly!</b> Audio will be upgraded cleanly.")
+                        self.mode1_diff_summary.setStyleSheet(
+                            f"background-color: {COLOR_GREEN_BG}; border: 1px solid {COLOR_GREEN_BORDER}; border-radius: 6px; padding: 8px 12px; font-size: 12px; color: {COLOR_TEXT_PRIMARY};"
+                        )
+                except Exception:
+                    self.mode1_diff_summary.setText("Ready to review differences and replace audio file.")
+            elif not self.selected_track:
+                self.mode1_diff_summary.setText("Select a track in your collection above to compare metadata.")
+                self.mode1_diff_summary.setStyleSheet(
+                    f"background-color: {COLOR_BG_CARD}; border: 1px solid {COLOR_BORDER}; border-radius: 6px; padding: 8px 12px; font-size: 12px; color: {COLOR_TEXT_SECONDARY};"
+                )
+            else:
+                self.mode1_diff_summary.setText("Choose a replacement AIFF file on disk above to compare metadata.")
+                self.mode1_diff_summary.setStyleSheet(
+                    f"background-color: {COLOR_BG_CARD}; border: 1px solid {COLOR_BORDER}; border-radius: 6px; padding: 8px 12px; font-size: 12px; color: {COLOR_TEXT_SECONDARY};"
+                )
 
     def _on_execute_replace(self) -> None:
-        if not self.engine or not self.selected_track or not self.replacement_file_path:
+        if not self.engine or not self.selected_track or not self.replacement_file_path or not self.replacement_specs:
             return
 
         if is_rekordbox_running():
@@ -1031,52 +1187,42 @@ class ReplaceFileView(QWidget):
             )
             return
 
-        # Confirm replacement dialog
-        action_text = self.old_file_combo.currentText()
-        title = self.selected_track.get("title") or "Untitled"
-        is_mp3 = is_mp3_track(self.selected_track)
-        transition_mode = "Upgrade: MP3 ➔ AIFF" if is_mp3 else "Replace: AIFF ➔ AIFF"
+        content_id = str(self.selected_track.get("id") or self.selected_track.get("content_id"))
+        full_old = fetch_track_full_info(self.engine, content_id) or self.selected_track
 
-        msg = (
-            f"Are you sure you want to replace the audio file for:\n\n"
-            f"🎵 {title}\n\n"
-            f"• Action: {transition_mode}\n"
-            f"• Play count preserved: {self.selected_track.get('play_count', 0)} plays\n"
-            f"• Original Date Added preserved: {self.selected_track.get('date_added')}\n"
-            f"• History sessions preserved: 100% intact\n"
-            f"• Cue points preserved: 100% intact\n"
-            f"• Beatgrid & Waveform: Queued for fresh Rekordbox analysis\n"
-            f"• Old file action: {action_text}\n\n"
-            "Proceed with replacement?"
-        )
-        reply = QMessageBox.question(
-            self,
-            "Confirm Audio File Replacement",
-            msg,
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-        )
-        if reply != QMessageBox.StandardButton.Yes:
-            return
-
-        # Prepare options
+        # Prepare base options from form
         act_idx = self.old_file_combo.currentIndex()
         action_val = "keep" if act_idx == 0 else ("trash" if act_idx == 1 else "backup")
-
         options = {
             "old_file_action": action_val,
             "move_new_file_to_track_folder": self.chk_move_to_folder.isChecked(),
-            "update_id3_metadata": False,
         }
 
+        diff_dialog = TrackReplacementDiffDialog(
+            engine=self.engine,
+            mode="file",
+            old_track=full_old,
+            new_item=self.replacement_specs,
+            options=options,
+            db_path=self.db_path,
+            parent=self,
+        )
+
+        if diff_dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        final_options = diff_dialog.get_options()
+
         self.btn_execute_replace.setEnabled(False)
+        if hasattr(self, "btn_mode1_inspect_diff"):
+            self.btn_mode1_inspect_diff.setEnabled(False)
         self.mode1_status_label.setText("Replacing audio file in master.db...")
 
-        content_id = str(self.selected_track.get("id") or self.selected_track.get("content_id"))
         self.replace_worker = TrackReplaceWorker(
             self.engine,
             content_id,
             self.replacement_file_path,
-            options=options,
+            options=final_options,
             parent=self,
         )
         self.replace_worker.success.connect(self._on_replace_success)
@@ -1106,6 +1252,8 @@ class ReplaceFileView(QWidget):
 
     def _on_replace_error(self, err: str) -> None:
         self.btn_execute_replace.setEnabled(True)
+        if hasattr(self, "btn_mode1_inspect_diff"):
+            self.btn_mode1_inspect_diff.setEnabled(True)
         self.mode1_status_label.setText(f"❌ Error: {err}")
         QMessageBox.critical(self, "Replacement Error", f"Failed to replace audio file:\n\n{err}")
 
@@ -1194,6 +1342,53 @@ class ReplaceFileView(QWidget):
             and str(self.merge_source_track.get("id")) != str(self.merge_target_track.get("id"))
         )
         self.btn_execute_merge.setEnabled(can_merge)
+        if hasattr(self, "btn_mode2_inspect_diff"):
+            self.btn_mode2_inspect_diff.setEnabled(can_merge)
+
+        if hasattr(self, "mode2_diff_summary"):
+            if can_merge and self.engine:
+                try:
+                    src_id = str(self.merge_source_track.get("id") or self.merge_source_track.get("content_id"))
+                    tgt_id = str(self.merge_target_track.get("id") or self.merge_target_track.get("content_id"))
+                    full_src = fetch_track_full_info(self.engine, src_id) or self.merge_source_track
+                    full_tgt = fetch_track_full_info(self.engine, tgt_id) or self.merge_target_track
+                    diffs = calculate_metadata_diff(full_src, full_tgt, mode="merge")
+                    conflicts = [d for d in diffs if d.category == "info" and d.status == "conflict"]
+                    new_tags = [d for d in diffs if d.category == "info" and d.status == "new_data"]
+                    if conflicts:
+                        conflict_names = ", ".join(d.label for d in conflicts[:4])
+                        more_str = f" (+{len(conflicts) - 4} more)" if len(conflicts) > 4 else ""
+                        self.mode2_diff_summary.setText(
+                            f"⚠️ <b>{len(conflicts)} Metadata conflict(s) detected:</b> {conflict_names}{more_str}.<br>"
+                            "<span style='color:#a0a0b2;'>Click below to review the 3-column diff and choose which values to keep.</span>"
+                        )
+                        self.mode2_diff_summary.setStyleSheet(
+                            f"background-color: {COLOR_AMBER_BG}; border: 1px solid {COLOR_AMBER_BORDER}; border-radius: 6px; padding: 8px 12px; font-size: 12px; color: {COLOR_TEXT_PRIMARY};"
+                        )
+                    elif new_tags:
+                        self.mode2_diff_summary.setText(
+                            f"⚡ <b>{len(new_tags)} New metadata tag(s) found in target track.</b>"
+                        )
+                        self.mode2_diff_summary.setStyleSheet(
+                            f"background-color: {COLOR_BLUE_BG}; border: 1px solid {COLOR_BLUE}; border-radius: 6px; padding: 8px 12px; font-size: 12px; color: {COLOR_TEXT_PRIMARY};"
+                        )
+                    else:
+                        self.mode2_diff_summary.setText("✅ <b>Metadata tags match perfectly!</b> Ready to merge history and replace track.")
+                        self.mode2_diff_summary.setStyleSheet(
+                            f"background-color: {COLOR_GREEN_BG}; border: 1px solid {COLOR_GREEN_BORDER}; border-radius: 6px; padding: 8px 12px; font-size: 12px; color: {COLOR_TEXT_PRIMARY};"
+                        )
+                except Exception:
+                    self.mode2_diff_summary.setText("Ready to review differences and merge tracks.")
+            elif not self.merge_source_track:
+                self.mode2_diff_summary.setText("Select source track (with plays & history) to compare.")
+                self.mode2_diff_summary.setStyleSheet(
+                    f"background-color: {COLOR_BG_CARD}; border: 1px solid {COLOR_BORDER}; border-radius: 6px; padding: 8px 12px; font-size: 12px; color: {COLOR_TEXT_SECONDARY};"
+                )
+            else:
+                self.mode2_diff_summary.setText("Select target AIFF track to compare metadata.")
+                self.mode2_diff_summary.setStyleSheet(
+                    f"background-color: {COLOR_BG_CARD}; border: 1px solid {COLOR_BORDER}; border-radius: 6px; padding: 8px 12px; font-size: 12px; color: {COLOR_TEXT_SECONDARY};"
+                )
 
     def _on_execute_merge(self) -> None:
         if not self.engine or not self.merge_source_track or not self.merge_target_track:
@@ -1207,40 +1402,41 @@ class ReplaceFileView(QWidget):
             )
             return
 
-        src_title = self.merge_source_track.get("title") or "Untitled"
-        tgt_title = self.merge_target_track.get("title") or "Untitled"
-        src_plays = self.merge_source_track.get("play_count", 0)
-        src_added = self.merge_source_track.get("date_added", "—")
-        src_fmt = "MP3" if is_mp3_track(self.merge_source_track) else "AIFF"
-
-        msg = (
-            f"Merge and transfer all collection metadata from:\n\n"
-            f"Old {src_fmt} Track: {src_title} ({src_plays} plays, Added: {src_added})\n"
-            f"➔ Into Target AIFF Track: {tgt_title}\n\n"
-            "This will transfer all history plays, play count, original date added, playlists, and cues, "
-            "and soft-delete the old duplicate track.\n\n"
-            "Proceed with replacement?"
-        )
-        reply = QMessageBox.question(
-            self,
-            "Confirm Track Merge",
-            msg,
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-        )
-        if reply != QMessageBox.StandardButton.Yes:
-            return
-
-        self.btn_execute_merge.setEnabled(False)
-        self.merge_status_label.setText("Merging tracks in master.db...")
-
         src_id = str(self.merge_source_track.get("id") or self.merge_source_track.get("content_id"))
         tgt_id = str(self.merge_target_track.get("id") or self.merge_target_track.get("content_id"))
+
+        full_src = fetch_track_full_info(self.engine, src_id) or self.merge_source_track
+        full_tgt = fetch_track_full_info(self.engine, tgt_id) or self.merge_target_track
+
+        options = {
+            "old_file_action": "keep",
+        }
+
+        diff_dialog = TrackReplacementDiffDialog(
+            engine=self.engine,
+            mode="merge",
+            old_track=full_src,
+            new_item=full_tgt,
+            options=options,
+            db_path=self.db_path,
+            parent=self,
+        )
+
+        if diff_dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        final_options = diff_dialog.get_options()
+
+        self.btn_execute_merge.setEnabled(False)
+        if hasattr(self, "btn_mode2_inspect_diff"):
+            self.btn_mode2_inspect_diff.setEnabled(False)
+        self.merge_status_label.setText("Merging tracks in master.db...")
 
         self.merge_worker = TrackMergeWorker(
             self.engine,
             src_id,
             tgt_id,
-            options={"old_file_action": "keep"},
+            options=final_options,
             parent=self,
         )
         self.merge_worker.success.connect(self._on_merge_success)
@@ -1267,6 +1463,8 @@ class ReplaceFileView(QWidget):
 
     def _on_merge_error(self, err: str) -> None:
         self.btn_execute_merge.setEnabled(True)
+        if hasattr(self, "btn_mode2_inspect_diff"):
+            self.btn_mode2_inspect_diff.setEnabled(True)
         self.merge_status_label.setText(f"❌ Error: {err}")
         QMessageBox.critical(self, "Merge Error", f"Failed to merge tracks:\n\n{err}")
 
