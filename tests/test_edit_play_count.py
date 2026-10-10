@@ -587,6 +587,41 @@ class TestEditPlayCount(unittest.TestCase):
         all_pls_none = search_tracks(self.engine, "", playlist_filter=["Festival 2026", "Club Night"], playlist_match_mode="all")
         self.assertEqual(len(all_pls_none), 0)
 
+    def test_search_tracks_with_store_filter(self):
+        with self.engine.begin() as conn:
+            conn.exec_driver_sql("ALTER TABLE djmdContent ADD COLUMN Commnt TEXT;")
+            conn.exec_driver_sql("UPDATE djmdContent SET Commnt = 'Purchased at Beatport.com' WHERE ID = '1';")
+            conn.exec_driver_sql("UPDATE djmdContent SET Commnt = 'Purchased at qobuz.com' WHERE ID = '2';")
+            conn.exec_driver_sql("UPDATE djmdContent SET Commnt = 'Visit https://artist.bandcamp.com' WHERE ID = '3';")
+            conn.exec_driver_sql("UPDATE djmdContent SET Commnt = 'Purchased at Traxsource.com' WHERE ID = '5';")
+            conn.exec_driver_sql("UPDATE djmdContent SET Commnt = 'downloaded from lucida.to: https://play.qobuz.com' WHERE ID = '6';")
+
+        # Filter by Beatport
+        bp_tracks = search_tracks(self.engine, "", store_filter=["Beatport"])
+        self.assertEqual(len(bp_tracks), 1)
+        self.assertEqual(bp_tracks[0]["id"], "1")
+        self.assertEqual(bp_tracks[0]["store"], "Beatport")
+
+        # Filter by Qobuz (Track 6 is lucida.to rip and must NOT match!)
+        qobuz_tracks = search_tracks(self.engine, "", store_filter=["Qobuz"])
+        self.assertEqual(len(qobuz_tracks), 1)
+        self.assertEqual(qobuz_tracks[0]["id"], "2")
+        self.assertEqual(qobuz_tracks[0]["store"], "Qobuz")
+
+        # Multi-store filter: Bandcamp and Traxsource
+        multi_tracks = search_tracks(self.engine, "", store_filter=["Bandcamp", "Traxsource"])
+        multi_ids = {t["id"] for t in multi_tracks}
+        self.assertEqual(multi_ids, {"3", "5"})
+
+        # Sort by store / purchased_at
+        sorted_tracks = search_tracks(
+            self.engine, "", store_filter=["Beatport", "Qobuz", "Bandcamp", "Traxsource"],
+            sort_by="purchased_at", sort_order="ASC"
+        )
+        # Bandcamp, Beatport, Qobuz, Traxsource alphabetically
+        stores = [t["store"] for t in sorted_tracks]
+        self.assertEqual(stores, ["Bandcamp", "Beatport", "Qobuz", "Traxsource"])
+
     def test_main_running_check(self):
         with patch("rekordbox_collection_manager.edit_play_count.ensure_rekordbox_not_running") as mock_check, \
              patch("rekordbox_collection_manager.edit_play_count.resolve_db_path", return_value="dummy.db"), \

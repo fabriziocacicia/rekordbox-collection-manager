@@ -92,6 +92,7 @@ from rekordbox_collection_manager.utils import (
     is_mp3_track,
     is_rekordbox_running,
     open_in_folder,
+    parse_store_from_comment,
     reveal_in_file_manager,
 )
 
@@ -111,6 +112,7 @@ class TrackColumn:
     BITRATE = "Bitrate"
     FILE_TYPE = "Type"
     PURCHASED = "Purchased"
+    PURCHASED_AT = "Purchased At"
     TAGS = "Tags"
     PLAYLISTS = "Playlists"
     FOLDER = "Folder"
@@ -127,6 +129,7 @@ DEFAULT_COLLECTION_COLUMNS: List[str] = [
     TrackColumn.PLAYS,
     TrackColumn.BITRATE,
     TrackColumn.FILE_TYPE,
+    TrackColumn.PURCHASED_AT,
     TrackColumn.TAGS,
     TrackColumn.PLAYLISTS,
     TrackColumn.FOLDER,
@@ -990,14 +993,15 @@ class PurchasedBadgeDelegate(QStyledItemDelegate):
             QStyle.PrimitiveElement.PE_PanelItemViewItem, opt, painter, widget
         )
 
-        is_purchased = bool(index.data(Qt.ItemDataRole.UserRole))
-        if not is_purchased:
+        user_val = index.data(Qt.ItemDataRole.UserRole)
+        disp_text = str(index.data(Qt.ItemDataRole.DisplayRole) or "").strip()
+        if not user_val or disp_text in ("", "—"):
             painter.setPen(QColor(COLOR_TEXT_MUTED))
             painter.drawText(option.rect, Qt.AlignmentFlag.AlignCenter, "—")
             painter.restore()
             return
 
-        text_str = "🛒 Purchased"
+        text_str = disp_text if disp_text.startswith("🛒") else (f"🛒 {user_val}" if isinstance(user_val, str) else "🛒 Purchased")
         bg_color = QColor(16, 185, 129, 35)
         border_color = QColor(52, 211, 153, 120)
         text_color = QColor("#34d399")
@@ -1020,7 +1024,9 @@ class PurchasedBadgeDelegate(QStyledItemDelegate):
         painter.restore()
 
     def sizeHint(self, option: QStyleOptionViewItem, index: QModelIndex) -> QSize:
-        return QSize(95, 36)
+        disp_text = str(index.data(Qt.ItemDataRole.DisplayRole) or "")
+        w = max(95, self.fm.horizontalAdvance(disp_text) + 24)
+        return QSize(w, 36)
 
 
 class _TableItemProxy:
@@ -1186,6 +1192,13 @@ class TracksTableModel(QAbstractTableModel):
                     ],
                 )
 
+    def update_track_record(self, row_idx: int, track: Dict[str, Any]) -> None:
+        if 0 <= row_idx < len(self.records):
+            self.records[row_idx].update(track)
+            left_idx = self.index(row_idx, 0)
+            right_idx = self.index(row_idx, len(self.config.columns) - 1)
+            self.dataChanged.emit(left_idx, right_idx)
+
     def headerData(
         self,
         section: int,
@@ -1206,6 +1219,7 @@ class TracksTableModel(QAbstractTableModel):
                     TrackColumn.BITRATE,
                     TrackColumn.FILE_TYPE,
                     TrackColumn.PURCHASED,
+                    TrackColumn.PURCHASED_AT,
                 ):
                     return Qt.AlignmentFlag.AlignCenter
                 return int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
@@ -1227,6 +1241,7 @@ class TracksTableModel(QAbstractTableModel):
             TrackColumn.BITRATE: "Sort by Audio Bitrate",
             TrackColumn.FILE_TYPE: "Sort by File Type (MP3, AIFF, FLAC, etc.)",
             TrackColumn.PURCHASED: "Sort by Purchased status (inside Purchased folder vs Downloaded)",
+            TrackColumn.PURCHASED_AT: "Sort by Purchased Store (Beatport, Bandcamp, Qobuz, Traxsource)",
             TrackColumn.TAGS: "Sort by Tags",
             TrackColumn.PLAYLISTS: "Sort by Real Playlists",
             TrackColumn.FOLDER: "Sort by Folder (Ctrl+Click or Cmd+Click cell to open in Finder)",
@@ -1394,6 +1409,23 @@ class TracksTableModel(QAbstractTableModel):
             elif role == Qt.ItemDataRole.ForegroundRole:
                 return QColor("#34d399") if is_purchased else self._color_muted
 
+        # PURCHASED AT (Store)
+        elif col_name == TrackColumn.PURCHASED_AT:
+            store = t.get("store") or parse_store_from_comment(t.get("comment") or t.get("comments"))
+            if role == Qt.ItemDataRole.DisplayRole:
+                return f"🛒 {store}" if store else "—"
+            elif role == Qt.ItemDataRole.ToolTipRole:
+                if store:
+                    raw_comment = (t.get("comment") or t.get("comments") or "").strip()
+                    return f"Purchased at {store}\nComment: {raw_comment}" if raw_comment else f"Purchased at {store}"
+                return "Purchased track (store not specified in comment)"
+            elif role == Qt.ItemDataRole.UserRole:
+                return store or ""
+            elif role == Qt.ItemDataRole.TextAlignmentRole:
+                return Qt.AlignmentFlag.AlignCenter
+            elif role == Qt.ItemDataRole.ForegroundRole:
+                return QColor("#34d399") if store else self._color_muted
+
         # 11. TAGS
         elif col_name == TrackColumn.TAGS:
             tags = list(dict.fromkeys(t.get("tags") or []))
@@ -1490,6 +1522,9 @@ class TracksTableModel(QAbstractTableModel):
                 return (t.get("file_type") or "").lower()
             elif col_name == TrackColumn.PURCHASED:
                 return 1 if t.get("is_purchased") else 0
+            elif col_name == TrackColumn.PURCHASED_AT:
+                store = t.get("store") or parse_store_from_comment(t.get("comment") or t.get("comments"))
+                return (store or "").lower()
             elif col_name == TrackColumn.TAGS:
                 tags = t.get("tags") or []
                 return ", ".join(tags).lower()
@@ -1744,6 +1779,9 @@ class TracksTableWidget(QTableView):
             elif col_name == TrackColumn.PURCHASED:
                 header.setSectionResizeMode(col_idx, QHeaderView.ResizeMode.Interactive)
                 self.setColumnWidth(col_idx, 105)
+            elif col_name == TrackColumn.PURCHASED_AT:
+                header.setSectionResizeMode(col_idx, QHeaderView.ResizeMode.Interactive)
+                self.setColumnWidth(col_idx, 125)
             elif col_name == TrackColumn.TAGS:
                 header.setSectionResizeMode(col_idx, QHeaderView.ResizeMode.Interactive)
                 self.setColumnWidth(col_idx, 220)
@@ -1760,7 +1798,7 @@ class TracksTableWidget(QTableView):
             # Assign delegates
             if col_name == TrackColumn.FILE_TYPE:
                 self.setItemDelegateForColumn(col_idx, file_type_delegate)
-            elif col_name == TrackColumn.PURCHASED:
+            elif col_name in (TrackColumn.PURCHASED, TrackColumn.PURCHASED_AT):
                 self.setItemDelegateForColumn(col_idx, purchased_delegate)
             elif col_name == TrackColumn.TAGS:
                 self.setItemDelegateForColumn(col_idx, self._tags_delegate)
@@ -1774,6 +1812,11 @@ class TracksTableWidget(QTableView):
             elif col_name == TrackColumn.FILE_NAME:
                 self.setItemDelegateForColumn(col_idx, path_link_delegate)
                 self._file_col_idx = col_idx
+
+        # Hide PURCHASED_AT by default until filtered by Purchased
+        if TrackColumn.PURCHASED_AT in cols:
+            col_idx = cols.index(TrackColumn.PURCHASED_AT)
+            self.setColumnHidden(col_idx, True)
 
     def _on_modifier_changed(self) -> None:
         self._update_hover_state()
@@ -2460,6 +2503,7 @@ class TracksTableWidget(QTableView):
             TrackColumn.BITRATE: "bitrate",
             TrackColumn.FILE_TYPE: "file_type",
             TrackColumn.PURCHASED: "purchased",
+            TrackColumn.PURCHASED_AT: "purchased_at",
             TrackColumn.TAGS: "tags",
             TrackColumn.PLAYLISTS: "playlists",
             TrackColumn.FOLDER: "folder",
@@ -2480,6 +2524,7 @@ class TracksTableWidget(QTableView):
                 TrackColumn.PLAYS,
                 TrackColumn.BITRATE,
                 TrackColumn.PURCHASED,
+                TrackColumn.PURCHASED_AT,
             ):
                 self.current_sort_order = Qt.SortOrder.DescendingOrder
             else:
@@ -2494,6 +2539,25 @@ class TracksTableWidget(QTableView):
         self._update_staged_ui()
         self._model.set_records(records)
         self._update_index_column_width()
+
+    def update_track_record(self, row_idx: int, track: Dict[str, Any]) -> None:
+        """Update track record for a row and refresh all table cells."""
+        self._model.update_track_record(row_idx, track)
+
+    def set_column_visible(self, col_name: str, visible: bool) -> None:
+        """Show or hide a column by its identifier name."""
+        cols = self.config.columns
+        if col_name in cols:
+            col_idx = cols.index(col_name)
+            self.setColumnHidden(col_idx, not visible)
+
+    def is_column_visible(self, col_name: str) -> bool:
+        """Return whether a column by its identifier name is currently visible."""
+        cols = self.config.columns
+        if col_name in cols:
+            col_idx = cols.index(col_name)
+            return not self.isColumnHidden(col_idx)
+        return False
 
     def _update_index_column_width(self) -> None:
         """Ensure column 0 (#) has plenty of room for all digits and never truncates with ellipsis."""

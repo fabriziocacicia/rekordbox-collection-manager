@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 from sqlalchemy import create_engine
 
 from rekordbox_collection_manager.utils import (
+    KNOWN_STORES,
     MONTH_NAME_TO_INT,
     build_exclude_streaming_clause,
     build_track_record,
@@ -22,6 +23,7 @@ from rekordbox_collection_manager.utils import (
     format_duration,
     format_rating_stars,
     get_rekordbox_timestamp,
+    get_store_comment,
     is_aiff_track,
     is_mp3_track,
     is_purchased_path,
@@ -35,8 +37,10 @@ from rekordbox_collection_manager.utils import (
     parse_month_number,
     parse_played_with,
     parse_session_paren_number,
+    parse_store_from_comment,
     parse_year_month,
     resolve_db_path,
+    update_track_comment,
 )
 
 
@@ -481,6 +485,93 @@ class TestUtils(unittest.TestCase):
         self.assertFalse(is_purchased_track({"folder_path": "/Music/Downloaded"}))
         self.assertFalse(is_purchased_track("some string without purchased/"))
         self.assertTrue(is_purchased_track("/Volumes/Drive/Purchased/Track.flac"))
+
+    def test_parse_store_from_comment(self):
+        # Beatport
+        self.assertEqual(parse_store_from_comment("Purchased at Beatport.com"), "Beatport")
+        self.assertEqual(parse_store_from_comment("purchased at beatport.com"), "Beatport")
+        self.assertEqual(parse_store_from_comment("Track comment: Purchased at Beatport.com!"), "Beatport")
+
+        # Traxsource
+        self.assertEqual(parse_store_from_comment("Purchased at Traxsource.com"), "Traxsource")
+        self.assertEqual(parse_store_from_comment("purchased at traxsource.com"), "Traxsource")
+
+        # Qobuz
+        self.assertEqual(parse_store_from_comment("Purchased at qobuz.com"), "Qobuz")
+        self.assertEqual(parse_store_from_comment("Purchased at Qobuz.com"), "Qobuz")
+        # Ensure non-purchased lucida.to qobuz rips are NOT classified as Qobuz store purchase
+        self.assertIsNone(
+            parse_store_from_comment("downloaded from lucida.to: https://play.qobuz.com/track/12345")
+        )
+
+        # Bandcamp
+        self.assertEqual(
+            parse_store_from_comment("Visit https://artistname.bandcamp.com"), "Bandcamp"
+        )
+        self.assertEqual(
+            parse_store_from_comment("Visit https://bandcamp.com"), "Bandcamp"
+        )
+        self.assertEqual(
+            parse_store_from_comment("https://label.bandcamp.com/album/xyz"), "Bandcamp"
+        )
+
+        # Non-store comments or empty
+        self.assertIsNone(parse_store_from_comment(None))
+        self.assertIsNone(parse_store_from_comment(""))
+        self.assertIsNone(parse_store_from_comment("Downloaded from music.binimum.org/tidal.squid.wtf"))
+        self.assertIsNone(parse_store_from_comment("A regular DJ note about this track"))
+
+    def test_get_store_comment(self):
+        self.assertEqual(get_store_comment("Beatport"), "Purchased at Beatport.com")
+        self.assertEqual(get_store_comment("Traxsource"), "Purchased at Traxsource.com")
+        self.assertEqual(get_store_comment("Qobuz"), "Purchased at qobuz.com")
+        self.assertEqual(get_store_comment("Bandcamp"), "Visit https://bandcamp.com")
+        self.assertEqual(get_store_comment("NonExistentStore"), "")
+
+    def test_update_track_comment_database(self):
+        engine = create_engine("sqlite:///:memory:")
+        with engine.begin() as conn:
+            conn.exec_driver_sql(
+                "CREATE TABLE djmdContent ("
+                "ID VARCHAR(255) PRIMARY KEY, "
+                "Commnt TEXT, "
+                "updated_at DATETIME"
+                ")"
+            )
+            conn.exec_driver_sql(
+                "INSERT INTO djmdContent (ID, Commnt) VALUES ('123', 'Old comment')"
+            )
+
+        update_track_comment(engine, "123", "Purchased at Beatport.com")
+
+        with engine.connect() as conn:
+            row = conn.exec_driver_sql(
+                "SELECT Commnt, updated_at FROM djmdContent WHERE ID = '123'"
+            ).mappings().first()
+            self.assertEqual(row["Commnt"], "Purchased at Beatport.com")
+            self.assertIsNotNone(row["updated_at"])
+
+        # Clear comment
+        update_track_comment(engine, "123", "")
+        with engine.connect() as conn:
+            row = conn.exec_driver_sql(
+                "SELECT Commnt FROM djmdContent WHERE ID = '123'"
+            ).mappings().first()
+            self.assertEqual(row["Commnt"], "")
+
+    def test_build_track_record_with_store(self):
+        row = {
+            "ID": "456",
+            "Title": "Track 1",
+            "Artist": "Artist 1",
+            "Commnt": "Purchased at Traxsource.com",
+            "FolderPath": "/Users/dj/Music/Purchased/Track1.aiff",
+        }
+        record = build_track_record(row)
+        self.assertEqual(record["store"], "Traxsource")
+        self.assertEqual(record["comment"], "Purchased at Traxsource.com")
+        self.assertEqual(record["comments"], "Purchased at Traxsource.com")
+        self.assertTrue(record["is_purchased"])
 
 
 if __name__ == "__main__":

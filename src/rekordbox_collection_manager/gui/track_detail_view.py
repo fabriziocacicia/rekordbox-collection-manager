@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
     QLayout,
     QLayoutItem,
     QLineEdit,
+    QMenu,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -59,6 +60,8 @@ from rekordbox_collection_manager.gui.chip import (
     PlaylistChip,
     PlaylistChipsContainer,
     PlaylistSearchLineEdit,
+    PurchasedChip,
+    StoreChip,
     TagChip,
     TagChipsContainer,
 )
@@ -90,15 +93,19 @@ from rekordbox_collection_manager.gui.theme import (
 )
 from rekordbox_collection_manager.gui.workers import TrackDetailWorker, stop_worker
 from rekordbox_collection_manager.utils import (
+    KNOWN_STORES,
     format_file_size,
     format_rating_stars,
+    get_store_comment,
     is_aiff_track,
     is_mp3_track,
     is_purchased_track,
     is_rekordbox_running,
     open_in_folder,
     parse_history_name,
+    parse_store_from_comment,
     reveal_in_file_manager,
+    update_track_comment,
 )
 
 
@@ -110,6 +117,89 @@ def format_created_at_tooltip(created_at: Any, date_added: str = "") -> str:
             return s[:19]
         return s
     return date_added or ""
+
+
+class SelectStoreDialog(QDialog):
+    """Clean modal dialog to select a purchase store."""
+
+    def __init__(self, parent: Optional[QWidget] = None, current_store: Optional[str] = None):
+        super().__init__(parent)
+        self.selected_store: Optional[str] = None
+        self.setWindowTitle("Set Purchase Store")
+        self.setFixedWidth(300)
+        self.setWindowFlags(self.windowFlags() & ~Qt.WindowType.WindowContextHelpButtonHint)
+        self.setStyleSheet(
+            f"QDialog {{ background-color: {COLOR_BG_PANEL}; color: {COLOR_TEXT_PRIMARY}; }}"
+        )
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(12)
+
+        title = QLabel("Select Purchase Store")
+        title.setStyleSheet("color: #ffffff; font-size: 13px; font-weight: 700;")
+        layout.addWidget(title)
+
+        desc = QLabel("Choose the store where this track was purchased:")
+        desc.setStyleSheet(f"color: {COLOR_TEXT_MUTED}; font-size: 11px;")
+        desc.setWordWrap(True)
+        layout.addWidget(desc)
+
+        buttons_layout = QVBoxLayout()
+        buttons_layout.setSpacing(8)
+
+        for store in KNOWN_STORES:
+            btn = QPushButton(store)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setFixedHeight(34)
+            is_cur = (store == current_store)
+            bg = COLOR_BLUE_BG if is_cur else COLOR_BG_CARD
+            border = COLOR_BLUE if is_cur else COLOR_BORDER
+            color = "#ffffff" if is_cur else COLOR_TEXT_PRIMARY
+            btn.setStyleSheet(
+                f"QPushButton {{ "
+                f"  background-color: {bg}; "
+                f"  color: {color}; "
+                f"  border: 1px solid {border}; "
+                f"  border-radius: 6px; "
+                f"  font-size: 12px; "
+                f"  font-weight: 600; "
+                f"  text-align: left; "
+                f"  padding-left: 14px; "
+                f"}} "
+                f"QPushButton:hover {{ "
+                f"  background-color: {COLOR_BLUE_BG}; "
+                f"  border-color: {COLOR_BORDER_FOCUS}; "
+                f"  color: #ffffff; "
+                f"}}"
+            )
+            btn.clicked.connect(lambda checked=False, s=store: self._on_select(s))
+            buttons_layout.addWidget(btn)
+
+        layout.addLayout(buttons_layout)
+
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        cancel_btn.setFixedHeight(28)
+        cancel_btn.setStyleSheet(
+            f"QPushButton {{ "
+            f"  background-color: transparent; "
+            f"  color: {COLOR_TEXT_MUTED}; "
+            f"  border: 1px solid {COLOR_BORDER}; "
+            f"  border-radius: 6px; "
+            f"  font-size: 11px; "
+            f"}} "
+            f"QPushButton:hover {{ "
+            f"  background-color: {COLOR_BG_HOVER}; "
+            f"  color: {COLOR_TEXT_PRIMARY}; "
+            f"}}"
+        )
+        cancel_btn.clicked.connect(self.reject)
+        layout.addWidget(cancel_btn)
+
+    def _on_select(self, store_name: str) -> None:
+        self.selected_store = store_name
+        self.accept()
 
 
 class TrackDetailView(QWidget):
@@ -149,6 +239,12 @@ class TrackDetailView(QWidget):
         self.original_tags: List[str] = []
         self.current_tags: List[str] = []
         self.cached_all_tags: List[str] = []
+
+        self.original_comment: str = ""
+        self.current_comment: str = ""
+        self.original_store: Optional[str] = None
+        self.current_store: Optional[str] = None
+        self.store_buttons: Dict[str, QPushButton] = {}
 
         self._init_ui(back_button_text)
         if self.engine and self.track:
@@ -288,12 +384,14 @@ class TrackDetailView(QWidget):
         )
         self.badges_layout.addWidget(self.format_badge)
 
-        self.purchased_badge = QLabel("—")
-        self.purchased_badge.setStyleSheet(
-            "background-color: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.5); "
-            "border-radius: 4px; padding: 2px 8px; font-size: 11px; font-weight: 700;"
-        )
+        self.purchased_badge = PurchasedChip(is_purchased=True, parent=self)
         self.badges_layout.addWidget(self.purchased_badge)
+
+        self.store_badge = StoreChip(store=None, parent=self)
+        self.store_badge.clicked.connect(self._on_store_badge_clicked)
+        self.store_badge.setVisible(False)
+        self.badges_layout.addWidget(self.store_badge)
+        self.store_badge_btn = self.store_badge  # Compatibility alias
 
         self.key_badge = QLabel("Key: —")
         self.key_badge.setStyleSheet(
@@ -425,26 +523,6 @@ class TrackDetailView(QWidget):
         self.playlists_container.playlist_clicked.connect(self.open_playlist_requested.emit)
         self.playlists_container.playlist_create_requested.connect(self._on_playlist_create_requested)
         cat_layout.addWidget(self.playlists_container)
-
-        # Comments (if present)
-        self.comment_container = QWidget()
-        comment_inner_layout = QVBoxLayout(self.comment_container)
-        comment_inner_layout.setContentsMargins(0, 4, 0, 0)
-        comment_inner_layout.setSpacing(4)
-
-        comment_title = QLabel("COMMENT / NOTES")
-        comment_title.setStyleSheet(f"color: {COLOR_TEXT_MUTED}; font-size: 10px; font-weight: 700; letter-spacing: 0.6px;")
-        comment_inner_layout.addWidget(comment_title)
-
-        self.comment_box = QLabel("")
-        self.comment_box.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.comment_box.setStyleSheet(
-            f"background-color: {COLOR_BG_CARD}; border: 1px solid {COLOR_BORDER}; "
-            f"border-radius: 6px; padding: 8px 10px; color: {COLOR_TEXT_PRIMARY}; font-size: 12px;"
-        )
-        self.comment_box.setWordWrap(True)
-        comment_inner_layout.addWidget(self.comment_box)
-        cat_layout.addWidget(self.comment_container)
 
         content_layout.addWidget(cat_card)
 
@@ -722,20 +800,7 @@ class TrackDetailView(QWidget):
 
         # Purchased badge
         is_purchased = is_purchased_track(t)
-        if is_purchased:
-            self.purchased_badge.setText("🛒 Purchased")
-            self.purchased_badge.setStyleSheet(
-                "background-color: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.5); "
-                "border-radius: 4px; padding: 2px 8px; font-size: 11px; font-weight: 700;"
-            )
-            self.purchased_badge.setToolTip("Purchased track: located inside a 'Purchased' directory in folder tree.")
-        else:
-            self.purchased_badge.setText("📥 Downloaded")
-            self.purchased_badge.setStyleSheet(
-                "background-color: rgba(148, 163, 184, 0.12); color: #94a3b8; border: 1px solid rgba(148, 163, 184, 0.25); "
-                "border-radius: 4px; padding: 2px 8px; font-size: 11px; font-weight: 700;"
-            )
-            self.purchased_badge.setToolTip("Downloaded track: not located inside a 'Purchased' directory.")
+        self.purchased_badge.set_purchased(is_purchased)
 
         # Key badge
         key = t.get("key") or "—"
@@ -786,13 +851,14 @@ class TrackDetailView(QWidget):
         self.playlists_container.set_playlists(self.current_playlists)
         self._update_staged_changes_ui()
 
-        # Comments
-        comments = (t.get("comments") or "").strip()
-        if comments:
-            self.comment_box.setText(comments)
-            self.comment_container.setVisible(True)
-        else:
-            self.comment_container.setVisible(False)
+        # Store & Comments (internal metadata, not shown as text)
+        raw_comment = (t.get("comments") or t.get("comment") or "").strip()
+        self.original_comment = raw_comment
+        self.current_comment = raw_comment
+        self.original_store = parse_store_from_comment(raw_comment)
+        self.current_store = self.original_store
+
+        self._refresh_store_badge_ui()
 
         # File path
         fp = t.get("file_path") or t.get("folder_path") or "—"
@@ -1036,6 +1102,16 @@ class TrackDetailView(QWidget):
                 self.current_tags = list(self.original_tags)
                 self.tags_container.set_tags(self.current_tags)
 
+        # Update comment and store if not currently modified in staged edits
+        if self.current_comment == self.original_comment:
+            db_comment = (full_details.get("comments") or full_details.get("comment") or "").strip()
+            if db_comment != self.original_comment:
+                self.original_comment = db_comment
+                self.current_comment = db_comment
+                self.original_store = parse_store_from_comment(db_comment)
+                self.current_store = self.original_store
+                self._refresh_store_badge_ui()
+
         self._update_staged_changes_ui()
 
     def _on_details_error(self, err_msg: str) -> None:
@@ -1258,11 +1334,68 @@ class TrackDetailView(QWidget):
                 self.status_message.emit(f"🏷️ Created and assigned tag '{new_name}'.")
                 self.db_saved.emit()
 
+    def _refresh_store_badge_ui(self) -> None:
+        """Update store badge chip label, scheme, and visibility based on self.current_store."""
+        is_purchased = is_purchased_track(self.track)
+        if self.current_store:
+            self.store_badge.set_store(self.current_store)
+            self.store_badge.setVisible(True)
+        elif is_purchased:
+            self.store_badge.set_store(None)
+            self.store_badge.setVisible(True)
+        else:
+            self.store_badge.setVisible(False)
+
+    _refresh_store_buttons_ui = _refresh_store_badge_ui
+
+    def _on_store_badge_clicked(self, *args: Any) -> None:
+        """Handle clicking the store badge: prompts confirmation to clear if set, or opens picker if empty."""
+        if self.current_store:
+            reply = QMessageBox.question(
+                self,
+                "Clear Purchase Store",
+                f"Are you sure you want to clear the purchase store ({self.current_store}) for this track?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                self._on_clear_store_selected()
+        else:
+            self._open_store_selection_dialog()
+
+    def _open_store_selection_dialog(self) -> None:
+        """Open modal dialog to pick a purchase store."""
+        dlg = SelectStoreDialog(parent=self, current_store=self.current_store)
+        if dlg.exec() and dlg.selected_store:
+            self._on_store_selected(dlg.selected_store)
+
+    def _on_store_selected(self, store_name: str) -> None:
+        """Handle selection of a purchase store."""
+        if self.current_store == store_name:
+            return
+        self.current_store = store_name
+        self.current_comment = get_store_comment(store_name)
+        self._refresh_store_badge_ui()
+        self._update_staged_changes_ui()
+
+    _on_store_button_clicked = _on_store_selected
+
+    def _on_clear_store_selected(self) -> None:
+        """Handle clearing the purchase store."""
+        if not self.current_store and not self.current_comment:
+            return
+        self.current_store = None
+        self.current_comment = ""
+        self._refresh_store_badge_ui()
+        self._update_staged_changes_ui()
+
+    _on_clear_store_clicked = _on_clear_store_selected
+
     def _update_staged_changes_ui(self) -> None:
         """Refresh the bottom bar visibility and message according to staged edits."""
         pl_staged = set(self.current_playlists) != set(self.original_playlists)
         tag_staged = set(self.current_tags) != set(self.original_tags)
-        staged = pl_staged or tag_staged
+        comment_staged = self.current_comment != self.original_comment
+        staged = pl_staged or tag_staged or comment_staged
         self.bottom_bar.setVisible(staged)
         if staged:
             sections = []
@@ -1284,17 +1417,27 @@ class TrackDetailView(QWidget):
                 if removed:
                     parts.append(f"-{len(removed)} removed")
                 sections.append(f"Tags: {', '.join(parts)}")
+            if comment_staged:
+                if self.current_store:
+                    sections.append(f"Store: {self.current_store}")
+                elif self.original_store:
+                    sections.append("Store: Cleared")
+                else:
+                    sections.append("Comment: Modified")
             summary = "; ".join(sections)
             self.staged_status_label.setText(
                 f"⚠️ Unsaved modifications ({summary}) — click Save Changes to commit."
             )
 
     def _on_discard_changes(self) -> None:
-        """Discard staged playlist and tag modifications and revert chips to original state."""
+        """Discard staged playlist, tag, and comment modifications and revert to original state."""
         self.current_playlists = list(self.original_playlists)
         self.playlists_container.set_playlists(self.current_playlists)
         self.current_tags = list(self.original_tags)
         self.tags_container.set_tags(self.current_tags)
+        self.current_comment = self.original_comment
+        self.current_store = self.original_store
+        self._refresh_store_badge_ui()
         self._update_staged_changes_ui()
         self.status_message.emit("Modifications discarded.")
 
@@ -1303,7 +1446,7 @@ class TrackDetailView(QWidget):
         self._on_discard_changes()
 
     def _on_save_changes(self) -> None:
-        """Save staged playlist and tag changes to the Rekordbox database."""
+        """Save staged playlist, tag, and comment changes to the Rekordbox database."""
         if is_rekordbox_running():
             QMessageBox.warning(
                 self,
@@ -1320,6 +1463,7 @@ class TrackDetailView(QWidget):
         removed_pl = set(self.original_playlists) - set(self.current_playlists)
         added_tags = set(self.current_tags) - set(self.original_tags)
         removed_tags = set(self.original_tags) - set(self.current_tags)
+        comment_changed = self.current_comment != self.original_comment
 
         try:
             for name in added_pl:
@@ -1330,6 +1474,8 @@ class TrackDetailView(QWidget):
                 add_track_to_tag(self.engine, str(content_id), name)
             for name in removed_tags:
                 remove_track_from_tag(self.engine, str(content_id), name)
+            if comment_changed:
+                update_track_comment(self.engine, str(content_id), self.current_comment)
         except Exception as e:
             QMessageBox.critical(
                 self, "Save Failed", f"Database error while saving modifications:\n{e}"
@@ -1342,10 +1488,22 @@ class TrackDetailView(QWidget):
         self.original_tags = list(self.current_tags)
         self.track["tags"] = list(self.current_tags)
 
+        if comment_changed:
+            self.original_comment = self.current_comment
+            self.original_store = self.current_store
+            self.track["comments"] = self.current_comment
+            self.track["comment"] = self.current_comment
+            self.track["store"] = self.current_store
+
         if self.tracks_list and 0 <= self.current_index < len(self.tracks_list):
             self.tracks_list[self.current_index]["playlists"] = list(self.current_playlists)
             self.tracks_list[self.current_index]["tags"] = list(self.current_tags)
+            if comment_changed:
+                self.tracks_list[self.current_index]["comments"] = self.current_comment
+                self.tracks_list[self.current_index]["comment"] = self.current_comment
+                self.tracks_list[self.current_index]["store"] = self.current_store
 
+        self._refresh_store_badge_ui()
         self._update_staged_changes_ui()
         self.track_changed.emit(self.current_index, self.track)
         self.db_saved.emit()
@@ -1356,17 +1514,18 @@ class TrackDetailView(QWidget):
         self._on_save_changes()
 
     def _confirm_unsaved_changes(self) -> bool:
-        """Prompt user if there are unsaved playlist or tag changes before navigating away.
+        """Prompt user if there are unsaved playlist, tag, or comment changes before navigating away.
 
         Returns True if safe to navigate, False if action was cancelled.
         """
         pl_dirty = set(self.current_playlists) != set(self.original_playlists)
         tag_dirty = set(self.current_tags) != set(self.original_tags)
-        if pl_dirty or tag_dirty:
+        comment_dirty = self.current_comment != self.original_comment
+        if pl_dirty or tag_dirty or comment_dirty:
             reply = QMessageBox.question(
                 self,
                 "Unsaved Modifications",
-                "You have unsaved playlist or tag modifications. Do you want to save them before leaving?",
+                "You have unsaved track modifications. Do you want to save them before leaving?",
                 QMessageBox.StandardButton.Save
                 | QMessageBox.StandardButton.Discard
                 | QMessageBox.StandardButton.Cancel,
@@ -1376,6 +1535,7 @@ class TrackDetailView(QWidget):
                 saved = (
                     set(self.current_playlists) == set(self.original_playlists)
                     and set(self.current_tags) == set(self.original_tags)
+                    and self.current_comment == self.original_comment
                 )
                 return saved
             elif reply == QMessageBox.StandardButton.Discard:

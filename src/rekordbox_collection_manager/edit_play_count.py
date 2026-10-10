@@ -83,6 +83,7 @@ def search_tracks(
     content_id: Optional[str] = None,
     exclude_streaming: bool = True,
     purchased_filter: Optional[str] = "all",
+    store_filter: Optional[Union[str, Sequence[str]]] = None,
     key_filter: Optional[Union[str, Sequence[str]]] = None,
     bpm_min: Optional[float] = None,
     bpm_max: Optional[float] = None,
@@ -269,6 +270,43 @@ def search_tracks(
                 purchased_clause = f"AND {purchased_sql}"
             elif p_mode in ("downloaded", "unpurchased", "non_purchased", "exclude_purchased"):
                 purchased_clause = f"AND NOT {purchased_sql}"
+
+            # Store filter (supports multi-store selection e.g. ["Beatport", "Bandcamp"])
+            store_clause = ""
+            store_params: Dict[str, Any] = {}
+            if store_filter and "Commnt" in cols:
+                st_list: List[str] = []
+                if isinstance(store_filter, (list, tuple, set)):
+                    st_list = [
+                        str(s).strip()
+                        for s in store_filter
+                        if str(s).strip() and str(s).strip().lower() not in ("all", "all stores", "")
+                    ]
+                else:
+                    s_str = str(store_filter).strip()
+                    if s_str and s_str.lower() not in ("all", "all stores", ""):
+                        st_list = [s_str]
+
+                if st_list:
+                    store_conds = []
+                    for idx, st_name in enumerate(st_list):
+                        st_lower = st_name.lower()
+                        p_name = f"st_cond_{idx}"
+                        if st_lower == "beatport":
+                            store_conds.append(f"lower(c.Commnt) LIKE :{p_name}")
+                            store_params[p_name] = "%purchased at beatport.com%"
+                        elif st_lower == "qobuz":
+                            store_conds.append(f"lower(c.Commnt) LIKE :{p_name}")
+                            store_params[p_name] = "%purchased at qobuz.com%"
+                        elif st_lower == "traxsource":
+                            store_conds.append(f"lower(c.Commnt) LIKE :{p_name}")
+                            store_params[p_name] = "%purchased at traxsource.com%"
+                        elif st_lower == "bandcamp":
+                            store_conds.append(f"(lower(c.Commnt) LIKE :{p_name}_1 OR lower(c.Commnt) LIKE :{p_name}_2)")
+                            store_params[f"{p_name}_1"] = "%bandcamp.com%"
+                            store_params[f"{p_name}_2"] = "visit %bandcamp.com%"
+                    if store_conds:
+                        store_clause = f"AND ({' OR '.join(store_conds)})"
 
             # Key filter (supports single or multi-key selection e.g. ["8A", "8B"] or "8A")
             key_clause = ""
@@ -484,6 +522,18 @@ def search_tracks(
                 order_clause = f"c.FileType {order_dir}, c.Title ASC" if "FileType" in cols else "c.Title ASC"
             elif sort_by in ("purchased", "is_purchased"):
                 order_clause = f"{purchased_sql} {order_dir}, c.Title ASC"
+            elif sort_by in ("purchased_at", "store"):
+                if "Commnt" in cols:
+                    store_expr = """CASE
+                        WHEN lower(c.Commnt) LIKE '%bandcamp%' THEN 'Bandcamp'
+                        WHEN lower(c.Commnt) LIKE '%beatport%' THEN 'Beatport'
+                        WHEN lower(c.Commnt) LIKE '%qobuz%' AND lower(c.Commnt) LIKE '%purchased%' THEN 'Qobuz'
+                        WHEN lower(c.Commnt) LIKE '%traxsource%' THEN 'Traxsource'
+                        ELSE ''
+                    END"""
+                    order_clause = f"{store_expr} {order_dir}, c.Title ASC"
+                else:
+                    order_clause = "c.Title ASC"
             elif sort_by == "tags" and has_my_tag:
                 order_clause = f"TagNames {order_dir}, c.Title ASC"
             elif sort_by in ("playlists", "playlist") and has_playlist:
@@ -536,7 +586,7 @@ def search_tracks(
                     {color_expr}
                 FROM djmdContent c
                 {join_clause}
-                WHERE 1=1 {deleted_filter} {play_filter} {purchased_clause} {key_clause} {bpm_clause} {file_type_clause} {tag_clause} {playlist_clause} {streaming_filter} {search_condition}
+                WHERE 1=1 {deleted_filter} {play_filter} {purchased_clause} {store_clause} {key_clause} {bpm_clause} {file_type_clause} {tag_clause} {playlist_clause} {streaming_filter} {search_condition}
                 ORDER BY {order_clause}
                 {limit_clause};
             """
@@ -547,6 +597,8 @@ def search_tracks(
             }
             if content_id is not None:
                 params["content_id"] = str(content_id)
+            if store_clause:
+                params.update(store_params)
             if key_clause:
                 params.update(key_params)
             if bpm_min is not None and bpm_min > 0:

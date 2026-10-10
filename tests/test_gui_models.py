@@ -1167,7 +1167,7 @@ class TestTracksView(unittest.TestCase):
 
     def test_tracks_view_initial_ui(self):
         self.assertEqual(self.view.tracks_header_label.text(), "TRACKS")
-        self.assertEqual(self.view.table.columnCount(), 13)
+        self.assertEqual(self.view.table.columnCount(), 14)
         expected_headers = [
             "#",
             "Title",
@@ -1178,6 +1178,7 @@ class TestTracksView(unittest.TestCase):
             "Plays",
             "Bitrate",
             "Type",
+            "Purchased At",
             "Tags",
             "Playlists",
             "Folder",
@@ -1191,6 +1192,7 @@ class TestTracksView(unittest.TestCase):
         self.assertIsNotNone(self.view.table.itemDelegateForColumn(10))
         self.assertIsNotNone(self.view.table.itemDelegateForColumn(11))
         self.assertIsNotNone(self.view.table.itemDelegateForColumn(12))
+        self.assertIsNotNone(self.view.table.itemDelegateForColumn(13))
 
         self.assertEqual(self.view.filter_combo.count(), 3)
         self.assertEqual(self.view.filter_combo.itemText(0), "All Tracks")
@@ -1251,17 +1253,18 @@ class TestTracksView(unittest.TestCase):
         self.assertEqual(self.view.table.item(0, 6).text(), "5")
         self.assertEqual(self.view.table.item(0, 7).text(), "320 kbps")
         self.assertEqual(self.view.table.item(0, 8).text(), "MP3")
-        self.assertEqual(self.view.table.item(0, 9).text(), "Electro, Club")
-        self.assertEqual(self.view.table.item(0, 9).data(Qt.ItemDataRole.UserRole), ["Electro", "Club"])
-        self.assertEqual(self.view.table.item(0, 10).text(), "Mainstage - BP, Festival")
-        self.assertEqual(self.view.table.item(0, 10).data(Qt.ItemDataRole.UserRole), ["Mainstage - BP", "Festival"])
-        self.assertEqual(self.view.table.item(0, 11).text(), "Music")
-        self.assertEqual(self.view.table.item(0, 11).data(Qt.ItemDataRole.UserRole), "/Music")
-        self.assertEqual(self.view.table.item(0, 12).text(), "Titanium.mp3")
-        self.assertEqual(self.view.table.item(0, 12).data(Qt.ItemDataRole.UserRole), "/Music/Titanium.mp3")
+        self.assertEqual(self.view.table.item(0, 9).text(), "—")
+        self.assertEqual(self.view.table.item(0, 10).text(), "Electro, Club")
+        self.assertEqual(self.view.table.item(0, 10).data(Qt.ItemDataRole.UserRole), ["Electro", "Club"])
+        self.assertEqual(self.view.table.item(0, 11).text(), "Mainstage - BP, Festival")
+        self.assertEqual(self.view.table.item(0, 11).data(Qt.ItemDataRole.UserRole), ["Mainstage - BP", "Festival"])
+        self.assertEqual(self.view.table.item(0, 12).text(), "Music")
+        self.assertEqual(self.view.table.item(0, 12).data(Qt.ItemDataRole.UserRole), "/Music")
+        self.assertEqual(self.view.table.item(0, 13).text(), "Titanium.mp3")
+        self.assertEqual(self.view.table.item(0, 13).data(Qt.ItemDataRole.UserRole), "/Music/Titanium.mp3")
 
         # Verify all items in Row 0 are read-only (not editable)
-        for col in range(13):
+        for col in range(14):
             item = self.view.table.item(0, col)
             self.assertIsNotNone(item)
             self.assertFalse(item.flags() & Qt.ItemFlag.ItemIsEditable)
@@ -1273,10 +1276,11 @@ class TestTracksView(unittest.TestCase):
         self.assertEqual(self.view.table.item(1, 4).text(), "123.0")
         self.assertEqual(self.view.table.item(1, 6).text(), "0")
         self.assertEqual(self.view.table.item(1, 8).text(), "AIFF")
-        self.assertEqual(self.view.table.item(1, 9).text(), "French Touch")
-        self.assertEqual(self.view.table.item(1, 10).text(), "—")
-        self.assertEqual(self.view.table.item(1, 11).text(), "Music")
-        self.assertEqual(self.view.table.item(1, 12).text(), "OneMoreTime.aiff")
+        self.assertEqual(self.view.table.item(1, 9).text(), "—")
+        self.assertEqual(self.view.table.item(1, 10).text(), "French Touch")
+        self.assertEqual(self.view.table.item(1, 11).text(), "—")
+        self.assertEqual(self.view.table.item(1, 12).text(), "Music")
+        self.assertEqual(self.view.table.item(1, 13).text(), "OneMoreTime.aiff")
 
     def test_tracks_view_search_success_updates_header_and_table(self):
         self.view._on_search_success("test", self.mock_records)
@@ -1532,7 +1536,7 @@ class TestTracksTableWidget(unittest.TestCase):
             sorting_mode="server",
         )
         table = TracksTableWidget(config=cfg)
-        self.assertEqual(table.columnCount(), 13)
+        self.assertEqual(table.columnCount(), 14)
         self.assertFalse(table.isSortingEnabled())
 
         table.set_tracks(self.mock_tracks)

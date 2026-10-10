@@ -41,11 +41,16 @@ from rekordbox_collection_manager.gui.multi_select_filter import MultiSelectSear
 from rekordbox_collection_manager.gui.track_detail_view import TrackDetailView
 from rekordbox_collection_manager.gui.track_table import (
     DEFAULT_COLLECTION_COLUMNS,
+    TrackColumn,
     TrackTableConfig,
     TracksTableWidget,
 )
 from rekordbox_collection_manager.gui.workers import TrackSearchWorker, stop_worker
-from rekordbox_collection_manager.utils import open_in_folder, reveal_in_file_manager
+from rekordbox_collection_manager.utils import (
+    KNOWN_STORES,
+    open_in_folder,
+    reveal_in_file_manager,
+)
 
 
 class TracksView(QWidget):
@@ -168,6 +173,15 @@ class TracksView(QWidget):
         self.purchase_combo.setToolTip("Filter by purchase status (inside Purchased folder vs Downloaded)")
         self.purchase_combo.currentIndexChanged.connect(self._on_filter_changed)
         filter_layout.addWidget(self.purchase_combo)
+
+        # Store Filter (Multi-select, visible only when filtering by Purchased)
+        self.store_filter_widget = MultiSelectSearchFilter(
+            title="Store", icon="🏪", enable_match_mode=False, parent=self
+        )
+        self.store_filter_widget.set_items(list(KNOWN_STORES))
+        self.store_filter_widget.filter_changed.connect(self._on_filter_changed)
+        self.store_filter_widget.setVisible(False)
+        filter_layout.addWidget(self.store_filter_widget)
 
         # Play Count Filter
         self.play_filter_combo = QComboBox()
@@ -347,6 +361,17 @@ class TracksView(QWidget):
 
     def _on_filter_changed(self) -> None:
         """Handle any filter combo change: update active styling and query."""
+        p_filter = self.purchase_combo.currentData() or "all"
+        is_purchased_only = (p_filter == "purchased")
+
+        if hasattr(self, "store_filter_widget"):
+            if not is_purchased_only and self.store_filter_widget.is_active():
+                self.store_filter_widget.clear_selection()
+            self.store_filter_widget.setVisible(is_purchased_only)
+
+        if hasattr(self, "table"):
+            self.table.set_column_visible(TrackColumn.PURCHASED_AT, is_purchased_only)
+
         self._update_all_filter_styles()
         self._execute_search()
 
@@ -365,6 +390,9 @@ class TracksView(QWidget):
             else:
                 c.setStyleSheet(self._filter_style_base)
 
+        p_filter = self.purchase_combo.currentData() or "all"
+        if p_filter == "purchased" and hasattr(self, "store_filter_widget") and self.store_filter_widget.is_active():
+            active_count += 1
         if self.format_filter_widget.is_active():
             active_count += 1
         if self.key_filter_widget.is_active():
@@ -394,6 +422,12 @@ class TracksView(QWidget):
             c.blockSignals(True)
             c.setCurrentIndex(0)
             c.blockSignals(False)
+
+        if hasattr(self, "store_filter_widget"):
+            self.store_filter_widget.clear_selection()
+            self.store_filter_widget.setVisible(False)
+        if hasattr(self, "table"):
+            self.table.set_column_visible(TrackColumn.PURCHASED_AT, False)
 
         self.format_filter_widget.clear_selection()
         self.key_filter_widget.clear_selection()
@@ -515,6 +549,11 @@ class TracksView(QWidget):
         # Filter mode from dropdowns
         play_filter = self.play_filter_combo.currentData() or "all"
         purchased_filter = self.purchase_combo.currentData() or "all"
+        store_filter = (
+            self.store_filter_widget.get_selected()
+            if (purchased_filter == "purchased" and hasattr(self, "store_filter_widget"))
+            else []
+        )
         format_filter = self.format_filter_widget.get_selected()
         key_filter = self.key_filter_widget.get_selected()
         bpm_data = self.bpm_filter_combo.currentData()
@@ -536,6 +575,7 @@ class TracksView(QWidget):
             sort_order=sort_order_str,
             play_count_filter=play_filter,
             purchased_filter=purchased_filter,
+            store_filter=store_filter,
             key_filter=key_filter,
             bpm_min=bpm_min,
             bpm_max=bpm_max,
@@ -568,7 +608,11 @@ class TracksView(QWidget):
             else:
                 info_extras.append("purchased excluded")
         elif p_filter == "purchased":
-            info_extras.append("purchased only")
+            store_sel = self.store_filter_widget.get_selected() if hasattr(self, "store_filter_widget") else []
+            if store_sel:
+                info_extras.append(f"purchased: {', '.join(store_sel)}")
+            else:
+                info_extras.append("purchased only")
 
         extra_str = f" • {', '.join(info_extras)}" if info_extras else ""
         if query:
@@ -627,6 +671,7 @@ class TracksView(QWidget):
         self.table.sync_saved_track(track)
         if 0 <= idx < len(self.records):
             self.records[idx].update(track)
+            self.table.update_track_record(idx, track)
             if "playlists" in track:
                 self.table.update_track_playlists(idx, track["playlists"])
             if "tags" in track:

@@ -186,6 +186,7 @@ class TrackSearchWorker(QThread):
         play_count_filter: Optional[str] = "all",
         exclude_streaming: bool = True,
         purchased_filter: Optional[str] = "all",
+        store_filter: Optional[Union[str, Sequence[str]]] = None,
         key_filter: Optional[Union[str, Sequence[str]]] = None,
         bpm_min: Optional[float] = None,
         bpm_max: Optional[float] = None,
@@ -205,6 +206,7 @@ class TrackSearchWorker(QThread):
         self.play_count_filter = play_count_filter
         self.exclude_streaming = exclude_streaming
         self.purchased_filter = purchased_filter
+        self.store_filter = store_filter
         self.key_filter = key_filter
         self.bpm_min = bpm_min
         self.bpm_max = bpm_max
@@ -227,6 +229,7 @@ class TrackSearchWorker(QThread):
                 play_count_filter=self.play_count_filter,
                 exclude_streaming=self.exclude_streaming,
                 purchased_filter=self.purchased_filter,
+                store_filter=self.store_filter,
                 key_filter=self.key_filter,
                 bpm_min=self.bpm_min,
                 bpm_max=self.bpm_max,

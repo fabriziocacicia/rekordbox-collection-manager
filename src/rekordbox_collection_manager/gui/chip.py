@@ -71,6 +71,20 @@ CHIP_SCHEMES: Dict[str, Dict[str, QColor]] = {
         "border_hover": QColor(251, 191, 36, 200),
         "text": QColor("#fde68a"),
     },
+    "slate": {
+        "bg": QColor(148, 163, 184, 25),
+        "bg_hover": QColor(148, 163, 184, 50),
+        "border": QColor(148, 163, 184, 75),
+        "border_hover": QColor(148, 163, 184, 150),
+        "text": QColor("#94a3b8"),
+    },
+    "indigo": {
+        "bg": QColor(99, 102, 241, 30),
+        "bg_hover": QColor(99, 102, 241, 60),
+        "border": QColor(129, 140, 248, 85),
+        "border_hover": QColor(129, 140, 248, 165),
+        "text": QColor("#a5b4fc"),
+    },
 }
 
 
@@ -150,15 +164,16 @@ class BadgeChip(QFrame):
         scheme: str = "teal",
         removable: bool = False,
         clickable: bool = False,
+        font_weight: int = 500,
         parent: Optional[QWidget] = None,
     ):
         super().__init__(parent)
         self.name = text
-        self.text = text
         self.scheme_name = scheme
         self.scheme = CHIP_SCHEMES.get(scheme, CHIP_SCHEMES["teal"])
         self.removable = removable
         self.clickable = clickable
+        self.font_weight = font_weight
         self._hovered = False
 
         if self.clickable:
@@ -179,7 +194,7 @@ class BadgeChip(QFrame):
 
         self.label = QLabel(text)
         self.label.setStyleSheet(
-            f"color: {self.scheme['text'].name()}; font-size: 11px; font-weight: 500; "
+            f"color: {self.scheme['text'].name()}; font-size: 11px; font-weight: {self.font_weight}; "
             "background: transparent; border: none;"
         )
         layout.addWidget(self.label)
@@ -192,8 +207,13 @@ class BadgeChip(QFrame):
             )
             self.x_btn.setToolTip(f"Remove '{text}'")
             self.x_btn.setVisible(False)
-            self.x_btn.clicked.connect(lambda: self.delete_requested.emit(self.text))
+            self.x_btn.clicked.connect(lambda: self.delete_requested.emit(self.text()))
             self._position_x_btn()
+
+    def click(self) -> None:
+        """Simulate a click on the chip programmatically."""
+        if self.clickable:
+            self.clicked.emit(self.text())
 
     def mousePressEvent(self, event: Any) -> None:
         if event.button() == Qt.MouseButton.LeftButton and self.clickable:
@@ -202,7 +222,7 @@ class BadgeChip(QFrame):
                 if self.x_btn.geometry().contains(pos):
                     super().mousePressEvent(event)
                     return
-            self.clicked.emit(self.text)
+            self.clicked.emit(self.text())
             event.accept()
             return
         super().mousePressEvent(event)
@@ -219,12 +239,14 @@ class BadgeChip(QFrame):
         if self.removable and hasattr(self, "x_btn"):
             self.x_btn.setToolTip(f"Remove '{text}'")
             self._position_x_btn()
+        self.updateGeometry()
+        self.update()
 
     def set_scheme(self, scheme: str) -> None:
         self.scheme_name = scheme
         self.scheme = CHIP_SCHEMES.get(scheme, CHIP_SCHEMES["teal"])
         self.label.setStyleSheet(
-            f"color: {self.scheme['text'].name()}; font-size: 11px; font-weight: 500; "
+            f"color: {self.scheme['text'].name()}; font-size: 11px; font-weight: {self.font_weight}; "
             "background: transparent; border: none;"
         )
         if self.removable and hasattr(self, "x_btn"):
@@ -316,6 +338,74 @@ class DJChip(BadgeChip):
         elif isinstance(parent_or_removable, QWidget):
             parent = parent_or_removable
         super().__init__(text=name, scheme="amber", removable=removable, clickable=clickable, parent=parent)
+
+
+class PurchasedChip(BadgeChip):
+    """Specialized vector badge chip for displaying track purchase or download status."""
+
+    def __init__(
+        self,
+        is_purchased: bool = True,
+        parent: Optional[QWidget] = None,
+    ):
+        text = "Purchased" if is_purchased else "Downloaded"
+        scheme = "green" if is_purchased else "slate"
+        super().__init__(
+            text=text,
+            scheme=scheme,
+            removable=False,
+            clickable=False,
+            font_weight=600,
+            parent=parent,
+        )
+        self._update_tooltip(is_purchased)
+
+    def set_purchased(self, is_purchased: bool) -> None:
+        self.set_text("Purchased" if is_purchased else "Downloaded")
+        self.set_scheme("green" if is_purchased else "slate")
+        self._update_tooltip(is_purchased)
+
+    def _update_tooltip(self, is_purchased: bool) -> None:
+        if is_purchased:
+            self.setToolTip("Purchased track: located inside a 'Purchased' directory in folder tree.")
+        else:
+            self.setToolTip("Downloaded track: not located inside a 'Purchased' directory.")
+
+
+class StoreChip(BadgeChip):
+    """Interactive vector badge chip for displaying and modifying purchase store metadata."""
+
+    def __init__(
+        self,
+        store: Optional[str] = None,
+        parent: Optional[QWidget] = None,
+    ):
+        text = store if store else "+ Store"
+        scheme = "indigo" if store else "slate"
+        super().__init__(
+            text=text,
+            scheme=scheme,
+            removable=False,
+            clickable=True,
+            font_weight=600,
+            parent=parent,
+        )
+        self._update_tooltip(store)
+
+    def set_store(self, store: Optional[str]) -> None:
+        if store:
+            self.set_text(store)
+            self.set_scheme("indigo")
+        else:
+            self.set_text("+ Store")
+            self.set_scheme("slate")
+        self._update_tooltip(store)
+
+    def _update_tooltip(self, store: Optional[str]) -> None:
+        if store:
+            self.setToolTip(f"Purchased at {store} (Click to clear store metadata)")
+        else:
+            self.setToolTip("Click to set purchase store (Beatport, Traxsource, Qobuz, Bandcamp)")
 
 
 class FlowLayout(QLayout):

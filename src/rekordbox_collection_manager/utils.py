@@ -982,6 +982,86 @@ def is_purchased_track(track: Any) -> bool:
     return False
 
 
+STORE_BEATPORT = "Beatport"
+STORE_BANDCAMP = "Bandcamp"
+STORE_QOBUZ = "Qobuz"
+STORE_TRAXSOURCE = "Traxsource"
+
+KNOWN_STORES: List[str] = [STORE_BEATPORT, STORE_BANDCAMP, STORE_QOBUZ, STORE_TRAXSOURCE]
+
+STORE_COMMENT_TEMPLATES: Dict[str, str] = {
+    STORE_BEATPORT: "Purchased at Beatport.com",
+    STORE_BANDCAMP: "Visit https://bandcamp.com",
+    STORE_QOBUZ: "Purchased at qobuz.com",
+    STORE_TRAXSOURCE: "Purchased at Traxsource.com",
+}
+
+
+def parse_store_from_comment(comment: Optional[str]) -> Optional[str]:
+    """Parse store name from track comment metadata.
+
+    Supported stores:
+    - Beatport: 'Purchased at Beatport.com'
+    - Traxsource: 'Purchased at Traxsource.com'
+    - Qobuz: 'Purchased at qobuz.com'
+    - Bandcamp: 'Visit https://*.bandcamp.com' or 'Visit https://bandcamp.com'
+    """
+    if not comment:
+        return None
+    c = str(comment).strip()
+    if not c:
+        return None
+
+    if re.search(r"purchased\s+at\s+beatport\.com", c, re.IGNORECASE):
+        return STORE_BEATPORT
+    if re.search(r"purchased\s+at\s+traxsource\.com", c, re.IGNORECASE):
+        return STORE_TRAXSOURCE
+    if re.search(r"purchased\s+at\s+qobuz\.com", c, re.IGNORECASE):
+        return STORE_QOBUZ
+    if re.search(r"bandcamp\.com", c, re.IGNORECASE) and (
+        "visit" in c.lower() or "purchased" in c.lower() or c.lower().startswith("http")
+    ):
+        return STORE_BANDCAMP
+
+    return None
+
+
+def get_store_comment(store_name: str) -> str:
+    """Return standard comment string for a store."""
+    return STORE_COMMENT_TEMPLATES.get(store_name, "")
+
+
+def update_track_comment(
+    engine: Any,
+    content_id: str,
+    comment: str,
+) -> bool:
+    """Update Commnt field of a track in djmdContent."""
+    from sqlalchemy import text
+
+    now_utc = get_rekordbox_timestamp()
+    with engine.begin() as conn:
+        cols = {
+            r[1]
+            for r in conn.exec_driver_sql("PRAGMA table_info(djmdContent);").fetchall()
+        }
+        if not cols or "Commnt" not in cols:
+            raise ValueError("Table djmdContent or column Commnt not found.")
+
+        updates = ["Commnt = :comment"]
+        params: Dict[str, Any] = {
+            "id": str(content_id),
+            "comment": (comment or "").strip(),
+        }
+        if "updated_at" in cols:
+            updates.append("updated_at = :updated_at")
+            params["updated_at"] = now_utc
+
+        sql = f"UPDATE djmdContent SET {', '.join(updates)} WHERE ID = :id;"
+        conn.execute(text(sql), params)
+    return True
+
+
 def build_track_record(
     row: Mapping[str, Any],
     extra: Optional[Dict[str, Any]] = None,
@@ -1067,7 +1147,9 @@ def build_track_record(
         "file_path": f_full,
         "location": loc_disp,
         "location_display": loc_disp,
-        "comment": row.get("Commnt") or "",
+        "comment": str(row.get("Commnt") or ""),
+        "comments": str(row.get("Commnt") or ""),
+        "store": parse_store_from_comment(str(row.get("Commnt") or "")),
         "image_path": row.get("ImagePath") or "",
         "date_added": str(row.get("StockDate") or "")[:10],
         "created_at": str(row.get("created_at") or "") if row.get("created_at") is not None else "",

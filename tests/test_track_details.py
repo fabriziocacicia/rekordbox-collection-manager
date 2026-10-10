@@ -9,7 +9,7 @@ os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
 from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QKeyEvent
-from PySide6.QtWidgets import QApplication, QPushButton
+from PySide6.QtWidgets import QApplication, QMessageBox, QPushButton
 from sqlalchemy import create_engine
 
 from rekordbox_collection_manager.edit_play_count import (
@@ -29,6 +29,10 @@ from rekordbox_collection_manager.gui.track_detail_dialog import (
     format_created_at_tooltip,
     format_file_size,
     format_rating_stars,
+)
+from rekordbox_collection_manager.gui.chip import (
+    PurchasedChip,
+    StoreChip,
 )
 from rekordbox_collection_manager.gui.track_detail_view import (
     PlaylistChip,
@@ -809,6 +813,8 @@ class TestPlaylistChipsUI(unittest.TestCase):
                     ID VARCHAR(255) PRIMARY KEY,
                     Title VARCHAR(255),
                     SrcArtistName VARCHAR(255),
+                    Commnt VARCHAR(255),
+                    updated_at VARCHAR(255),
                     rb_local_deleted INTEGER DEFAULT 0
                 );
             """)
@@ -1195,6 +1201,123 @@ class TestPlaylistChipsUI(unittest.TestCase):
             mock_rm_tag.assert_called_once()
             mock_rm_pl.assert_called_once()
             self.assertFalse(table.has_staged_changes())
+
+    def test_store_buttons_staging_and_saving(self):
+        """Verify store badge button, popup selection, staging bar, discard, and save in TrackDetailView."""
+        track = dict(self.track_data, id="track_store_1", comments="Purchased at Beatport.com", folder_path="/Music/Purchased/test.mp3")
+        with self.engine.begin() as conn:
+            conn.exec_driver_sql(
+                "INSERT INTO djmdContent (ID, Title, Commnt) VALUES ('track_store_1', 'Store Test', 'Purchased at Beatport.com')"
+            )
+
+        view = TrackDetailView(
+            engine=self.engine,
+            track_data=track,
+            tracks_list=[track],
+            current_index=0,
+        )
+        self._views.append(view)
+        view.show()
+
+        # Initial state: parsed Beatport store displayed as interactive pill button (no arrows, no emoji)
+        self.assertEqual(view.current_store, "Beatport")
+        self.assertTrue(view.store_badge_btn.isVisible())
+        self.assertEqual(view.store_badge_btn.text(), "Beatport")
+        self.assertEqual(view.purchased_badge.text(), "Purchased")
+        self.assertFalse(view.bottom_bar.isVisible())
+
+        # Select Qobuz -> stages Qobuz comment
+        view._on_store_selected("Qobuz")
+        self.assertEqual(view.current_store, "Qobuz")
+        self.assertEqual(view.current_comment, "Purchased at qobuz.com")
+        self.assertEqual(view.store_badge_btn.text(), "Qobuz")
+        self.assertTrue(view.bottom_bar.isVisible())
+        self.assertIn("Store: Qobuz", view.staged_status_label.text())
+
+        # Discard changes -> reverts to Beatport
+        view.discard_btn.click()
+        self.assertEqual(view.current_store, "Beatport")
+        self.assertEqual(view.current_comment, "Purchased at Beatport.com")
+        self.assertEqual(view.store_badge_btn.text(), "Beatport")
+        self.assertFalse(view.bottom_bar.isVisible())
+
+        # Clicking badge when store is set prompts confirmation and clears if confirmed
+        with patch("PySide6.QtWidgets.QMessageBox.question", return_value=QMessageBox.StandardButton.Yes):
+            view.store_badge_btn.click()
+        self.assertIsNone(view.current_store)
+        self.assertEqual(view.current_comment, "")
+        self.assertEqual(view.store_badge_btn.text(), "+ Store")
+        self.assertTrue(view.bottom_bar.isVisible())
+
+        # Click Save Changes -> commits to database
+        with patch("rekordbox_collection_manager.gui.track_detail_view.is_rekordbox_running", return_value=False):
+            view.save_btn.click()
+
+        self.assertFalse(view.bottom_bar.isVisible())
+        with self.engine.connect() as conn:
+            row = conn.exec_driver_sql(
+                "SELECT Commnt FROM djmdContent WHERE ID = 'track_store_1'"
+            ).mappings().first()
+            self.assertEqual(row["Commnt"], "")
+
+    def test_store_filter_visibility_in_tracks_view(self):
+        """Verify store filter and Purchased At column visibility in TracksView."""
+        t_view = TracksView()
+        t_view.engine = self.engine
+        self._views.append(t_view)
+        t_view.show()
+
+        # By default, purchase_combo is 'All Statuses' (index 0)
+        self.assertEqual(t_view.purchase_combo.currentData(), "all")
+        self.assertTrue(t_view.store_filter_widget.isHidden())
+        self.assertFalse(t_view.table.is_column_visible("Purchased At"))
+
+        # Switch to '🛒 Purchased Only'
+        idx_purchased = t_view.purchase_combo.findData("purchased")
+        t_view.purchase_combo.setCurrentIndex(idx_purchased)
+
+        self.assertFalse(t_view.store_filter_widget.isHidden())
+        self.assertTrue(t_view.table.is_column_visible("Purchased At"))
+
+        # Switch to '📥 Downloaded'
+        idx_downloaded = t_view.purchase_combo.findData("downloaded")
+        t_view.purchase_combo.setCurrentIndex(idx_downloaded)
+
+        self.assertTrue(t_view.store_filter_widget.isHidden())
+        self.assertFalse(t_view.table.is_column_visible("Purchased At"))
+
+    def test_purchased_chip_and_store_chip_components(self):
+        """Verify PurchasedChip and StoreChip styling, scheme changes, and click events."""
+        # PurchasedChip states
+        p_chip = PurchasedChip(is_purchased=True)
+        self.assertEqual(p_chip.text(), "Purchased")
+        self.assertEqual(p_chip.scheme_name, "green")
+        self.assertFalse(p_chip.clickable)
+
+        p_chip.set_purchased(False)
+        self.assertEqual(p_chip.text(), "Downloaded")
+        self.assertEqual(p_chip.scheme_name, "slate")
+
+        # StoreChip unset state
+        s_chip = StoreChip(store=None)
+        self.assertEqual(s_chip.text(), "+ Store")
+        self.assertEqual(s_chip.scheme_name, "slate")
+        self.assertTrue(s_chip.clickable)
+
+        # StoreChip set state
+        clicked_events = []
+        s_chip.clicked.connect(clicked_events.append)
+        s_chip.set_store("Traxsource")
+        self.assertEqual(s_chip.text(), "Traxsource")
+        self.assertEqual(s_chip.scheme_name, "indigo")
+
+        s_chip.click()
+        self.assertEqual(clicked_events, ["Traxsource"])
+
+        # StoreChip cleared state
+        s_chip.set_store(None)
+        self.assertEqual(s_chip.text(), "+ Store")
+        self.assertEqual(s_chip.scheme_name, "slate")
 
 
 if __name__ == "__main__":
