@@ -143,13 +143,12 @@ def calculate_metadata_diff(
     fields: List[FieldDiff] = []
 
     # 1. Rekordbox "Info" (Track Tags & Metadata)
+    # Note: Genre, BPM, and Musical Key are deliberately excluded from conflict resolution & porting.
+    # The user does not use Genre, and BPM and Musical Key are rediscovered by Rekordbox analysis.
     info_definitions = [
         ("title", "Track Title", old_data.get("title", ""), new_data.get("title", ""), "old"),
         ("artist", "Artist", old_data.get("artist", ""), new_data.get("artist", ""), "old"),
         ("album", "Album", old_data.get("album", ""), new_data.get("album", ""), "old"),
-        ("genre", "Genre", old_data.get("genre", ""), new_data.get("genre", ""), "old"),
-        ("bpm", "BPM / Tempo", old_data.get("bpm") or 0.0, new_data.get("bpm") or 0.0, "old"),
-        ("key", "Musical Key", old_data.get("key", ""), new_data.get("key", ""), "old"),
         ("rating", "Rating", old_data.get("rating") or 0, new_data.get("rating") or 0, "old"),
         ("release_year", "Release Year", old_data.get("release_year") or old_data.get("year") or 0, new_data.get("release_year") or new_data.get("year") or 0, "old"),
         ("track_no", "Track No.", old_data.get("track_no") or 0, new_data.get("track_no") or 0, "old"),

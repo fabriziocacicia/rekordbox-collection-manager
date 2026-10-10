@@ -96,6 +96,11 @@ class TestMetadataDiffCalculation(unittest.TestCase):
 
         diff_dict = {d.key: d for d in diffs}
 
+        # Verify genre, bpm, key are excluded from conflict resolution view
+        self.assertNotIn("genre", diff_dict)
+        self.assertNotIn("bpm", diff_dict)
+        self.assertNotIn("key", diff_dict)
+
         # Check title conflict
         title_diff = diff_dict["title"]
         self.assertEqual(title_diff.status, "conflict")
@@ -438,9 +443,12 @@ class TestTrackReplacementDiffDialog(unittest.TestCase):
             options={"old_file_action": "keep", "move_new_file_to_track_folder": False},
         )
         self.assertIsNotNone(dialog)
-        self.assertEqual(len(dialog.diff_view.diffs), 29)
+        self.assertEqual(len(dialog.diff_view.diffs), 26)
 
         diffs = {d.key: d for d in dialog.diff_view.diffs}
+        self.assertNotIn("genre", diffs)
+        self.assertNotIn("bpm", diffs)
+        self.assertNotIn("key", diffs)
         self.assertEqual(diffs["history_sessions"].old_val, "3 sets")
         self.assertEqual(diffs["history_sessions"].result_val, "Preserved (3 sets)")
         self.assertEqual(diffs["playlists"].old_val, "2 playlists")
@@ -454,16 +462,25 @@ class TestTrackReplacementDiffDialog(unittest.TestCase):
         dialog.diff_view._apply_global_preset("new")
         resolved = dialog.get_resolved_metadata()
         self.assertEqual(resolved["title"], "Track A (2024 Remaster)")
+        self.assertNotIn("genre", resolved)
+        self.assertNotIn("bpm", resolved)
+        self.assertNotIn("key", resolved)
 
         # Check presets: Apply "old"
         dialog.diff_view._apply_global_preset("old")
         resolved = dialog.get_resolved_metadata()
         self.assertEqual(resolved["title"], "Track A")
+        self.assertNotIn("genre", resolved)
+        self.assertNotIn("bpm", resolved)
+        self.assertNotIn("key", resolved)
 
         # Check options
         opts = dialog.get_options()
         self.assertEqual(opts["old_file_action"], "keep")
         self.assertIn("resolved_metadata", opts)
+        self.assertNotIn("genre", opts["resolved_metadata"])
+        self.assertNotIn("bpm", opts["resolved_metadata"])
+        self.assertNotIn("key", opts["resolved_metadata"])
 
     @patch("rekordbox_collection_manager.gui.replacement_diff_dialog.is_rekordbox_running", return_value=False)
     def test_dialog_instantiation_mode_merge(self, mock_running):
@@ -505,6 +522,30 @@ class TestTrackReplacementDiffDialog(unittest.TestCase):
         # Simulate confirm
         dialog.diff_view._on_confirm_clicked()
         self.assertTrue(dialog.result() == 1 or dialog.resolved_metadata is not None)
+
+    def test_genre_bpm_key_not_ported_during_merge(self):
+        # Target t2 initially has BPM=12400
+        options = {
+            "old_file_action": "keep",
+            "resolved_metadata": {
+                "title": "Merged Title",
+                "genre": "Rock",
+                "bpm": 150.0,
+                "key": "8A",
+            },
+        }
+        res = merge_imported_tracks(self.engine, "t1", "t2", options=options)
+        self.assertTrue(res["success"])
+
+        with self.engine.connect() as conn:
+            row = conn.execute(text("SELECT Title, BPM, GenreID, KeyID FROM djmdContent WHERE ID = 't2';")).fetchone()
+            # Title was updated via resolved_metadata
+            self.assertEqual(row[0], "Merged Title")
+            # BPM was NOT ported/overwritten (retains target track's original 12400)
+            self.assertEqual(row[1], 12400)
+            # GenreID and KeyID were NOT set/ported from resolved_metadata
+            self.assertIsNone(row[2])
+            self.assertIsNone(row[3])
 
 
 if __name__ == "__main__":

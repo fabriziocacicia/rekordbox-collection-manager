@@ -1011,11 +1011,13 @@ def replace_track_audio_file(
         update_sql = f"UPDATE djmdContent SET {', '.join(update_clauses)} WHERE ID = :id;"
         conn.execute(text(update_sql), params)
 
-        # 2b. Apply resolved metadata if provided
+        # 2b. Apply resolved metadata if provided (excluding genre, bpm, key which are not ported)
         resolved_meta = opts.get("resolved_metadata")
         if resolved_meta:
-            tables = {r[0] for r in conn.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table';").fetchall()}
-            _apply_resolved_metadata(conn, cols, tables, str(content_id), resolved_meta, now_utc)
+            filtered_meta = {k: v for k, v in resolved_meta.items() if k not in ("genre", "bpm", "key")}
+            if filtered_meta:
+                tables = {r[0] for r in conn.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table';").fetchall()}
+                _apply_resolved_metadata(conn, cols, tables, str(content_id), filtered_meta, now_utc)
 
         # 3. Query preserved relational metrics
         history_count = 0
@@ -1149,29 +1151,35 @@ def merge_imported_tracks(
         src_plays = int(src_dict.get("DJPlayCount") or 0)
         src_stock_date = str(src_dict.get("StockDate") or "")
 
+        cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(djmdContent);").fetchall()}
+        tables = {r[0] for r in conn.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table';").fetchall()}
+
         # 2. Transfer play count and StockDate to target
+        set_clauses = ["DJPlayCount = :plays", "StockDate = :stock_date"]
+        update_params: Dict[str, Any] = {
+            "plays": src_plays,
+            "stock_date": src_stock_date,
+            "target_id": str(target_content_id),
+        }
+        if "updated_at" in cols:
+            set_clauses.append("updated_at = :updated_at")
+            update_params["updated_at"] = now_utc
+
         conn.execute(
-            text("""
+            text(f"""
                 UPDATE djmdContent
-                SET DJPlayCount = :plays,
-                    StockDate = :stock_date,
-                    updated_at = :updated_at
+                SET {', '.join(set_clauses)}
                 WHERE ID = :target_id;
             """),
-            {
-                "plays": src_plays,
-                "stock_date": src_stock_date,
-                "updated_at": now_utc,
-                "target_id": str(target_content_id),
-            },
+            update_params,
         )
 
-        # 2b. Apply resolved metadata if provided
+        # 2b. Apply resolved metadata if provided (excluding genre, bpm, key which are not ported)
         resolved_meta = opts.get("resolved_metadata")
         if resolved_meta:
-            cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(djmdContent);").fetchall()}
-            tables = {r[0] for r in conn.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table';").fetchall()}
-            _apply_resolved_metadata(conn, cols, tables, str(target_content_id), resolved_meta, now_utc)
+            filtered_meta = {k: v for k, v in resolved_meta.items() if k not in ("genre", "bpm", "key")}
+            if filtered_meta:
+                _apply_resolved_metadata(conn, cols, tables, str(target_content_id), filtered_meta, now_utc)
 
         # 3. Transfer history entries
         hist_res = conn.execute(
@@ -1253,14 +1261,18 @@ def merge_imported_tracks(
             cues_transferred = cue_res.rowcount or 0
 
         # 7. Soft delete old source track
+        del_clauses = ["rb_local_deleted = 1"]
+        del_params: Dict[str, Any] = {"source_id": str(source_content_id)}
+        if "updated_at" in cols:
+            del_clauses.append("updated_at = :updated_at")
+            del_params["updated_at"] = now_utc
         conn.execute(
-            text("""
+            text(f"""
                 UPDATE djmdContent
-                SET rb_local_deleted = 1,
-                    updated_at = :updated_at
+                SET {', '.join(del_clauses)}
                 WHERE ID = :source_id;
             """),
-            {"source_id": str(source_content_id), "updated_at": now_utc},
+            del_params,
         )
 
     # 8. Post-transaction: handle old file
