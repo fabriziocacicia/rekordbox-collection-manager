@@ -22,11 +22,12 @@ from PySide6.QtWidgets import (
     QStackedWidget,
     QTreeWidget,
     QTreeWidgetItem,
-    QTreeWidgetItemIterator,
     QVBoxLayout,
     QWidget,
 )
 from sqlalchemy.engine import Engine
+
+from rekordbox_collection_manager.gui.tree_utils import iter_tree_items, safe_clear_tree
 
 from rekordbox_collection_manager.gui.theme import (
     COLOR_BG_CARD,
@@ -527,13 +528,10 @@ class PlaylistsView(QWidget):
     ) -> None:
         # Preserve expanded folder IDs before clearing tree
         expanded_ids = set()
-        it = QTreeWidgetItemIterator(self.tree)
-        while it.value():
-            item = it.value()
+        for item in iter_tree_items(self.tree):
             node = item.data(0, Qt.ItemDataRole.UserRole)
             if node and item.isExpanded() and node.get("id"):
                 expanded_ids.add(str(node.get("id")))
-            it += 1
 
         selected_id = str(self.current_playlist.get("id")) if self.current_playlist else None
 
@@ -544,13 +542,10 @@ class PlaylistsView(QWidget):
 
         # Restore expanded folders
         if expanded_ids:
-            it = QTreeWidgetItemIterator(self.tree)
-            while it.value():
-                item = it.value()
+            for item in iter_tree_items(self.tree):
                 node = item.data(0, Qt.ItemDataRole.UserRole)
                 if node and str(node.get("id")) in expanded_ids:
                     item.setExpanded(True)
-                it += 1
 
         # If a playlist was previously selected or deep-linked, restore it; otherwise select first standard playlist
         if selected_id:
@@ -579,8 +574,8 @@ class PlaylistsView(QWidget):
     # ==========================================================================
     def _populate_tree(self) -> None:
         """Build QTreeWidgetItem hierarchy from playlists_tree_data."""
+        safe_clear_tree(self.tree)
         self.tree.blockSignals(True)
-        self.tree.clear()
 
         def add_nodes(parent_item: Optional[QTreeWidgetItem], nodes: List[Dict[str, Any]]) -> None:
             for node in nodes:
@@ -640,10 +635,8 @@ class PlaylistsView(QWidget):
         q_lower = query.lower()
         if not q_lower:
             # Unhide all items
-            it = QTreeWidgetItemIterator(self.tree)
-            while it.value():
-                it.value().setHidden(False)
-                it += 1
+            for item in iter_tree_items(self.tree):
+                item.setHidden(False)
             return
 
         def filter_item(item: QTreeWidgetItem) -> bool:
@@ -667,16 +660,13 @@ class PlaylistsView(QWidget):
 
     def _select_first_playlist(self) -> None:
         """Find and select the first standard/smart playlist in the tree."""
-        it = QTreeWidgetItemIterator(self.tree)
-        while it.value():
-            item = it.value()
+        for item in iter_tree_items(self.tree):
             node = item.data(0, Qt.ItemDataRole.UserRole)
             if node and node.get("attribute") != 1:  # Not a bare folder
                 self.tree.setCurrentItem(item)
                 if not self.current_playlist or self.current_playlist.get("id") != node.get("id"):
                     self.load_playlist(node)
                 break
-            it += 1
 
     # ==========================================================================
     # Tree Interaction & Playlist Loading
@@ -870,9 +860,7 @@ class PlaylistsView(QWidget):
         if self.current_playlist and str(self.current_playlist.get("id")) == str(playlist_id):
             self.current_playlist["track_count"] = count
 
-        it = QTreeWidgetItemIterator(self.tree)
-        while it.value():
-            item = it.value()
+        for item in iter_tree_items(self.tree):
             node = item.data(0, Qt.ItemDataRole.UserRole)
             if node and str(node.get("id")) == str(playlist_id):
                 node["track_count"] = count
@@ -886,7 +874,6 @@ class PlaylistsView(QWidget):
                     item.setText(0, f"📑 {name}  {cnt_str}")
                     item.setToolTip(0, f"Playlist: {name}\nTracks: {count}")
                 break
-            it += 1
 
     def _on_tracks_error(self, err_msg: str) -> None:
         self.status_label.setText(f"❌ Error loading playlist tracks: {err_msg}")
@@ -979,12 +966,10 @@ class PlaylistsView(QWidget):
             return False
 
         q = str(playlist_id_or_name).strip().lower()
-        it = QTreeWidgetItemIterator(self.tree)
         target_item: Optional[QTreeWidgetItem] = None
         target_node: Optional[Dict[str, Any]] = None
 
-        while it.value():
-            item = it.value()
+        for item in iter_tree_items(self.tree):
             node = item.data(0, Qt.ItemDataRole.UserRole)
             if node:
                 n_id = str(node.get("id", "")).strip().lower()
@@ -993,7 +978,6 @@ class PlaylistsView(QWidget):
                     target_item = item
                     target_node = node
                     break
-            it += 1
 
         if target_item and target_node:
             # Expand all parent folders

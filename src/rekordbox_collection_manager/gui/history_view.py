@@ -31,11 +31,12 @@ from PySide6.QtWidgets import (
     QTableWidgetItem,
     QTreeWidget,
     QTreeWidgetItem,
-    QTreeWidgetItemIterator,
     QVBoxLayout,
     QWidget,
 )
 from sqlalchemy.engine import Engine
+
+from rekordbox_collection_manager.gui.tree_utils import iter_tree_items, safe_clear_tree
 
 from rekordbox_collection_manager.gui.chip import DJChipsContainer
 from rekordbox_collection_manager.gui.history_detail_view import HistoryDetailView
@@ -553,9 +554,9 @@ class HistoryView(QWidget):
 
     def _update_folder_tree(self) -> None:
         """Rebuild Year/Month folder tree from current records."""
+        safe_clear_tree(self.folder_tree)
         self.folder_tree.blockSignals(True)
         try:
-            self.folder_tree.clear()
 
             active_records = [r for r in self.original_records if not r.get("is_deleted")]
             deleted_records = [r for r in self.original_records if r.get("is_deleted")]
@@ -666,16 +667,13 @@ class HistoryView(QWidget):
             # Highlight current selected filter or default to all_item
             selected_found = False
             if self.active_folder_filter:
-                iterator = QTreeWidgetItemIterator(self.folder_tree)
-                while iterator.value():
-                    item = iterator.value()
+                for item in iter_tree_items(self.folder_tree):
                     if item.data(0, Qt.ItemDataRole.UserRole) == self.active_folder_filter:
                         item.setSelected(True)
                         self.folder_tree.setCurrentItem(item)
                         self.folder_tree.scrollToItem(item)
                         selected_found = True
                         break
-                    iterator += 1
 
             if not selected_found:
                 all_item.setSelected(True)

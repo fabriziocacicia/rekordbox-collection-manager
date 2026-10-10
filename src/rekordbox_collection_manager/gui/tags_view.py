@@ -22,11 +22,12 @@ from PySide6.QtWidgets import (
     QStackedWidget,
     QTreeWidget,
     QTreeWidgetItem,
-    QTreeWidgetItemIterator,
     QVBoxLayout,
     QWidget,
 )
 from sqlalchemy.engine import Engine
+
+from rekordbox_collection_manager.gui.tree_utils import iter_tree_items, safe_clear_tree
 
 from rekordbox_collection_manager.tags import delete_tag, sort_tags_in_folder
 from rekordbox_collection_manager.utils import is_rekordbox_running
@@ -353,13 +354,10 @@ class TagsView(QWidget):
     ) -> None:
         # Preserve expanded folder IDs before clearing tree
         expanded_ids = set()
-        it = QTreeWidgetItemIterator(self.tree)
-        while it.value():
-            item = it.value()
+        for item in iter_tree_items(self.tree):
             node = item.data(0, Qt.ItemDataRole.UserRole)
             if node and item.isExpanded() and node.get("id"):
                 expanded_ids.add(str(node.get("id")))
-            it += 1
 
         selected_id = str(self.current_tag.get("id")) if self.current_tag else None
 
@@ -370,13 +368,10 @@ class TagsView(QWidget):
 
         # Restore expanded folders
         if expanded_ids:
-            it = QTreeWidgetItemIterator(self.tree)
-            while it.value():
-                item = it.value()
+            for item in iter_tree_items(self.tree):
                 node = item.data(0, Qt.ItemDataRole.UserRole)
                 if node and str(node.get("id")) in expanded_ids:
                     item.setExpanded(True)
-                it += 1
 
         # If a tag was previously selected or deep-linked, restore it; otherwise select first standard tag
         if selected_id:
@@ -405,8 +400,8 @@ class TagsView(QWidget):
     # ==========================================================================
     def _populate_tree(self) -> None:
         """Build QTreeWidgetItem hierarchy from tags_tree_data."""
+        safe_clear_tree(self.tree)
         self.tree.blockSignals(True)
-        self.tree.clear()
 
         def add_nodes(parent_item: Optional[QTreeWidgetItem], nodes: List[Dict[str, Any]]) -> None:
             for node in nodes:
@@ -458,10 +453,8 @@ class TagsView(QWidget):
         q_lower = query.lower()
         if not q_lower:
             # Unhide all items
-            it = QTreeWidgetItemIterator(self.tree)
-            while it.value():
-                it.value().setHidden(False)
-                it += 1
+            for item in iter_tree_items(self.tree):
+                item.setHidden(False)
             return
 
         def filter_item(item: QTreeWidgetItem) -> bool:
@@ -485,16 +478,13 @@ class TagsView(QWidget):
 
     def _select_first_tag(self) -> None:
         """Find and select the first tag in the tree."""
-        it = QTreeWidgetItemIterator(self.tree)
-        while it.value():
-            item = it.value()
+        for item in iter_tree_items(self.tree):
             node = item.data(0, Qt.ItemDataRole.UserRole)
             if node and node.get("attribute") != 1:  # Not a category folder
                 self.tree.setCurrentItem(item)
                 if not self.current_tag or self.current_tag.get("id") != node.get("id"):
                     self.load_tag(node)
                 break
-            it += 1
 
     # ==========================================================================
     # Tree Interaction & Tag Loading
@@ -913,9 +903,7 @@ class TagsView(QWidget):
         if self.current_tag and str(self.current_tag.get("id")).strip() == target_tid:
             self.current_tag["track_count"] = count
 
-        it = QTreeWidgetItemIterator(self.tree)
-        while it.value():
-            item = it.value()
+        for item in iter_tree_items(self.tree):
             node = item.data(0, Qt.ItemDataRole.UserRole)
             if node and str(node.get("id")).strip() == target_tid:
                 node["track_count"] = count
@@ -926,7 +914,6 @@ class TagsView(QWidget):
                     item.setText(0, f"🏷️ {name}  {cnt_str}")
                     item.setToolTip(0, f"Tag: {name}\nTracks: {count}")
                 break
-            it += 1
 
     def _on_tracks_error(self, err_msg: str) -> None:
         self.status_label.setText(f"❌ Error loading tag tracks: {err_msg}")
@@ -1030,12 +1017,10 @@ class TagsView(QWidget):
         except (ValueError, TypeError):
             pass
 
-        it = QTreeWidgetItemIterator(self.tree)
         target_item: Optional[QTreeWidgetItem] = None
         target_node: Optional[Dict[str, Any]] = None
 
-        while it.value():
-            item = it.value()
+        for item in iter_tree_items(self.tree):
             node = item.data(0, Qt.ItemDataRole.UserRole)
             if node and node.get("attribute") != 1:  # Only match tags, not category folders
                 n_id = str(node.get("id", "")).strip().lower()
@@ -1057,7 +1042,6 @@ class TagsView(QWidget):
                     target_item = item
                     target_node = node
                     break
-            it += 1
 
         if target_item and target_node:
             # Expand all parent categories
