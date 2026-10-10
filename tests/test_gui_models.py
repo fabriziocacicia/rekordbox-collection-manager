@@ -2214,27 +2214,14 @@ class TestTableChipInteractions(unittest.TestCase):
         self.assertTrue(self.table.has_staged_changes())
         self.assertIn("Deep Tech", self.table.records[0]["tags"])
 
-    def test_tracks_view_new_tag_button_and_toolbar(self):
+    def test_tracks_view_toolbar_has_no_new_tag_or_playlist_buttons(self):
         from rekordbox_collection_manager.gui.tracks_view import TracksView
-        from unittest.mock import MagicMock
 
         view = TracksView()
-        self.assertTrue(hasattr(view, "btn_new_tag"))
-        self.assertEqual(view.btn_new_tag.text(), "🏷️ ＋ New Tag...")
-
-        mock_dialog = MagicMock()
-        mock_dialog.exec.return_value = 1
-        mock_dialog.created_tag = {"id": "106", "name": "Minimal", "category_name": "Genre"}
-
-        view.table.set_engine(MagicMock())
-        view.table.set_tracks([{"id": "t1", "title": "Track 1", "tags": []}])
-        view.table.selectRow(0)
-
-        with patch("rekordbox_collection_manager.gui.track_table.is_rekordbox_running", return_value=False), \
-             patch("rekordbox_collection_manager.gui.track_table.CreateTagDialog", return_value=mock_dialog):
-            view.btn_new_tag.click()
-
-        self.assertIn("Minimal", view.table.records[0]["tags"])
+        self.assertFalse(hasattr(view, "btn_new_tag"))
+        self.assertFalse(hasattr(view, "btn_new_playlist"))
+        self.assertTrue(hasattr(view, "copy_btn"))
+        self.assertTrue(hasattr(view, "btn_toggle_filters"))
         view.close()
 
     def test_table_on_playlist_create_requested_stages_and_emits_playlist_created(self):
@@ -2266,34 +2253,6 @@ class TestTableChipInteractions(unittest.TestCase):
         # Must be staged on row 0
         self.assertTrue(self.table.has_staged_changes())
         self.assertIn("Ibiza Closing", self.table.records[0]["playlists"])
-
-    def test_tracks_view_new_playlist_button_and_toolbar(self):
-        from rekordbox_collection_manager.gui.tracks_view import TracksView
-        from unittest.mock import MagicMock
-
-        view = TracksView()
-        self.assertTrue(hasattr(view, "btn_new_playlist"))
-        self.assertEqual(view.btn_new_playlist.text(), "📑 ＋ New Playlist...")
-
-        mock_dialog = MagicMock()
-        mock_dialog.exec.return_value = 1
-        mock_dialog.created_playlist = {
-            "id": "206",
-            "name": "Festival Mainstage",
-            "attribute": 0,
-            "is_folder": False,
-        }
-
-        view.table.set_engine(MagicMock())
-        view.table.set_tracks([{"id": "t1", "title": "Track 1", "playlists": []}])
-        view.table.selectRow(0)
-
-        with patch("rekordbox_collection_manager.gui.track_table.is_rekordbox_running", return_value=False), \
-             patch("rekordbox_collection_manager.gui.track_table.CreatePlaylistDialog", return_value=mock_dialog):
-            view.btn_new_playlist.click()
-
-        self.assertIn("Festival Mainstage", view.table.records[0]["playlists"])
-        view.close()
 
     def test_multi_select_search_filter(self):
         from rekordbox_collection_manager.gui.multi_select_filter import MultiSelectSearchFilter

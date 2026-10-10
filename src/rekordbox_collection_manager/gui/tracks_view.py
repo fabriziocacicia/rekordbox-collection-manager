@@ -127,16 +127,6 @@ class TracksView(QWidget):
         self.copy_btn.clicked.connect(self._on_copy_tracklist)
         top_toolbar.addWidget(self.copy_btn)
 
-        self.btn_new_tag = QPushButton("🏷️ ＋ New Tag...")
-        self.btn_new_tag.setToolTip("Create a new My Tag in the database (stages on selected track if one is selected)")
-        self.btn_new_tag.clicked.connect(self._on_create_tag_clicked)
-        top_toolbar.addWidget(self.btn_new_tag)
-
-        self.btn_new_playlist = QPushButton("📑 ＋ New Playlist...")
-        self.btn_new_playlist.setToolTip("Create a new Playlist in the database (stages on selected track if one is selected)")
-        self.btn_new_playlist.clicked.connect(self._on_create_playlist_clicked)
-        top_toolbar.addWidget(self.btn_new_playlist)
-
         main_layout.addLayout(top_toolbar)
 
         # 2. Dedicated Filtering Row Panel
@@ -662,18 +652,6 @@ class TracksView(QWidget):
         row = selected_rows[0]
         if 0 <= row < len(self.records):
             self._open_track_detail(self.records[row])
-
-    def _on_create_tag_clicked(self) -> None:
-        """Create a new tag in the database, optionally staging it on the selected track row."""
-        selected_rows = self.table.selected_rows()
-        target_row = selected_rows[0] if selected_rows else -1
-        self.table._on_tag_create_requested(target_row, "")
-
-    def _on_create_playlist_clicked(self) -> None:
-        """Create a new playlist in the database, optionally staging it on the selected track row."""
-        selected_rows = self.table.selected_rows()
-        target_row = selected_rows[0] if selected_rows else -1
-        self.table._on_playlist_create_requested(target_row, "")
 
     def cleanup(self) -> None:
         """Stop background search workers and timers cleanly."""
