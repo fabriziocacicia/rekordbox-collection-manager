@@ -169,8 +169,9 @@ class TracksView(QWidget):
         self.purchase_combo.addItem("All Statuses", userData="all")
         self.purchase_combo.addItem("📥 Downloaded (Exclude Purchased)", userData="downloaded")
         self.purchase_combo.addItem("🛒 Purchased Only", userData="purchased")
+        self.purchase_combo.addItem("💳 Purchasable (≥3 plays)", userData="purchasable")
         self.purchase_combo.setStyleSheet(self._filter_style_base)
-        self.purchase_combo.setToolTip("Filter by purchase status (inside Purchased folder vs Downloaded)")
+        self.purchase_combo.setToolTip("Filter by purchase status (Downloaded, Purchased, or Purchasable [Downloaded & ≥3 plays])")
         self.purchase_combo.currentIndexChanged.connect(self._on_filter_changed)
         filter_layout.addWidget(self.purchase_combo)
 
@@ -363,11 +364,22 @@ class TracksView(QWidget):
         """Handle any filter combo change: update active styling and query."""
         p_filter = self.purchase_combo.currentData() or "all"
         is_purchased_only = (p_filter == "purchased")
+        is_purchasable = (p_filter in ("purchasable", "buyable"))
 
         if hasattr(self, "store_filter_widget"):
             if not is_purchased_only and self.store_filter_widget.is_active():
                 self.store_filter_widget.clear_selection()
             self.store_filter_widget.setVisible(is_purchased_only)
+
+        if hasattr(self, "play_filter_combo"):
+            if is_purchasable:
+                if self.play_filter_combo.currentIndex() != 0:
+                    self.play_filter_combo.blockSignals(True)
+                    self.play_filter_combo.setCurrentIndex(0)
+                    self.play_filter_combo.blockSignals(False)
+                self.play_filter_combo.setVisible(False)
+            else:
+                self.play_filter_combo.setVisible(True)
 
         if hasattr(self, "table"):
             self.table.set_column_visible(TrackColumn.PURCHASED_AT, is_purchased_only)
@@ -384,7 +396,7 @@ class TracksView(QWidget):
         ]
         active_count = 0
         for c in combos:
-            if c.currentIndex() > 0:
+            if c.currentIndex() > 0 and not c.isHidden():
                 c.setStyleSheet(self._filter_style_active)
                 active_count += 1
             else:
@@ -422,6 +434,9 @@ class TracksView(QWidget):
             c.blockSignals(True)
             c.setCurrentIndex(0)
             c.blockSignals(False)
+
+        if hasattr(self, "play_filter_combo"):
+            self.play_filter_combo.setVisible(True)
 
         if hasattr(self, "store_filter_widget"):
             self.store_filter_widget.clear_selection()
@@ -547,8 +562,12 @@ class TracksView(QWidget):
             limit = int(limit_data) if (limit_data is not None and limit_data > 0) else None
 
         # Filter mode from dropdowns
-        play_filter = self.play_filter_combo.currentData() or "all"
         purchased_filter = self.purchase_combo.currentData() or "all"
+        play_filter = (
+            "all"
+            if purchased_filter in ("purchasable", "buyable")
+            else (self.play_filter_combo.currentData() or "all")
+        )
         store_filter = (
             self.store_filter_widget.get_selected()
             if (purchased_filter == "purchased" and hasattr(self, "store_filter_widget"))
@@ -607,6 +626,8 @@ class TracksView(QWidget):
                 info_extras.append(f"{diff} purchased excluded")
             else:
                 info_extras.append("purchased excluded")
+        elif p_filter in ("purchasable", "buyable"):
+            info_extras.append("purchasable: downloaded & ≥3 plays")
         elif p_filter == "purchased":
             store_sel = self.store_filter_widget.get_selected() if hasattr(self, "store_filter_widget") else []
             if store_sel:

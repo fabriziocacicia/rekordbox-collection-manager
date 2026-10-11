@@ -1285,6 +1285,31 @@ class TestPlaylistChipsUI(unittest.TestCase):
 
         self.assertTrue(t_view.store_filter_widget.isHidden())
         self.assertFalse(t_view.table.is_column_visible("Purchased At"))
+        self.assertFalse(t_view.play_filter_combo.isHidden())
+
+        # Switch to '💳 Purchasable (≥3 plays)'
+        idx_purchasable = t_view.purchase_combo.findData("purchasable")
+        self.assertGreater(idx_purchasable, -1)
+        # Select played filter first to check that it gets reset
+        t_view.play_filter_combo.setCurrentIndex(1)
+        t_view.purchase_combo.setCurrentIndex(idx_purchasable)
+
+        # play_filter_combo should be hidden and reset to 'All'
+        self.assertTrue(t_view.play_filter_combo.isHidden())
+        self.assertEqual(t_view.play_filter_combo.currentIndex(), 0)
+        self.assertTrue(t_view.store_filter_widget.isHidden())
+        self.assertFalse(t_view.table.is_column_visible("Purchased At"))
+
+        # Switch back to 'All Statuses' -> play_filter_combo reappears
+        t_view.purchase_combo.setCurrentIndex(0)
+        self.assertFalse(t_view.play_filter_combo.isHidden())
+
+        # Test reset button restores visibility
+        t_view.purchase_combo.setCurrentIndex(idx_purchasable)
+        self.assertTrue(t_view.play_filter_combo.isHidden())
+        t_view._on_reset_filters()
+        self.assertFalse(t_view.play_filter_combo.isHidden())
+        self.assertEqual(t_view.purchase_combo.currentIndex(), 0)
 
     def test_purchased_chip_and_store_chip_components(self):
         """Verify PurchasedChip and StoreChip styling, scheme changes, and click events."""

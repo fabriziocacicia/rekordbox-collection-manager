@@ -97,7 +97,7 @@ def search_tracks(
 
     Dynamically queries djmdContent (or generic content table) and joins
     artist, album, genre, key, tags, and real playlists when present.
-    Supports text searching, purchased filtering ('all', 'purchased', 'downloaded'),
+    Supports text searching, purchased filtering ('all', 'purchased', 'downloaded', 'purchasable'),
     play count filtering ('all', 'played', 'unplayed'), musical key, tempo/BPM range,
     file format, multi-tag filtering with match mode ('any'/'all'), multi-playlist
     filtering with match mode ('any'/'all'), streaming exclusion, and column sorting.
@@ -270,6 +270,9 @@ def search_tracks(
                 purchased_clause = f"AND {purchased_sql}"
             elif p_mode in ("downloaded", "unpurchased", "non_purchased", "exclude_purchased"):
                 purchased_clause = f"AND NOT {purchased_sql}"
+            elif p_mode in ("purchasable", "buyable"):
+                purchased_clause = f"AND NOT {purchased_sql} AND ({play_col} >= 3)"
+                play_filter = ""
 
             # Store filter (supports multi-store selection e.g. ["Beatport", "Bandcamp"])
             store_clause = ""
@@ -643,6 +646,9 @@ def search_tracks(
                     fallback_purchased_clause = f"AND {fb_purchased_sql}"
                 elif p_mode in ("downloaded", "unpurchased", "non_purchased", "exclude_purchased"):
                     fallback_purchased_clause = f"AND NOT {fb_purchased_sql}"
+                elif p_mode in ("purchasable", "buyable"):
+                    fallback_purchased_clause = f"AND NOT {fb_purchased_sql} AND ({count_expr} >= 3)"
+                    play_filter = ""
 
             if sort_by == "play_count":
                 fallback_order = f"{count_expr} {order_dir}, Title ASC"

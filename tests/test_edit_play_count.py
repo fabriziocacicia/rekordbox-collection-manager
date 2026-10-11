@@ -202,6 +202,22 @@ class TestEditPlayCount(unittest.TestCase):
         self.assertIn("10", all_ids)
         self.assertIn("1", all_ids)
 
+        # 3b. Filter: "purchasable" (downloaded + play count >= 3)
+        purchasable = search_tracks(self.engine, "", purchased_filter="purchasable")
+        self.assertTrue(len(purchasable) > 0)
+        purchasable_ids = {t["id"] for t in purchasable}
+        # Track 1: downloaded, play_count 5 -> purchasable
+        self.assertIn("1", purchasable_ids)
+        # Track 10: purchased folder, play_count 3 -> excluded (already purchased)
+        self.assertNotIn("10", purchasable_ids)
+        # Track 2: downloaded, play_count 2 -> excluded (< 3 plays)
+        self.assertNotIn("2", purchasable_ids)
+        # Track 3: downloaded, play_count 0 -> excluded
+        self.assertNotIn("3", purchasable_ids)
+        for t in purchasable:
+            self.assertFalse(t["is_purchased"])
+            self.assertGreaterEqual(t["play_count"], 3)
+
         # 4. Sorting by purchased descending (purchased track first)
         sorted_res = search_tracks(self.engine, "", sort_by="purchased", sort_order="desc")
         self.assertEqual(sorted_res[0]["id"], "10")
