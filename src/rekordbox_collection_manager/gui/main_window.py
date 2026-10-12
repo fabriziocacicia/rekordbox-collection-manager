@@ -5,7 +5,7 @@ import os
 import shutil
 import sys
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 from PySide6.QtCore import Property, QEasingCurve, QPropertyAnimation, QSize, QTimer, Qt
 from PySide6.QtGui import QAction, QCloseEvent, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
@@ -145,6 +145,7 @@ class MainWindow(QMainWindow):
         self._sync_worker: Optional[SyncWorker] = None
         self._sync_pending: bool = False
         self._initial_sync_done: bool = False
+        self._dirty_views: Set[int] = set()
 
         self.nav_items = [
             {
@@ -436,6 +437,8 @@ class MainWindow(QMainWindow):
         if page_id == curr:
             if page_id == 0 and hasattr(self.tracks_view, "reset_to_list"):
                 self.tracks_view.reset_to_list()
+                if hasattr(self.tracks_view, "refresh"):
+                    self.tracks_view.refresh(preserve_scroll=False)
             elif page_id == 1 and hasattr(self.playlists_view, "reset_to_list"):
                 self.playlists_view.reset_to_list()
             elif page_id == 2 and hasattr(self.tags_view, "reset_to_list"):
@@ -444,14 +447,29 @@ class MainWindow(QMainWindow):
                 self.history_view.reset_to_list()
             elif page_id == 4 and hasattr(self.play_count_view, "reset_to_list"):
                 self.play_count_view.reset_to_list()
+                if hasattr(self.play_count_view, "refresh"):
+                    self.play_count_view.refresh(preserve_scroll=False)
 
-        # When navigating to or clicking Playlists, refresh hierarchy & counts from database
-        if page_id == 1 and hasattr(self, "playlists_view"):
+        # Refresh destination view if its database state is stale or on explicit reload
+        if page_id == 0 and hasattr(self, "tracks_view"):
+            if page_id in self._dirty_views:
+                self.tracks_view.refresh(preserve_scroll=True)
+                self._dirty_views.discard(0)
+            elif self.tracks_view.stack.currentIndex() == 1 and hasattr(self.tracks_view.detail_view, "reload_track"):
+                if not self.tracks_view.detail_view.has_staged_changes():
+                    self.tracks_view.detail_view.reload_track()
+        elif page_id == 1 and hasattr(self, "playlists_view"):
             self.playlists_view.refresh(force_reload_tracks=True)
+            self._dirty_views.discard(1)
             if is_turso_configured() and not is_rekordbox_running():
                 self.trigger_sync(background=True, create_backup=False)
         elif page_id == 2 and hasattr(self, "tags_view"):
             self.tags_view.refresh(force_reload_tracks=True)
+            self._dirty_views.discard(2)
+        elif page_id == 4 and hasattr(self, "play_count_view"):
+            if page_id in self._dirty_views:
+                self.play_count_view.refresh(preserve_scroll=True)
+                self._dirty_views.discard(4)
 
         self.stacked_widget.setCurrentIndex(page_id)
 
@@ -480,6 +498,7 @@ class MainWindow(QMainWindow):
             self.nav_buttons[1].setChecked(True)
         self.stacked_widget.setCurrentIndex(1)
         self.playlists_view.open_playlist_by_id_or_name(playlist_name_or_id, force_reload=True)
+        self._dirty_views.discard(1)
 
     def open_tag(self, tag_name_or_id: str) -> None:
         """Switch navigation to Tags tab and select the requested tag."""
@@ -493,6 +512,7 @@ class MainWindow(QMainWindow):
             self.nav_buttons[2].setChecked(True)
         self.stacked_widget.setCurrentIndex(2)
         self.tags_view.open_tag_by_id_or_name(tag_name_or_id, force_reload=True)
+        self._dirty_views.discard(2)
 
     def open_replace_file_for_track(self, track_data: Dict[str, Any]) -> None:
         """Switch navigation to Replace File tab and preselect track."""
@@ -696,6 +716,7 @@ class MainWindow(QMainWindow):
         )
 
         # Trigger cloud sync on opening our custom manager
+        self._dirty_views.clear()
         if not self._initial_sync_done:
             self._initial_sync_done = True
             self.trigger_sync(background=True, create_backup=True)
@@ -849,7 +870,17 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage(msg, 5000)
 
     def _on_db_saved(self) -> None:
-        """Trigger background cloud sync after database modifications."""
+        """Trigger background cloud sync after database modifications and refresh data across views."""
+        curr_page = self.stacked_widget.currentIndex()
+        all_data_views = {0, 1, 2, 4}  # 0: Tracks, 1: Playlists, 2: Tags, 4: Play Counts
+        self._dirty_views.update(all_data_views - {curr_page})
+
+        # Eagerly pre-refresh tracks view in background if it has no unsaved edits
+        if curr_page != 0 and hasattr(self, "tracks_view") and hasattr(self.tracks_view, "refresh"):
+            if not self.tracks_view.table.has_staged_changes():
+                self.tracks_view.refresh(preserve_scroll=True)
+                self._dirty_views.discard(0)
+
         self.trigger_sync(background=True, create_backup=True)
 
     def trigger_sync(

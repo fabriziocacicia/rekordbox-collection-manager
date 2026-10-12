@@ -287,10 +287,24 @@ class PlayCountView(QWidget):
     def _on_search_text_changed(self, text: str) -> None:
         self.search_debounce_timer.start()
 
-    def _execute_search(self) -> None:
+    def refresh(self, preserve_scroll: bool = True) -> None:
+        """Refresh track play counts from database."""
+        if not self.engine:
+            return
+        if self.staged_edits:
+            if not self.confirm_unsaved_changes():
+                return
+        self._execute_search(preserve_scroll=preserve_scroll)
+
+    def _execute_search(self, preserve_scroll: bool = False) -> None:
         """Run search query via background worker."""
         if not self.engine:
             return
+
+        if preserve_scroll and hasattr(self, "table"):
+            self._pending_restore_scroll = self.table.verticalScrollBar().value()
+        else:
+            self._pending_restore_scroll = None
 
         query = self.search_input.text().strip()
         limit_map = [50, 100, 250, 500]
@@ -342,6 +356,11 @@ class PlayCountView(QWidget):
             self.records.sort(key=self._record_sort_key, reverse=reverse)
         self._populate_table()
         self._update_status_bar()
+
+        restore_scroll = getattr(self, "_pending_restore_scroll", None)
+        if restore_scroll is not None and hasattr(self, "table"):
+            self.table.verticalScrollBar().setValue(restore_scroll)
+            self._pending_restore_scroll = None
 
     def _on_search_error(self, err_msg: str) -> None:
         self.status_label.setText(f"Search error: {err_msg}")

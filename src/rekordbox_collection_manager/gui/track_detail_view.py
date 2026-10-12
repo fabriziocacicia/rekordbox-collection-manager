@@ -5,9 +5,11 @@ file paths) and an interactive chronological breakdown of every history session
 in which the track was played, with direct navigation to history sets.
 Embedded as an in-place view within the application with breadcrumb and back navigation.
 """
-
+import logging
 import os
 from typing import Any, Dict, List, Optional, Set
+
+logger = logging.getLogger(__name__)
 
 from PySide6.QtCore import QPoint, QRect, QRectF, QSize, QStringListModel, Qt, Signal
 from PySide6.QtGui import (
@@ -732,6 +734,33 @@ class TrackDetailView(QWidget):
         self._load_available_tags()
         self._populate_track_data(self.track)
         self._load_full_details_async()
+
+    def reload_track(self) -> None:
+        """Reload current track data directly from database."""
+        if not self.engine:
+            return
+        content_id = self.track.get("id") or self.track.get("content_id")
+        if not content_id:
+            return
+        from rekordbox_collection_manager.edit_play_count import search_tracks
+
+        try:
+            records = search_tracks(self.engine, content_id=str(content_id))
+            if records:
+                fresh_track = records[0]
+                if self.tracks_list and 0 <= self.current_index < len(self.tracks_list):
+                    self.tracks_list[self.current_index] = dict(fresh_track)
+                self.load_track(
+                    engine=self.engine,
+                    track_data=fresh_track,
+                    db_path=self.db_path,
+                    tracks_list=self.tracks_list,
+                    current_index=self.current_index,
+                    back_button_text=self.back_btn.text(),
+                )
+                self.track_changed.emit(self.current_index, self.track)
+        except Exception as e:
+            logger.error("Failed to reload track details: %s", e)
 
     def set_back_button_text(self, text: str) -> None:
         """Update back button label."""
@@ -1513,15 +1542,24 @@ class TrackDetailView(QWidget):
         """Backward-compatible alias for saving changes."""
         self._on_save_changes()
 
+    def has_staged_changes(self) -> bool:
+        """Return True if there are unsaved playlist, tag, comment, or store changes."""
+        pl_dirty = set(getattr(self, "current_playlists", [])) != set(getattr(self, "original_playlists", []))
+        tag_dirty = set(getattr(self, "current_tags", [])) != set(getattr(self, "original_tags", []))
+        comment_dirty = getattr(self, "current_comment", "") != getattr(self, "original_comment", "")
+        store_dirty = getattr(self, "current_store", "") != getattr(self, "original_store", "")
+        return bool(pl_dirty or tag_dirty or comment_dirty or store_dirty)
+
+    def confirm_unsaved_changes(self) -> bool:
+        """Public alias for _confirm_unsaved_changes."""
+        return self._confirm_unsaved_changes()
+
     def _confirm_unsaved_changes(self) -> bool:
-        """Prompt user if there are unsaved playlist, tag, or comment changes before navigating away.
+        """Prompt user if there are unsaved playlist, tag, comment, or store changes before navigating away.
 
         Returns True if safe to navigate, False if action was cancelled.
         """
-        pl_dirty = set(self.current_playlists) != set(self.original_playlists)
-        tag_dirty = set(self.current_tags) != set(self.original_tags)
-        comment_dirty = self.current_comment != self.original_comment
-        if pl_dirty or tag_dirty or comment_dirty:
+        if self.has_staged_changes():
             reply = QMessageBox.question(
                 self,
                 "Unsaved Modifications",
@@ -1532,12 +1570,7 @@ class TrackDetailView(QWidget):
             )
             if reply == QMessageBox.StandardButton.Save:
                 self._on_save_changes()
-                saved = (
-                    set(self.current_playlists) == set(self.original_playlists)
-                    and set(self.current_tags) == set(self.original_tags)
-                    and self.current_comment == self.original_comment
-                )
-                return saved
+                return not self.has_staged_changes()
             elif reply == QMessageBox.StandardButton.Discard:
                 self._on_discard_changes()
                 return True

@@ -72,6 +72,7 @@ class TracksView(QWidget):
         self.active_search_worker: Optional[TrackSearchWorker] = None
         self.current_sort_field: str = "title"
         self.current_sort_order: Qt.SortOrder = Qt.SortOrder.AscendingOrder
+        self._needs_table_refresh: bool = False
 
         # Debounce timer for live search
         self.search_debounce_timer = QTimer(self)
@@ -309,7 +310,7 @@ class TracksView(QWidget):
         self.detail_view.status_message.connect(self._on_table_status_message)
         self.detail_view.track_changed.connect(self._on_detail_track_changed)
         self.detail_view.replace_file_requested.connect(self.replace_file_requested.emit)
-        self.detail_view.db_saved.connect(self.db_saved.emit)
+        self.detail_view.db_saved.connect(self._on_detail_db_saved)
         self.stack.addWidget(self.detail_view)
 
     def reset_to_list(self) -> None:
@@ -543,7 +544,29 @@ class TracksView(QWidget):
         self.status_label.setText(msg)
         self.notify_status.emit(msg)
 
-    def _execute_search(self) -> None:
+    def refresh(self, preserve_scroll: bool = True) -> None:
+        """Refresh collection tracks from database and re-populate filter options."""
+        if not self.engine:
+            return
+        try:
+            self.populate_filter_options()
+        except Exception:
+            pass
+
+        # If currently looking at TrackDetailView, reload active track directly from database
+        if self.stack.currentIndex() == 1 and hasattr(self, "detail_view"):
+            self._needs_table_refresh = True
+            has_unsaved = (
+                self.detail_view.has_staged_changes()
+                if hasattr(self.detail_view, "has_staged_changes")
+                else False
+            )
+            if not has_unsaved and hasattr(self.detail_view, "reload_track"):
+                self.detail_view.reload_track()
+
+        self._execute_search(preserve_scroll=preserve_scroll)
+
+    def _execute_search(self, preserve_scroll: bool = False) -> None:
         """Run track query via non-blocking background worker."""
         if not self.engine:
             return
@@ -551,6 +574,16 @@ class TracksView(QWidget):
         if self.table.has_staged_changes():
             if not self.table.confirm_unsaved_changes():
                 return
+
+        if preserve_scroll:
+            self._pending_restore_scroll = self.table.verticalScrollBar().value()
+            selected = self.table.selected_records()
+            self._pending_selected_track_id = (
+                selected[0].get("id") or selected[0].get("content_id")
+            ) if selected else None
+        else:
+            self._pending_restore_scroll = None
+            self._pending_selected_track_id = None
 
         query = self.search_input.text().strip()
 
@@ -614,6 +647,29 @@ class TracksView(QWidget):
         self.tracks_header_label.setText(f"TRACKS ({len(records)})")
         self._populate_table()
 
+        restore_scroll = getattr(self, "_pending_restore_scroll", None)
+        if restore_scroll is not None:
+            self.table.verticalScrollBar().setValue(restore_scroll)
+            self._pending_restore_scroll = None
+
+        restore_id = getattr(self, "_pending_selected_track_id", None)
+        if restore_id is not None:
+            for idx, r in enumerate(records):
+                if (r.get("id") or r.get("content_id")) == restore_id:
+                    self.table.selectRow(idx)
+                    break
+            self._pending_selected_track_id = None
+
+        # If currently looking at TrackDetailView, keep its displayed track in sync
+        if self.stack.currentIndex() == 1 and hasattr(self, "detail_view"):
+            has_unsaved = (
+                self.detail_view.has_staged_changes()
+                if hasattr(self.detail_view, "has_staged_changes")
+                else False
+            )
+            if not has_unsaved and hasattr(self.detail_view, "reload_track"):
+                self.detail_view.reload_track()
+
         total_cnt = self.total_collection_tracks or len(records)
         disp_cnt = len(records)
 
@@ -666,6 +722,7 @@ class TracksView(QWidget):
             if not self.table.confirm_unsaved_changes():
                 return
 
+        self._needs_table_refresh = False
         track_id = track.get("id") or track.get("content_id")
         curr_idx = 0
         for idx, r in enumerate(self.records):
@@ -683,23 +740,45 @@ class TracksView(QWidget):
         )
         self.stack.setCurrentIndex(1)
 
+    def _on_detail_db_saved(self) -> None:
+        """Track that database modifications occurred while in detail view and bubble signal."""
+        self._needs_table_refresh = True
+        self.db_saved.emit()
+
     def _on_back_from_detail(self) -> None:
-        """Return to tracks collection list view."""
+        """Return to tracks collection list view and refresh if changes were made."""
         self.stack.setCurrentIndex(0)
+        if getattr(self, "_needs_table_refresh", False):
+            self._needs_table_refresh = False
+            self.refresh(preserve_scroll=True)
 
     def _on_detail_track_changed(self, idx: int, track: Dict[str, Any]) -> None:
         """Select, scroll, and update track in table when detail view navigates or changes."""
         self.table.sync_saved_track(track)
-        if 0 <= idx < len(self.records):
-            self.records[idx].update(track)
-            self.table.update_track_record(idx, track)
+        track_id = str(track.get("id") or track.get("content_id") or "")
+
+        match_idx = None
+        if (
+            0 <= idx < len(self.records)
+            and str(self.records[idx].get("id") or self.records[idx].get("content_id") or "") == track_id
+        ):
+            match_idx = idx
+        else:
+            for i, r in enumerate(self.records):
+                if str(r.get("id") or r.get("content_id") or "") == track_id:
+                    match_idx = i
+                    break
+
+        if match_idx is not None:
+            self.records[match_idx].update(track)
+            self.table.update_track_record(match_idx, track)
             if "playlists" in track:
-                self.table.update_track_playlists(idx, track["playlists"])
+                self.table.update_track_playlists(match_idx, track["playlists"])
             if "tags" in track:
-                self.table.update_track_tags(idx, track["tags"])
-        if 0 <= idx < self.table.rowCount():
-            self.table.selectRow(idx)
-            self.table.scrollToRow(idx)
+                self.table.update_track_tags(match_idx, track["tags"])
+            if 0 <= match_idx < self.table.rowCount():
+                self.table.selectRow(match_idx)
+                self.table.scrollToRow(match_idx)
 
     def confirm_unsaved_changes(self) -> bool:
         """Prompt user if there are unsaved changes in detail view or tracks table."""
