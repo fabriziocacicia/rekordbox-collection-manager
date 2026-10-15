@@ -298,6 +298,11 @@ class HistoryView(QWidget):
         self.realign_btn.clicked.connect(self._on_realign_chronology)
         top_bar.addWidget(self.realign_btn)
 
+        self.import_external_btn = QPushButton("📥 Import & Merge External DB...")
+        self.import_external_btn.setToolTip("Import or merge history sessions from an external master.db file")
+        self.import_external_btn.clicked.connect(self._open_import_external_dialog)
+        top_bar.addWidget(self.import_external_btn)
+
         sessions_layout.addLayout(top_bar)
 
         # 2. Main Content Splitter (Left: Folder Tree, Right: Session Table)
@@ -1258,6 +1263,26 @@ class HistoryView(QWidget):
         self.realign_btn.setEnabled(True)
         self.notify_status.emit(f"❌ Realignment failed: {err_msg}")
         QMessageBox.critical(self, "Realignment Failed", f"Database error during realignment:\n{err_msg}")
+
+    def _open_import_external_dialog(self) -> None:
+        """Open the external history import and diff merge dialog."""
+        if not self.engine:
+            QMessageBox.warning(
+                self,
+                "Database Non Connesso",
+                "Nessun database attualmente connesso.",
+            )
+            return
+
+        from rekordbox_collection_manager.gui.history_import_dialog import HistoryImportDialog
+
+        dialog = HistoryImportDialog(
+            current_engine=self.engine,
+            current_db_path=self.db_path or "",
+            parent=self,
+        )
+        dialog.db_updated.connect(lambda: self.request_reload.emit())
+        dialog.exec()
 
     def _on_save_all_changes(self) -> None:
         """Save all staged edits in a single atomic transaction."""

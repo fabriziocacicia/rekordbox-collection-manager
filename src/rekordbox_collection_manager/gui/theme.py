@@ -12,10 +12,13 @@ from PySide6.QtWidgets import QApplication
 # Platform-appropriate default font family (avoids missing font warnings on macOS/Linux)
 if sys.platform == "darwin":
     FONT_FAMILY = '".AppleSystemUIFont", "Helvetica Neue", "Arial"'
+    FONT_FAMILY_MONO = '"Menlo", "SF Mono", "Courier New"'
 elif sys.platform == "win32":
     FONT_FAMILY = '"Segoe UI", "Helvetica Neue", "Arial"'
+    FONT_FAMILY_MONO = '"Consolas", "Courier New"'
 else:
     FONT_FAMILY = '"Ubuntu", "DejaVu Sans", "Arial"'
+    FONT_FAMILY_MONO = '"DejaVu Sans Mono", "Courier New"'
 
 # Color Palette Constants
 COLOR_BG_DARK = "#121215"
@@ -52,8 +55,14 @@ COLOR_RED_BORDER = "#6e1d1d"
 
 MODERN_DARK_QSS = f"""
 /* Global Window Styling */
-QMainWindow, QWidget {{
+QMainWindow, QDialog {{
     background-color: {COLOR_BG_DARK};
+    color: {COLOR_TEXT_PRIMARY};
+    font-family: {FONT_FAMILY};
+    font-size: 13px;
+}}
+
+QWidget {{
     color: {COLOR_TEXT_PRIMARY};
     font-family: {FONT_FAMILY};
     font-size: 13px;
@@ -62,6 +71,18 @@ QMainWindow, QWidget {{
 /* Base Labels (transparent background by default so they inherit parent card backgrounds) */
 QLabel {{
     background-color: transparent;
+}}
+
+/* Tooltips - Must be completely opaque to prevent text bleed-through */
+QToolTip, QTipLabel {{
+    background-color: #1a1e2b;
+    color: #f8fafc;
+    border: 1px solid #3b4255;
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 11px;
+    font-weight: 500;
+    opacity: 255;
 }}
 
 /* Top Header & Toolbars */

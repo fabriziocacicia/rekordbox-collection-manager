@@ -92,6 +92,7 @@ from rekordbox_collection_manager.gui.theme import (
     COLOR_TEXT_MUTED,
     COLOR_TEXT_PRIMARY,
     COLOR_TEXT_SECONDARY,
+    FONT_FAMILY_MONO,
 )
 from rekordbox_collection_manager.gui.workers import TrackDetailWorker, stop_worker
 from rekordbox_collection_manager.utils import (
@@ -571,7 +572,7 @@ class TrackDetailView(QWidget):
         self.filepath_label = QLabel("")
         self.filepath_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.filepath_label.setStyleSheet(
-            f"color: {COLOR_TEXT_SECONDARY}; font-family: 'Menlo', 'Courier New', monospace; font-size: 11px;"
+            f"color: {COLOR_TEXT_SECONDARY}; font-family: {FONT_FAMILY_MONO}; font-size: 11px;"
         )
         self.filepath_label.setWordWrap(True)
         loc_layout.addWidget(self.filepath_label)

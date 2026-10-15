@@ -1010,3 +1010,80 @@ class SyncWorker(QObject):
         finally:
             self.finished.emit()
 
+
+class ExternalHistoryAnalyzeWorker(QThread):
+    """Worker to analyze an external history database against current DB without freezing UI."""
+
+    success = Signal(object)  # ExternalHistoryAnalysis
+    error = Signal(str)
+
+    def __init__(
+        self,
+        current_engine: Engine,
+        external_db_path: str,
+        parent: Optional[Any] = None,
+    ):
+        super().__init__(parent)
+        self.current_engine = current_engine
+        self.external_db_path = external_db_path
+
+    def run(self) -> None:
+        try:
+            if self.isInterruptionRequested():
+                return
+            from rekordbox_collection_manager.history_import import analyze_external_history_db
+
+            res = analyze_external_history_db(self.current_engine, self.external_db_path)
+            if self.isInterruptionRequested():
+                return
+            self.success.emit(res)
+        except Exception as e:
+            if not self.isInterruptionRequested():
+                self.error.emit(str(e))
+
+
+class ExternalHistoryMergeWorker(QThread):
+    """Worker to apply an external history merge plan in the current DB with backup."""
+
+    success = Signal(dict)  # Stats dict
+    error = Signal(str)
+
+    def __init__(
+        self,
+        current_engine: Engine,
+        external_engine: Engine,
+        plan: List[Dict[str, Any]],
+        db_path: str,
+        create_placeholders: bool = True,
+        backup: bool = True,
+        parent: Optional[Any] = None,
+    ):
+        super().__init__(parent)
+        self.current_engine = current_engine
+        self.external_engine = external_engine
+        self.plan = plan
+        self.db_path = db_path
+        self.create_placeholders = create_placeholders
+        self.backup = backup
+
+    def run(self) -> None:
+        try:
+            if self.isInterruptionRequested():
+                return
+            from rekordbox_collection_manager.history_import import execute_history_merge_plan
+
+            res = execute_history_merge_plan(
+                current_engine=self.current_engine,
+                external_engine=self.external_engine,
+                plan=self.plan,
+                db_path=self.db_path,
+                create_placeholders=self.create_placeholders,
+                backup=self.backup,
+            )
+            if self.isInterruptionRequested():
+                return
+            self.success.emit(res)
+        except Exception as e:
+            if not self.isInterruptionRequested():
+                self.error.emit(str(e))
+
