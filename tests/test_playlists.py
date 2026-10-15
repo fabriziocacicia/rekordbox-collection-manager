@@ -346,7 +346,7 @@ class TestPlaylistsGUI(unittest.TestCase):
         chip = PlaylistChip("Melodic House", clickable=True)
         clicked_names = []
         chip.clicked.connect(clicked_names.append)
-        chip.clicked.emit(chip.text)
+        chip.clicked.emit(chip.text())
         self.assertEqual(clicked_names, ["Melodic House"])
 
     def test_playlist_chips_container_click_signal(self):
@@ -357,7 +357,7 @@ class TestPlaylistsGUI(unittest.TestCase):
 
         # Trigger first chip click
         first_chip = container.chips[0]
-        first_chip.clicked.emit(first_chip.text)
+        first_chip.clicked.emit(first_chip.text())
         self.assertEqual(clicked_playlists, ["Afro House"])
 
     def test_update_playlist_item_count(self):

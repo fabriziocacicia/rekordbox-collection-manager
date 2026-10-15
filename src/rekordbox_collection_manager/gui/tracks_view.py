@@ -45,7 +45,11 @@ from rekordbox_collection_manager.gui.track_table import (
     TrackTableConfig,
     TracksTableWidget,
 )
-from rekordbox_collection_manager.gui.workers import TrackSearchWorker, stop_worker
+from rekordbox_collection_manager.gui.workers import (
+    FilterOptionsWorker,
+    TrackSearchWorker,
+    stop_worker,
+)
 from rekordbox_collection_manager.utils import (
     KNOWN_STORES,
     open_in_folder,
@@ -70,6 +74,7 @@ class TracksView(QWidget):
         self.total_collection_tracks: int = 0
         self.records: List[Dict[str, Any]] = []
         self.active_search_worker: Optional[TrackSearchWorker] = None
+        self.active_filter_options_worker: Optional[FilterOptionsWorker] = None
         self.current_sort_field: str = "title"
         self.current_sort_order: Qt.SortOrder = Qt.SortOrder.AscendingOrder
         self._needs_table_refresh: bool = False
@@ -453,40 +458,52 @@ class TracksView(QWidget):
         self._update_all_filter_styles()
         self._execute_search()
 
-    def populate_filter_options(self) -> None:
-        """Populate Format, Key, Tag, and Playlist filter dropdowns dynamically from the active database."""
+    def populate_filter_options(self, sync: bool = False) -> None:
+        """Populate Format, Key, Tag, and Playlist filter dropdowns dynamically via background worker."""
         if not self.engine:
             return
 
-        # 1. Formats (only audio file formats present in active database)
-        try:
-            formats = fetch_distinct_file_types(self.engine)
-            self.format_filter_widget.set_items(formats)
-        except Exception:
-            pass
+        # For in-memory databases (unit tests), SQLite connections cannot be shared across
+        # separate threads because ':memory:' is connection-private. Run synchronously.
+        is_in_memory = (
+            str(getattr(self.engine, "url", "")) == "sqlite:///:memory:"
+            or getattr(getattr(self.engine, "url", None), "database", None) == ":memory:"
+        )
 
-        # 2. Keys (only musical keys present on tracks in active database)
-        try:
-            keys = fetch_distinct_keys(self.engine)
-            self.key_filter_widget.set_items(keys)
-        except Exception:
-            pass
+        if sync or is_in_memory:
+            try:
+                formats = fetch_distinct_file_types(self.engine)
+                keys = fetch_distinct_keys(self.engine)
+                tags = fetch_all_tags(self.engine)
+                tag_names = [t.get("name") if isinstance(t, dict) else str(t) for t in tags if t]
+                playlists = fetch_all_playlists(self.engine)
+                playlist_names = [p.get("name") if isinstance(p, dict) else str(p) for p in playlists if p]
+                self._on_filter_options_loaded(
+                    formats,
+                    keys,
+                    [n for n in tag_names if n],
+                    [n for n in playlist_names if n],
+                )
+            except Exception:
+                pass
+            return
 
-        # 3. Tags
-        try:
-            tags = fetch_all_tags(self.engine)
-            tag_names = [t.get("name") if isinstance(t, dict) else str(t) for t in tags]
-            self.tag_filter_widget.set_items([n for n in tag_names if n])
-        except Exception:
-            pass
+        stop_worker(self.active_filter_options_worker)
+        self.active_filter_options_worker = FilterOptionsWorker(self.engine, parent=self)
+        self.active_filter_options_worker.success.connect(self._on_filter_options_loaded)
+        self.active_filter_options_worker.start()
 
-        # 4. Playlists
-        try:
-            playlists = fetch_all_playlists(self.engine)
-            pl_names = [p.get("name") if isinstance(p, dict) else str(p) for p in playlists]
-            self.playlist_filter_widget.set_items([n for n in pl_names if n])
-        except Exception:
-            pass
+    def _on_filter_options_loaded(
+        self,
+        formats: List[str],
+        keys: List[str],
+        tag_names: List[str],
+        playlist_names: List[str],
+    ) -> None:
+        self.format_filter_widget.set_items(formats)
+        self.key_filter_widget.set_items(keys)
+        self.tag_filter_widget.set_items(tag_names)
+        self.playlist_filter_widget.set_items(playlist_names)
 
     def _on_search_text_changed(self, text: str) -> None:
         self.search_debounce_timer.start()
@@ -805,6 +822,9 @@ class TracksView(QWidget):
         if getattr(self, "active_search_worker", None):
             stop_worker(self.active_search_worker, wait_ms=1000)
             self.active_search_worker = None
+        if getattr(self, "active_filter_options_worker", None):
+            stop_worker(self.active_filter_options_worker, wait_ms=1000)
+            self.active_filter_options_worker = None
         if hasattr(self, "detail_view") and hasattr(self.detail_view, "cleanup"):
             self.detail_view.cleanup()
 

@@ -8,6 +8,10 @@ from sqlalchemy.engine import Engine
 
 from rekordbox_collection_manager.edit_play_count import (
     batch_update_track_play_counts,
+    fetch_all_playlists,
+    fetch_all_tags,
+    fetch_distinct_file_types,
+    fetch_distinct_keys,
     fetch_track_full_details,
     search_tracks,
     set_track_play_count,
@@ -144,6 +148,15 @@ class DatabaseLoaderWorker(QThread):
             if self.isInterruptionRequested():
                 return
 
+            # Clean up duplicate tag associations if Rekordbox is not running
+            try:
+                from rekordbox_collection_manager.utils import is_rekordbox_running
+                if not is_rekordbox_running():
+                    from rekordbox_collection_manager.tags import cleanup_duplicate_song_tags
+                    cleanup_duplicate_song_tags(engine)
+            except Exception:
+                pass
+
             history_table = detect_history_table(engine)
             history_records = fetch_history_records(engine, history_table, include_deleted=True)
             if self.isInterruptionRequested():
@@ -242,6 +255,42 @@ class TrackSearchWorker(QThread):
             if self.isInterruptionRequested():
                 return
             self.success.emit(self.query, records)
+        except Exception as e:
+            if not self.isInterruptionRequested():
+                self.error.emit(str(e))
+
+
+class FilterOptionsWorker(QThread):
+    """Worker to fetch distinct formats, keys, tags, and playlists asynchronously without GUI freeze."""
+
+    success = Signal(list, list, list, list)  # formats, keys, tag_names, playlist_names
+    error = Signal(str)
+
+    def __init__(self, engine: Engine, parent: Optional[Any] = None):
+        super().__init__(parent)
+        self.engine = engine
+
+    def run(self) -> None:
+        try:
+            if self.isInterruptionRequested():
+                return
+            formats = fetch_distinct_file_types(self.engine)
+            if self.isInterruptionRequested():
+                return
+            keys = fetch_distinct_keys(self.engine)
+            if self.isInterruptionRequested():
+                return
+            tags = fetch_all_tags(self.engine)
+            tag_names = [t.get("name") if isinstance(t, dict) else str(t) for t in tags if t]
+            tag_names = [n for n in tag_names if n]
+            if self.isInterruptionRequested():
+                return
+            playlists = fetch_all_playlists(self.engine)
+            playlist_names = [p.get("name") if isinstance(p, dict) else str(p) for p in playlists if p]
+            playlist_names = [n for n in playlist_names if n]
+            if self.isInterruptionRequested():
+                return
+            self.success.emit(formats, keys, tag_names, playlist_names)
         except Exception as e:
             if not self.isInterruptionRequested():
                 self.error.emit(str(e))
@@ -895,12 +944,14 @@ class SyncWorker(QObject):
     def __init__(
         self,
         db_path: Optional[str] = None,
+        engine: Optional[Engine] = None,
         force: bool = False,
         create_backup: bool = True,
         parent: Optional[Any] = None,
     ):
         super().__init__(parent)
         self.db_path = db_path
+        self.engine = engine
         self.force = force
         self.create_backup = create_backup
         self._thread: Optional[threading.Thread] = None
@@ -941,6 +992,7 @@ class SyncWorker(QObject):
 
             res = run_sync_cycle(
                 db_path=self.db_path,
+                engine=self.engine,
                 force=self.force,
                 create_backup=self.create_backup,
                 progress_cb=_on_progress,

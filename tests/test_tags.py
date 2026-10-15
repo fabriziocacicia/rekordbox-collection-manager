@@ -390,7 +390,7 @@ class TestTagsGUI(unittest.TestCase):
         chip = TagChip("Melodic Techno", clickable=True)
         clicked_tags = []
         chip.clicked.connect(clicked_tags.append)
-        chip.clicked.emit(chip.text)
+        chip.clicked.emit(chip.text())
         self.assertEqual(clicked_tags, ["Melodic Techno"])
 
     def test_tag_chips_container_click_signal(self):
@@ -401,7 +401,7 @@ class TestTagsGUI(unittest.TestCase):
 
         # Trigger first chip click
         first_chip = container.chips[0]
-        first_chip.clicked.emit(first_chip.text)
+        first_chip.clicked.emit(first_chip.text())
         self.assertEqual(clicked_tags, ["Melodic Techno"])
 
     def test_main_window_open_tag_navigation(self):

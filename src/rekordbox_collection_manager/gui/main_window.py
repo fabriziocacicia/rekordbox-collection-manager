@@ -681,14 +681,6 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
-        # Clean up duplicate tag associations if Rekordbox is not running
-        if not is_rekordbox_running():
-            try:
-                from rekordbox_collection_manager.tags import cleanup_duplicate_song_tags
-                cleanup_duplicate_song_tags(engine)
-            except Exception:
-                pass
-
         # Populate Views
         self.history_view.set_data(engine, history_records, db_path=path)
         self.tracks_view.set_engine(engine, total_tracks=total_tracks, db_path=path)
@@ -906,7 +898,13 @@ class MainWindow(QMainWindow):
                 return
 
             self.status_bar.showMessage("☁️ Checking Turso cloud sync...", 0)
-            worker = SyncWorker(db_path=self.db_path, force=force, create_backup=create_backup, parent=None)
+            worker = SyncWorker(
+                db_path=self.db_path,
+                engine=self.engine,
+                force=force,
+                create_backup=create_backup,
+                parent=None,
+            )
             self._sync_worker = worker
             worker.progress.connect(self._on_sync_progress)
             worker.success.connect(self._on_sync_success)
@@ -915,7 +913,12 @@ class MainWindow(QMainWindow):
             worker.start()
         else:
             try:
-                run_sync_cycle(self.db_path, force=force, create_backup=create_backup)
+                run_sync_cycle(
+                    db_path=self.db_path,
+                    engine=self.engine,
+                    force=force,
+                    create_backup=create_backup,
+                )
             except Exception as e:
                 logger.error("Error during cloud sync: %s", e)
 

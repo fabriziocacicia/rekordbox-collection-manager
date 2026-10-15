@@ -375,8 +375,9 @@ def export_collection_to_turso(
         existing_tables = {r[0] for r in all_tables_res}
 
         # ----------------------------------------------------
-        # 1. Export Tracks
+        # 1. Fetch Tracks Data
         # ----------------------------------------------------
+        rows = []
         if "djmdContent" in existing_tables:
             content_cols = {
                 r[1] for r in conn.exec_driver_sql("PRAGMA table_info(djmdContent);").fetchall()
@@ -450,57 +451,11 @@ def export_collection_to_turso(
                 {where_sql};
             """
             rows = conn.exec_driver_sql(sql).fetchall()
-            total_tracks = len(rows)
-
-            logger.info("Exporting %d tracks to Turso...", total_tracks)
-            track_cols = [
-                "id", "title", "artist", "album", "genre", "bpm",
-                "key_name", "rating", "comment", "color_id",
-                "dj_play_count", "date_added", "updated_at",
-            ]
-            batch_size = 200
-            for i in range(0, total_tracks, batch_size):
-                if cancel_fn and cancel_fn():
-                    logger.info("Turso export cancelled during tracks export.")
-                    return stats
-                chunk = rows[i : i + batch_size]
-                chunk_vals = [
-                    [
-                        str(r[0]),
-                        str(r[1]),
-                        str(r[2]),
-                        str(r[3]),
-                        str(r[4]),
-                        float(r[5] or 0.0),
-                        str(r[6]),
-                        int(r[7] or 0),
-                        str(r[8]),
-                        int(r[9] or 0),
-                        int(r[10] or 0),
-                        str(r[11]),
-                        str(r[12]),
-                    ]
-                    for r in chunk
-                ]
-                sql_insert, params = _build_multi_row_insert("tracks", track_cols, chunk_vals)
-                client.execute(sql_insert, params)
-                stats["tracks"] += len(chunk)
-                if stats["tracks"] % 500 == 0 or stats["tracks"] == total_tracks:
-                    logger.info("Exported %d/%d tracks to Turso", stats["tracks"], total_tracks)
-                if progress_cb:
-                    progress_cb("tracks", stats["tracks"], total_tracks)
-
-            # Explicitly prune any streaming tracks that may have previously existed in Turso
-            try:
-                client.execute("DELETE FROM tracks WHERE title = '' OR title = '(untitled)' OR title LIKE '%spotify%' OR artist LIKE '%spotify%' OR id IN ('14939874', '218663293', '152484359', '61897480', '65048245');")
-                client.execute("DELETE FROM playlist_tracks WHERE track_id IN ('14939874', '218663293', '152484359', '61897480', '65048245');")
-                client.execute("DELETE FROM track_tags WHERE track_id IN ('14939874', '218663293', '152484359', '61897480', '65048245');")
-            except Exception as e:
-                logger.warning("Could not prune streaming tracks from Turso: %s", e)
 
         # ----------------------------------------------------
-        # 2. Export Playlists
+        # 2. Fetch Playlists Data
         # ----------------------------------------------------
+        pl_rows = []
         if "djmdPlaylist" in existing_tables:
             pl_cols = {
                 r[1] for r in conn.exec_driver_sql("PRAGMA table_info(djmdPlaylist);").fetchall()
@@ -522,43 +477,22 @@ def export_collection_to_turso(
                 {del_clause};
             """
             pl_rows = conn.exec_driver_sql(sql).fetchall()
-            total_pl = len(pl_rows)
-            logger.info("Exporting %d playlists to Turso...", total_pl)
-            target_pl_cols = ["id", "name", "parent_id", "seq", "is_folder", "attribute", "updated_at"]
-            batch_size = 100
-            for i in range(0, total_pl, batch_size):
-                if cancel_fn and cancel_fn():
-                    logger.info("Turso export cancelled during playlists export.")
-                    return stats
-                chunk = pl_rows[i : i + batch_size]
-                chunk_vals = [
-                    [
-                        str(r[0]),
-                        str(r[1]),
-                        str(r[2]) if r[2] else None,
-                        int(r[3] or 0),
-                        1 if r[4] == 1 else 0,
-                        int(r[4] or 0),
-                        str(r[5] or ""),
-                    ]
-                    for r in chunk
-                ]
-                sql_insert, params = _build_multi_row_insert("playlists", target_pl_cols, chunk_vals)
-                client.execute(sql_insert, params)
-                stats["playlists"] += len(chunk)
-                if progress_cb:
-                    progress_cb("playlists", stats["playlists"], total_pl)
 
         # ----------------------------------------------------
-        # 3. Export Playlist Tracks
+        # 3. Fetch Playlist Tracks Data
         # ----------------------------------------------------
+        all_pt_rows = []
         if "djmdSongPlaylist" in existing_tables:
             sp_cols = {
                 r[1]
                 for r in conn.exec_driver_sql("PRAGMA table_info(djmdSongPlaylist);").fetchall()
             }
             track_no_col = "sp.TrackNo" if "TrackNo" in sp_cols else "0"
-            sp_streaming = build_exclude_streaming_clause(content_cols, table_alias="c") if "djmdContent" in existing_tables else ""
+            sp_streaming = (
+                build_exclude_streaming_clause(content_cols, table_alias="c")
+                if "djmdContent" in existing_tables
+                else ""
+            )
 
             sql = f"""
                 SELECT sp.ID, sp.PlaylistID, sp.ContentID, {track_no_col}
@@ -569,7 +503,6 @@ def export_collection_to_turso(
                   {sp_streaming};
             """
             sp_rows = conn.exec_driver_sql(sql).fetchall()
-            all_pt_rows = []
             for r in sp_rows:
                 all_pt_rows.append([str(r[0]), str(r[1]), str(r[2]), int(r[3] or 0)])
 
@@ -603,24 +536,10 @@ def export_collection_to_turso(
                     except Exception as e:
                         logger.warning("Could not resolve tracks for smart playlist %s: %s", pl_id, e)
 
-            total_pt = len(all_pt_rows)
-            logger.info("Exporting %d playlist tracks (including smart playlists) to Turso...", total_pt)
-            target_pt_cols = ["id", "playlist_id", "track_id", "track_no"]
-            batch_size = 250
-            for i in range(0, total_pt, batch_size):
-                if cancel_fn and cancel_fn():
-                    logger.info("Turso export cancelled during playlist tracks export.")
-                    return stats
-                chunk = all_pt_rows[i : i + batch_size]
-                sql_insert, params = _build_multi_row_insert("playlist_tracks", target_pt_cols, chunk)
-                client.execute(sql_insert, params)
-                stats["playlist_tracks"] += len(chunk)
-                if progress_cb:
-                    progress_cb("playlist_tracks", stats["playlist_tracks"], total_pt)
-
         # ----------------------------------------------------
-        # 4. Export Tags & Track Tags
+        # 4. Fetch Tags & Track Tags Data
         # ----------------------------------------------------
+        tag_rows = []
         if "djmdMyTag" in existing_tables:
             tag_cols = {
                 r[1] for r in conn.exec_driver_sql("PRAGMA table_info(djmdMyTag);").fetchall()
@@ -640,36 +559,17 @@ def export_collection_to_turso(
                 {del_clause};
             """
             tag_rows = conn.exec_driver_sql(sql).fetchall()
-            total_tags = len(tag_rows)
-            logger.info("Exporting %d tags to Turso...", total_tags)
-            target_tag_cols = ["id", "name", "parent_id", "seq", "updated_at"]
-            batch_size = 100
-            for i in range(0, total_tags, batch_size):
-                if cancel_fn and cancel_fn():
-                    logger.info("Turso export cancelled during tags export.")
-                    return stats
-                chunk = tag_rows[i : i + batch_size]
-                chunk_vals = [
-                    [
-                        str(r[0]),
-                        str(r[1]),
-                        str(r[2]) if r[2] else None,
-                        int(r[3] or 0),
-                        str(r[4] or ""),
-                    ]
-                    for r in chunk
-                ]
-                sql_insert, params = _build_multi_row_insert("tags", target_tag_cols, chunk_vals)
-                client.execute(sql_insert, params)
-                stats["tags"] += len(chunk)
-                if progress_cb:
-                    progress_cb("tags", stats["tags"], total_tags)
 
+        smt_rows = []
         if "djmdSongMyTag" in existing_tables:
             smt_cols = {
                 r[1] for r in conn.exec_driver_sql("PRAGMA table_info(djmdSongMyTag);").fetchall()
             }
-            smt_streaming = build_exclude_streaming_clause(content_cols, table_alias="c") if "djmdContent" in existing_tables else ""
+            smt_streaming = (
+                build_exclude_streaming_clause(content_cols, table_alias="c")
+                if "djmdContent" in existing_tables
+                else ""
+            )
 
             sql = f"""
                 SELECT smt.ID, smt.ContentID, smt.MyTagID
@@ -681,25 +581,11 @@ def export_collection_to_turso(
                 GROUP BY smt.ContentID, smt.MyTagID;
             """
             smt_rows = conn.exec_driver_sql(sql).fetchall()
-            total_tt = len(smt_rows)
-            logger.info("Exporting %d track tags to Turso...", total_tt)
-            target_tt_cols = ["id", "track_id", "tag_id"]
-            batch_size = 300
-            for i in range(0, total_tt, batch_size):
-                if cancel_fn and cancel_fn():
-                    logger.info("Turso export cancelled during track tags export.")
-                    return stats
-                chunk = smt_rows[i : i + batch_size]
-                chunk_vals = [[str(r[0]), str(r[1]), str(r[2])] for r in chunk]
-                sql_insert, params = _build_multi_row_insert("track_tags", target_tt_cols, chunk_vals)
-                client.execute(sql_insert, params)
-                stats["track_tags"] += len(chunk)
-                if progress_cb:
-                    progress_cb("track_tags", stats["track_tags"], total_tt)
 
         # ----------------------------------------------------
-        # 6. Export History Sessions (Locations & Collaborators)
+        # 5. Fetch History Sessions Data
         # ----------------------------------------------------
+        history_batch = []
         if "djmdHistory" in existing_tables:
             hist_cols = {
                 r[1] for r in conn.exec_driver_sql("PRAGMA table_info(djmdHistory);").fetchall()
@@ -716,7 +602,6 @@ def export_collection_to_turso(
             ).fetchall()
 
             from rekordbox_collection_manager.utils import parse_history_name
-            history_batch = []
             for hr in h_rows:
                 hid, hname, hdate, hupd = str(hr[0]), str(hr[1] or ""), str(hr[2] or ""), str(hr[3] or "")
                 _, hloc, hcollab = parse_history_name(hname)
@@ -727,18 +612,163 @@ def export_collection_to_turso(
                     ).scalar() or 0
                 history_batch.append([hid, hname, hdate, hloc or None, hcollab or None, t_count, hupd])
 
-            if history_batch:
-                logger.info("Exporting %d history sessions to Turso...", len(history_batch))
-                hist_target_cols = ["id", "name", "date_created", "location", "collaborators", "track_count", "updated_at"]
-                batch_size = 100
-                for i in range(0, len(history_batch), batch_size):
-                    if cancel_fn and cancel_fn():
-                        logger.info("Turso export cancelled during history export.")
-                        return stats
-                    chunk = history_batch[i : i + batch_size]
-                    sql_insert, params = _build_multi_row_insert("history_sessions", hist_target_cols, chunk)
-                    client.execute(sql_insert, params)
-                stats["history_sessions"] = len(history_batch)
+    # ==============================================================================
+    # Execute Turso Cloud Uploads (SQLite connection is now CLOSED - zero db locks)
+    # ==============================================================================
+
+    # 1. Export Tracks
+    if "djmdContent" in existing_tables and rows:
+        total_tracks = len(rows)
+        logger.info("Exporting %d tracks to Turso...", total_tracks)
+        track_cols = [
+            "id", "title", "artist", "album", "genre", "bpm",
+            "key_name", "rating", "comment", "color_id",
+            "dj_play_count", "date_added", "updated_at",
+        ]
+        batch_size = 200
+        for i in range(0, total_tracks, batch_size):
+            if cancel_fn and cancel_fn():
+                logger.info("Turso export cancelled during tracks export.")
+                return stats
+            chunk = rows[i : i + batch_size]
+            chunk_vals = [
+                [
+                    str(r[0]),
+                    str(r[1]),
+                    str(r[2]),
+                    str(r[3]),
+                    str(r[4]),
+                    float(r[5] or 0.0),
+                    str(r[6]),
+                    int(r[7] or 0),
+                    str(r[8]),
+                    int(r[9] or 0),
+                    int(r[10] or 0),
+                    str(r[11]),
+                    str(r[12]),
+                ]
+                for r in chunk
+            ]
+            sql_insert, params = _build_multi_row_insert("tracks", track_cols, chunk_vals)
+            client.execute(sql_insert, params)
+            stats["tracks"] += len(chunk)
+            if stats["tracks"] % 500 == 0 or stats["tracks"] == total_tracks:
+                logger.info("Exported %d/%d tracks to Turso", stats["tracks"], total_tracks)
+            if progress_cb:
+                progress_cb("tracks", stats["tracks"], total_tracks)
+
+        # Explicitly prune any streaming tracks that may have previously existed in Turso
+        try:
+            client.execute("DELETE FROM tracks WHERE title = '' OR title = '(untitled)' OR title LIKE '%spotify%' OR artist LIKE '%spotify%' OR id IN ('14939874', '218663293', '152484359', '61897480', '65048245');")
+            client.execute("DELETE FROM playlist_tracks WHERE track_id IN ('14939874', '218663293', '152484359', '61897480', '65048245');")
+            client.execute("DELETE FROM track_tags WHERE track_id IN ('14939874', '218663293', '152484359', '61897480', '65048245');")
+        except Exception as e:
+            logger.warning("Could not prune streaming tracks from Turso: %s", e)
+
+    # 2. Export Playlists
+    if "djmdPlaylist" in existing_tables and pl_rows:
+        total_pl = len(pl_rows)
+        logger.info("Exporting %d playlists to Turso...", total_pl)
+        target_pl_cols = ["id", "name", "parent_id", "seq", "is_folder", "attribute", "updated_at"]
+        batch_size = 100
+        for i in range(0, total_pl, batch_size):
+            if cancel_fn and cancel_fn():
+                logger.info("Turso export cancelled during playlists export.")
+                return stats
+            chunk = pl_rows[i : i + batch_size]
+            chunk_vals = [
+                [
+                    str(r[0]),
+                    str(r[1]),
+                    str(r[2]) if r[2] else None,
+                    int(r[3] or 0),
+                    1 if r[4] == 1 else 0,
+                    int(r[4] or 0),
+                    str(r[5] or ""),
+                ]
+                for r in chunk
+            ]
+            sql_insert, params = _build_multi_row_insert("playlists", target_pl_cols, chunk_vals)
+            client.execute(sql_insert, params)
+            stats["playlists"] += len(chunk)
+            if progress_cb:
+                progress_cb("playlists", stats["playlists"], total_pl)
+
+    # 3. Export Playlist Tracks
+    if all_pt_rows:
+        total_pt = len(all_pt_rows)
+        logger.info("Exporting %d playlist tracks (including smart playlists) to Turso...", total_pt)
+        target_pt_cols = ["id", "playlist_id", "track_id", "track_no"]
+        batch_size = 250
+        for i in range(0, total_pt, batch_size):
+            if cancel_fn and cancel_fn():
+                logger.info("Turso export cancelled during playlist tracks export.")
+                return stats
+            chunk = all_pt_rows[i : i + batch_size]
+            sql_insert, params = _build_multi_row_insert("playlist_tracks", target_pt_cols, chunk)
+            client.execute(sql_insert, params)
+            stats["playlist_tracks"] += len(chunk)
+            if progress_cb:
+                progress_cb("playlist_tracks", stats["playlist_tracks"], total_pt)
+
+    # 4. Export Tags
+    if tag_rows:
+        total_tags = len(tag_rows)
+        logger.info("Exporting %d tags to Turso...", total_tags)
+        target_tag_cols = ["id", "name", "parent_id", "seq", "updated_at"]
+        batch_size = 100
+        for i in range(0, total_tags, batch_size):
+            if cancel_fn and cancel_fn():
+                logger.info("Turso export cancelled during tags export.")
+                return stats
+            chunk = tag_rows[i : i + batch_size]
+            chunk_vals = [
+                [
+                    str(r[0]),
+                    str(r[1]),
+                    str(r[2]) if r[2] else None,
+                    int(r[3] or 0),
+                    str(r[4] or ""),
+                ]
+                for r in chunk
+            ]
+            sql_insert, params = _build_multi_row_insert("tags", target_tag_cols, chunk_vals)
+            client.execute(sql_insert, params)
+            stats["tags"] += len(chunk)
+            if progress_cb:
+                progress_cb("tags", stats["tags"], total_tags)
+
+    # 5. Export Track Tags
+    if smt_rows:
+        total_tt = len(smt_rows)
+        logger.info("Exporting %d track tags to Turso...", total_tt)
+        target_tt_cols = ["id", "track_id", "tag_id"]
+        batch_size = 300
+        for i in range(0, total_tt, batch_size):
+            if cancel_fn and cancel_fn():
+                logger.info("Turso export cancelled during track tags export.")
+                return stats
+            chunk = smt_rows[i : i + batch_size]
+            chunk_vals = [[str(r[0]), str(r[1]), str(r[2])] for r in chunk]
+            sql_insert, params = _build_multi_row_insert("track_tags", target_tt_cols, chunk_vals)
+            client.execute(sql_insert, params)
+            stats["track_tags"] += len(chunk)
+            if progress_cb:
+                progress_cb("track_tags", stats["track_tags"], total_tt)
+
+    # 6. Export History Sessions
+    if history_batch:
+        logger.info("Exporting %d history sessions to Turso...", len(history_batch))
+        hist_target_cols = ["id", "name", "date_created", "location", "collaborators", "track_count", "updated_at"]
+        batch_size = 100
+        for i in range(0, len(history_batch), batch_size):
+            if cancel_fn and cancel_fn():
+                logger.info("Turso export cancelled during history export.")
+                return stats
+            chunk = history_batch[i : i + batch_size]
+            sql_insert, params = _build_multi_row_insert("history_sessions", hist_target_cols, chunk)
+            client.execute(sql_insert, params)
+        stats["history_sessions"] = len(history_batch)
 
     return stats
 
@@ -759,6 +789,7 @@ def apply_changelog_events(engine: Engine, client: TursoHttpClient) -> int:
 
     logger.info("Found %d pending changelog events to apply", len(events))
     processed_count = 0
+    events_to_mark: List[Tuple[str, str, Optional[str]]] = []
 
     with engine.begin() as conn:
         for event in events:
@@ -769,7 +800,7 @@ def apply_changelog_events(engine: Engine, client: TursoHttpClient) -> int:
             try:
                 payload = json.loads(payload_str)
             except Exception as e:
-                _mark_event_status(client, event_id, "FAILED", f"Invalid JSON payload: {e}")
+                events_to_mark.append((event_id, "FAILED", f"Invalid JSON payload: {e}"))
                 continue
 
             try:
@@ -1071,12 +1102,20 @@ def apply_changelog_events(engine: Engine, client: TursoHttpClient) -> int:
                 else:
                     raise ValueError(f"Unknown action: {action}")
 
-                _mark_event_status(client, event_id, "PROCESSED")
-                processed_count += 1
+                events_to_mark.append((event_id, "PROCESSED", None))
 
             except Exception as e:
                 logger.error("Failed to apply event %s: %s", event_id, e)
-                _mark_event_status(client, event_id, "FAILED", str(e))
+                events_to_mark.append((event_id, "FAILED", str(e)))
+
+    # Mark event statuses in Turso after releasing SQLite transaction lock
+    for event_id, status, error_msg in events_to_mark:
+        try:
+            _mark_event_status(client, event_id, status, error_msg)
+            if status == "PROCESSED":
+                processed_count += 1
+        except Exception as e:
+            logger.error("Failed to mark event status %s: %s", event_id, e)
 
     try:
         from rekordbox_collection_manager.rename_history import realign_history_order
