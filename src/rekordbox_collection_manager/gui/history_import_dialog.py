@@ -760,7 +760,7 @@ class HistoryImportDialog(QDialog):
                 diff_str = f"🗑️ +{sess.external_track_count} da cestino"
                 color_text = "#c084fc"
             elif sess.diff_count > 0:
-                diff_str = f"➕ +{sess.diff_count} da unire"
+                diff_str = f"+{sess.diff_count} da unire"
                 color_text = "#f59e0b"
             elif sess.category == "new":
                 diff_str = f"✨ +{sess.external_track_count} nuove"
