@@ -531,6 +531,47 @@ class TestReplaceFileGUI(unittest.TestCase):
         self.assertEqual(self.view.mode1_track_artist.text(), "Argy")
         self.assertIn("7 plays", self.view.mode1_plays_chip.text())
         self.assertIn("2024-05-10", self.view.mode1_added_chip.text())
+        self.assertEqual(self.view.mode1_results_table.rowCount(), 1)
+        self.assertEqual(self.view.mode1_results_table.item(0, 0).text(), "Solaris")
+
+        # Verify Mode 2 (Merge Mode) is also pre-populated
+        self.assertIsNotNone(self.view.merge_source_track)
+        self.assertEqual(self.view.merge_source_track["id"], "trk-1")
+        self.assertEqual(self.view.merge_src_table.rowCount(), 1)
+        self.assertEqual(self.view.merge_src_table.item(0, 0).text(), "Solaris")
+        self.assertIn("Solaris", self.view.merge_src_summary.text())
+        self.assertIn("7 plays", self.view.merge_src_summary.text())
+        self.assertEqual(self.view.merge_tgt_input.text(), "Solaris")
+
+    def test_preselect_track_and_switch_to_merge_mode(self):
+        """Verify switching to Mode 2 displays pre-populated track without needing DB search."""
+        sample_track = {
+            "id": "trk-1",
+            "content_id": "trk-1",
+            "title": "Solaris",
+            "artist": "Argy",
+            "file_type": "MP3",
+            "bitrate": 320,
+            "play_count": 7,
+            "date_added": "2024-05-10",
+            "duration_sec": 300,
+            "duration_str": "05:00",
+            "file_path": "/Music/Solaris.mp3",
+            "file_size": 12000000,
+        }
+        self.view.preselect_track(sample_track)
+        self.assertEqual(self.view.stacked_modes.currentIndex(), 0)
+
+        # Switch to Merge mode tab
+        self.view.btn_mode_merge.click()
+        self.assertEqual(self.view.stacked_modes.currentIndex(), 1)
+
+        # Ensure Mode 2 still has source track pre-selected
+        self.assertEqual(self.view.merge_source_track["id"], "trk-1")
+        self.assertEqual(self.view.merge_src_table.rowCount(), 1)
+        self.assertEqual(self.view.merge_src_table.currentRow(), 0)
+        self.assertIn("Solaris", self.view.merge_src_summary.text())
+        self.assertIn("7 plays", self.view.merge_src_summary.text())
 
     def test_audio_inspect_and_timing_match(self):
         """Verify comparison diff updates with duration match when replacement file inspected."""

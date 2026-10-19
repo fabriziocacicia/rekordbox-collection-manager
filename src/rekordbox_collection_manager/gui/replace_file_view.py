@@ -75,6 +75,7 @@ from rekordbox_collection_manager.gui.workers import (
     TrackMergeWorker,
     TrackReplaceWorker,
     TrackSearchWorker,
+    stop_worker,
 )
 from rekordbox_collection_manager.utils import (
     format_file_size,
@@ -215,6 +216,8 @@ class ReplaceFileView(QWidget):
         self.inspect_worker: Optional[AudioInspectWorker] = None
         self.replace_worker: Optional[TrackReplaceWorker] = None
         self.merge_worker: Optional[TrackMergeWorker] = None
+        self.merge_src_worker: Optional[TrackSearchWorker] = None
+        self.merge_tgt_worker: Optional[TrackSearchWorker] = None
 
         # Search debounce timers
         self.mode1_search_timer = QTimer(self)
@@ -255,6 +258,7 @@ class ReplaceFileView(QWidget):
             )
             return
         self._on_track_selected_mode1(track_dict)
+        self._set_merge_source_track(track_dict, search_target=True)
 
     def _init_ui(self) -> None:
         root_layout = QVBoxLayout(self)
@@ -372,7 +376,7 @@ class ReplaceFileView(QWidget):
 
         root_layout.addWidget(self.stacked_modes, stretch=1)
 
-        self.tab_group.idClicked.connect(self.stacked_modes.setCurrentIndex)
+        self.tab_group.idClicked.connect(self._on_mode_tab_clicked)
 
     # ==========================================================================
     # MODE 1: Direct File Replacement on Disk
@@ -725,6 +729,7 @@ class ReplaceFileView(QWidget):
 
         self.merge_src_input = QLineEdit()
         self.merge_src_input.setPlaceholderText("Search source track (MP3 or AIFF)...")
+        self.merge_src_input.setClearButtonEnabled(True)
         self.merge_src_input.textChanged.connect(lambda: self.merge_src_search_timer.start())
         left_box.addWidget(self.merge_src_input)
 
@@ -753,6 +758,7 @@ class ReplaceFileView(QWidget):
 
         self.merge_tgt_input = QLineEdit()
         self.merge_tgt_input.setPlaceholderText("Search target track...")
+        self.merge_tgt_input.setClearButtonEnabled(True)
         self.merge_tgt_input.textChanged.connect(lambda: self.merge_tgt_search_timer.start())
         right_box.addWidget(self.merge_tgt_input)
 
@@ -871,6 +877,9 @@ class ReplaceFileView(QWidget):
         self.selected_track = None
         self.replacement_file_path = None
         self.replacement_specs = None
+        self.mode1_search_input.blockSignals(True)
+        self.mode1_search_input.clear()
+        self.mode1_search_input.blockSignals(False)
         self.mode1_track_title.setText("No Track Selected")
         self.mode1_track_artist.setText("Select a track from search results above")
         self.mode1_track_path_label.setText("")
@@ -897,8 +906,16 @@ class ReplaceFileView(QWidget):
     def _reset_mode2(self) -> None:
         self.merge_source_track = None
         self.merge_target_track = None
+        self.merge_src_input.blockSignals(True)
+        self.merge_src_input.clear()
+        self.merge_src_input.blockSignals(False)
+        self.merge_tgt_input.blockSignals(True)
+        self.merge_tgt_input.clear()
+        self.merge_tgt_input.blockSignals(False)
         self.merge_src_summary.setText("No source track selected")
+        self.merge_src_summary.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY}; font-size: 11px; padding: 6px;")
         self.merge_tgt_summary.setText("No target track selected")
+        self.merge_tgt_summary.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY}; font-size: 11px; padding: 6px;")
         if hasattr(self, "mode2_diff_summary"):
             self.mode2_diff_summary.setText("Select both source track and target AIFF track above to compare metadata.")
             self.mode2_diff_summary.setStyleSheet(
@@ -923,18 +940,9 @@ class ReplaceFileView(QWidget):
         self.search_worker.error.connect(lambda err: self.notify_status.emit(f"Search error: {err}"))
         self.search_worker.start()
 
-    def _on_mode1_search_success(self, query: str, records: List[Dict[str, Any]]) -> None:
-        self.mode1_search_btn.setEnabled(True)
+    def _populate_mode1_table(self, records: List[Dict[str, Any]]) -> None:
         self.mode1_results_table.setRowCount(0)
-        matching_records = [r for r in records if is_replaceable_track(r)]
-        if records and not matching_records:
-            self.mode1_status_label.setText(
-                f"ℹ️ Found {len(records)} track(s) matching '{query}', but none are MP3 or AIFF format. (Currently only MP3 and AIFF tracks can be replaced)."
-            )
-        else:
-            self.mode1_status_label.setText("")
-
-        for row_idx, r in enumerate(matching_records):
+        for row_idx, r in enumerate(records):
             self.mode1_results_table.insertRow(row_idx)
 
             t_item = QTableWidgetItem(r.get("title") or "")
@@ -946,6 +954,18 @@ class ReplaceFileView(QWidget):
             self.mode1_results_table.setItem(row_idx, 3, QTableWidgetItem(str(r.get("play_count") or 0)))
             self.mode1_results_table.setItem(row_idx, 4, QTableWidgetItem(r.get("date_added") or "—"))
             self.mode1_results_table.setItem(row_idx, 5, QTableWidgetItem(r.get("file_path") or ""))
+
+    def _on_mode1_search_success(self, query: str, records: List[Dict[str, Any]]) -> None:
+        self.mode1_search_btn.setEnabled(True)
+        matching_records = [r for r in records if is_replaceable_track(r)]
+        if records and not matching_records:
+            self.mode1_status_label.setText(
+                f"ℹ️ Found {len(records)} track(s) matching '{query}', but none are MP3 or AIFF format. (Currently only MP3 and AIFF tracks can be replaced)."
+            )
+        else:
+            self.mode1_status_label.setText("")
+
+        self._populate_mode1_table(matching_records)
 
     def _on_mode1_table_selection_changed(self) -> None:
         sel = self.mode1_results_table.selectedItems()
@@ -1019,7 +1039,18 @@ class ReplaceFileView(QWidget):
             f"<span style='color:{COLOR_TEXT_MUTED}; font-size:11px;'>{os.path.basename(track.get('file_path') or '')}</span>"
         )
 
+        # If Mode 1 table is empty, display the selected track
+        if self.mode1_results_table.rowCount() == 0:
+            self.mode1_results_table.blockSignals(True)
+            self._populate_mode1_table([track])
+            self.mode1_results_table.selectRow(0)
+            self.mode1_results_table.blockSignals(False)
+
         self._check_mode1_ready()
+
+        # Keep Mode 2 source track in sync if different
+        if not self.merge_source_track or str(self.merge_source_track.get("id")) != str(track.get("id")):
+            self._set_merge_source_track(track, search_target=True)
 
     def _on_new_file_selected(self, path: str) -> None:
         ext = os.path.splitext(path)[1].lower()
@@ -1249,6 +1280,7 @@ class ReplaceFileView(QWidget):
 
         # Reset form
         self._reset_mode1()
+        self._reset_mode2()
 
     def _on_replace_error(self, err: str) -> None:
         self.btn_execute_replace.setEnabled(True)
@@ -1267,13 +1299,27 @@ class ReplaceFileView(QWidget):
         query = self.merge_src_input.text().strip()
         if not query:
             return
-        worker = TrackSearchWorker(self.engine, query, limit=30, parent=self)
-        worker.success.connect(
-            lambda _, recs: self._populate_merge_table(
-                self.merge_src_table, [r for r in recs if is_replaceable_track(r)]
-            )
-        )
-        worker.start()
+        if self.merge_src_worker:
+            stop_worker(self.merge_src_worker, wait_ms=50)
+            self.merge_src_worker = None
+
+        self.merge_src_worker = TrackSearchWorker(self.engine, query, limit=30, parent=self)
+        self.merge_src_worker.success.connect(self._on_merge_src_search_success)
+        self.merge_src_worker.start()
+
+    def _on_merge_src_search_success(self, query: str, recs: List[Dict[str, Any]]) -> None:
+        matching = [r for r in recs if is_replaceable_track(r)]
+        self._populate_merge_table(self.merge_src_table, matching)
+        if not self.merge_source_track:
+            if matching:
+                self.merge_src_summary.setText(f"Found {len(matching)} replaceable track(s). Select one above.")
+                self.merge_src_summary.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY}; font-size: 11px; padding: 6px;")
+            elif recs:
+                self.merge_src_summary.setText(f"ℹ️ Found {len(recs)} track(s) matching '{query}', but none are MP3 or AIFF format.")
+                self.merge_src_summary.setStyleSheet(f"color: {COLOR_AMBER}; font-size: 11px; padding: 6px;")
+            else:
+                self.merge_src_summary.setText(f"No tracks found matching '{query}'.")
+                self.merge_src_summary.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY}; font-size: 11px; padding: 6px;")
 
     def _execute_merge_tgt_search(self) -> None:
         if not self.engine:
@@ -1281,56 +1327,165 @@ class ReplaceFileView(QWidget):
         query = self.merge_tgt_input.text().strip()
         if not query:
             return
-        worker = TrackSearchWorker(self.engine, query, limit=30, parent=self)
-        worker.success.connect(
-            lambda _, recs: self._populate_merge_table(
-                self.merge_tgt_table, [r for r in recs if is_aiff_track(r)]
-            )
-        )
-        worker.start()
+        if self.merge_tgt_worker:
+            stop_worker(self.merge_tgt_worker, wait_ms=50)
+            self.merge_tgt_worker = None
+
+        self.merge_tgt_worker = TrackSearchWorker(self.engine, query, limit=30, parent=self)
+        self.merge_tgt_worker.success.connect(self._on_merge_tgt_search_success)
+        self.merge_tgt_worker.start()
+
+    def _on_merge_tgt_search_success(self, query: str, recs: List[Dict[str, Any]]) -> None:
+        matching = [
+            r for r in recs
+            if is_aiff_track(r)
+            and (not self.merge_source_track or str(r.get("id")) != str(self.merge_source_track.get("id")))
+        ]
+        self._populate_merge_table(self.merge_tgt_table, matching)
+        if not self.merge_target_track:
+            if matching:
+                self.merge_tgt_summary.setText(f"Found {len(matching)} candidate AIFF track(s). Select one above.")
+                self.merge_tgt_summary.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY}; font-size: 11px; padding: 6px;")
+            elif recs:
+                self.merge_tgt_summary.setText(f"ℹ️ Found {len(recs)} track(s) matching '{query}', but none are AIFF format.")
+                self.merge_tgt_summary.setStyleSheet(f"color: {COLOR_AMBER}; font-size: 11px; padding: 6px;")
+            else:
+                self.merge_tgt_summary.setText(f"No AIFF tracks found matching '{query}'.")
+                self.merge_tgt_summary.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY}; font-size: 11px; padding: 6px;")
 
     def _populate_merge_table(self, table: QTableWidget, records: List[Dict[str, Any]]) -> None:
+        table.blockSignals(True)
         table.setRowCount(0)
         for row_idx, r in enumerate(records):
             table.insertRow(row_idx)
-            t_item = QTableWidgetItem(r.get("title") or "")
-            t_item.setData(Qt.ItemDataRole.UserRole, r)
-            table.setItem(row_idx, 0, t_item)
-            table.setItem(row_idx, 1, QTableWidgetItem(r.get("artist") or ""))
-            table.setItem(row_idx, 2, QTableWidgetItem(str(r.get("play_count", 0))))
-            table.setItem(row_idx, 3, QTableWidgetItem(r.get("file_type") or "—"))
+            for col_idx, text_val in enumerate([
+                r.get("title") or "",
+                r.get("artist") or "",
+                str(r.get("play_count", 0)),
+                r.get("file_type") or "—",
+            ]):
+                item = QTableWidgetItem(text_val)
+                item.setData(Qt.ItemDataRole.UserRole, r)
+                table.setItem(row_idx, col_idx, item)
+        table.blockSignals(False)
+
+    def _set_merge_source_track(self, track: Dict[str, Any], search_target: bool = True) -> None:
+        if not is_replaceable_track(track):
+            return
+        self.merge_source_track = dict(track)
+
+        self._populate_merge_table(self.merge_src_table, [track])
+        self.merge_src_table.blockSignals(True)
+        self.merge_src_table.selectRow(0)
+        self.merge_src_table.blockSignals(False)
+
+        self.merge_src_input.blockSignals(True)
+        self.merge_src_input.setText(track.get("title") or "")
+        self.merge_src_input.blockSignals(False)
+
+        self.merge_src_summary.setText(
+            f"✅ Selected Source: <b>{track.get('title')}</b> — {track.get('play_count', 0)} plays · "
+            f"Added: {track.get('date_added') or '—'} · Format: <b>{track.get('file_type') or 'Audio'}</b>"
+        )
+        self.merge_src_summary.setStyleSheet(
+            f"color: {COLOR_TEXT_PRIMARY}; font-size: 11px; padding: 6px; "
+            f"background-color: {COLOR_BG_CARD}; border: 1px solid {COLOR_BORDER}; border-radius: 4px;"
+        )
+
+        # Clear target track since source track changed
+        self.merge_target_track = None
+        self.merge_tgt_summary.setText("No target track selected")
+        self.merge_tgt_summary.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY}; font-size: 11px; padding: 6px;")
+        self.merge_tgt_table.setRowCount(0)
+
+        if search_target and self.engine:
+            title = (track.get("title") or "").strip()
+            if title:
+                self.merge_tgt_input.blockSignals(True)
+                self.merge_tgt_input.setText(title)
+                self.merge_tgt_input.blockSignals(False)
+                self._execute_merge_tgt_search()
+
+        self._check_mode2_ready()
 
     def _on_merge_src_selected(self) -> None:
         sel = self.merge_src_table.selectedItems()
         if sel:
-            track = sel[0].data(Qt.ItemDataRole.UserRole)
+            row = sel[0].row()
+            item = self.merge_src_table.item(row, 0)
+            track = item.data(Qt.ItemDataRole.UserRole) if item else None
             if track:
                 if not is_replaceable_track(track):
                     self.merge_source_track = None
                     self.merge_src_summary.setText("<span style='color:#ff5252;'>Selected source track must be an MP3 or AIFF file.</span>")
+                    self.merge_src_summary.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY}; font-size: 11px; padding: 6px;")
                 else:
-                    self.merge_source_track = track
+                    self.merge_source_track = dict(track)
                     self.merge_src_summary.setText(
-                        f"Selected Source: <b>{track.get('title')}</b> — {track.get('play_count', 0)} plays, "
-                        f"Added: {track.get('date_added')}, Type: {track.get('file_type')}"
+                        f"✅ Selected Source: <b>{track.get('title')}</b> — {track.get('play_count', 0)} plays · "
+                        f"Added: {track.get('date_added') or '—'} · Format: <b>{track.get('file_type') or 'Audio'}</b>"
                     )
+                    self.merge_src_summary.setStyleSheet(
+                        f"color: {COLOR_TEXT_PRIMARY}; font-size: 11px; padding: 6px; "
+                        f"background-color: {COLOR_BG_CARD}; border: 1px solid {COLOR_BORDER}; border-radius: 4px;"
+                    )
+                    # Keep Mode 1 selected track in sync if different
+                    if not self.selected_track or str(self.selected_track.get("id")) != str(track.get("id")):
+                        self._on_track_selected_mode1(track)
+                    # Auto-fill target search input if empty
+                    if not self.merge_target_track and not self.merge_tgt_input.text().strip():
+                        title = (track.get("title") or "").strip()
+                        if title:
+                            self.merge_tgt_input.setText(title)
+                            self._execute_merge_tgt_search()
         self._check_mode2_ready()
 
     def _on_merge_tgt_selected(self) -> None:
         sel = self.merge_tgt_table.selectedItems()
         if sel:
-            track = sel[0].data(Qt.ItemDataRole.UserRole)
+            row = sel[0].row()
+            item = self.merge_tgt_table.item(row, 0)
+            track = item.data(Qt.ItemDataRole.UserRole) if item else None
             if track:
                 if not is_aiff_track(track):
                     self.merge_target_track = None
                     self.merge_tgt_summary.setText("<span style='color:#ff5252;'>Selected target track must be an AIFF file.</span>")
+                    self.merge_tgt_summary.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY}; font-size: 11px; padding: 6px;")
                 else:
-                    self.merge_target_track = track
+                    self.merge_target_track = dict(track)
                     self.merge_tgt_summary.setText(
-                        f"Selected Target: <b>{track.get('title')}</b> — Type: {track.get('file_type')}, "
+                        f"✅ Selected Target: <b>{track.get('title')}</b> — Format: <b>{track.get('file_type') or 'AIFF'}</b> · "
                         f"Path: {os.path.basename(track.get('file_path') or '')}"
                     )
+                    self.merge_tgt_summary.setStyleSheet(
+                        f"color: {COLOR_TEXT_PRIMARY}; font-size: 11px; padding: 6px; "
+                        f"background-color: {COLOR_BG_CARD}; border: 1px solid {COLOR_BORDER}; border-radius: 4px;"
+                    )
         self._check_mode2_ready()
+
+    def _on_mode_tab_clicked(self, tab_id: int) -> None:
+        self.stacked_modes.setCurrentIndex(tab_id)
+        if tab_id == 1:
+            # Switched to Mode 2 (Merge with imported track)
+            if self.selected_track and (
+                not self.merge_source_track
+                or str(self.merge_source_track.get("id")) != str(self.selected_track.get("id"))
+            ):
+                self._set_merge_source_track(self.selected_track, search_target=True)
+            elif self.merge_source_track and not self.merge_target_track and self.merge_tgt_table.rowCount() == 0:
+                title = (self.merge_source_track.get("title") or "").strip()
+                if title and self.engine:
+                    self.merge_tgt_input.blockSignals(True)
+                    self.merge_tgt_input.setText(title)
+                    self.merge_tgt_input.blockSignals(False)
+                    self._execute_merge_tgt_search()
+        elif tab_id == 0:
+            # Switched to Mode 1 (Replace with file on disk)
+            if self.merge_source_track and (
+                not self.selected_track
+                or str(self.selected_track.get("id")) != str(self.merge_source_track.get("id"))
+            ):
+                self._on_track_selected_mode1(self.merge_source_track)
 
     def _check_mode2_ready(self) -> None:
         can_merge = (
@@ -1460,6 +1615,7 @@ class ReplaceFileView(QWidget):
         self.notify_status.emit(f"Merged history and plays for '{res['title']}'")
         self.db_saved.emit()
         self._reset_mode2()
+        self._reset_mode1()
 
     def _on_merge_error(self, err: str) -> None:
         self.btn_execute_merge.setEnabled(True)
@@ -1470,7 +1626,14 @@ class ReplaceFileView(QWidget):
 
     def cleanup(self) -> None:
         """Stop background replacement workers and timers cleanly."""
-        for attr in ("search_worker", "inspect_worker", "replace_worker", "merge_worker"):
+        for attr in (
+            "search_worker",
+            "inspect_worker",
+            "replace_worker",
+            "merge_worker",
+            "merge_src_worker",
+            "merge_tgt_worker",
+        ):
             w = getattr(self, attr, None)
             if w:
                 stop_worker(w, wait_ms=100)
