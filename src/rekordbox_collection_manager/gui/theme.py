@@ -80,6 +80,7 @@ QToolTip, QTipLabel {{
     border: 1px solid #3b4255;
     border-radius: 6px;
     padding: 6px 10px;
+    font-family: {FONT_FAMILY};
     font-size: 11px;
     font-weight: 500;
     opacity: 255;

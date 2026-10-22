@@ -856,7 +856,7 @@ class DiffRowWidget(QFrame):
                             f"<span style='color: #38bdf8; font-size: 11px;'>💡 Click cell or [◀ Use] to keep only Current track {unit_name.lower()}</span>"
                         )
                     return (
-                        f"<div style='font-family: sans-serif; font-size: 12px; line-height: 1.35;'>"
+                        f"<div style='font-size: 12px; line-height: 1.35;'>"
                         f"<b style='color: #38bdf8;'>{icon} Current Track {unit_name} ({len(items)}):</b>"
                         f"<div style='margin-top: 4px;'>{items_html}</div>"
                         f"{click_hint}"
@@ -887,7 +887,7 @@ class DiffRowWidget(QFrame):
                             f"<span style='color: #4ade80; font-size: 11px;'>💡 Click cell or [Use ▶] to keep only Target track {unit_name.lower()}</span>"
                         )
                     return (
-                        f"<div style='font-family: sans-serif; font-size: 12px; line-height: 1.35;'>"
+                        f"<div style='font-size: 12px; line-height: 1.35;'>"
                         f"<b style='color: #4ade80;'>{icon} Target Track {unit_name} ({len(items)}):</b>"
                         f"<div style='margin-top: 4px;'>{items_html}</div>"
                         f"{click_hint}"
@@ -924,7 +924,7 @@ class DiffRowWidget(QFrame):
                             "<span style='color: #c084fc; font-size: 11px;'>💡 Active choice: Merged collection from both tracks</span>"
                         )
                         return (
-                            f"<div style='font-family: sans-serif; font-size: 12px; line-height: 1.35;'>"
+                            f"<div style='font-size: 12px; line-height: 1.35;'>"
                             f"<b style='color: #c084fc;'>🔀 Merged {unit_name} ({len(self.diff.merge_items)} total):</b>"
                             f"<div style='margin-top: 4px;'>{items_html}</div>"
                             f"{click_hint}"
@@ -942,7 +942,7 @@ class DiffRowWidget(QFrame):
                             "<span style='color: #38bdf8; font-size: 11px;'>💡 Active choice: Keeping Current track only</span>"
                         )
                         return (
-                            f"<div style='font-family: sans-serif; font-size: 12px; line-height: 1.35;'>"
+                            f"<div style='font-size: 12px; line-height: 1.35;'>"
                             f"<b style='color: #38bdf8;'>◀ Kept Current Track {unit_name} ({len(items)}):</b>"
                             f"<div style='margin-top: 4px;'><div style='margin-left: 4px;'>{list_rows}{more_txt}</div></div>"
                             f"{click_hint}"
@@ -960,7 +960,7 @@ class DiffRowWidget(QFrame):
                             "<span style='color: #4ade80; font-size: 11px;'>💡 Active choice: Keeping Target track only</span>"
                         )
                         return (
-                            f"<div style='font-family: sans-serif; font-size: 12px; line-height: 1.35;'>"
+                            f"<div style='font-size: 12px; line-height: 1.35;'>"
                             f"<b style='color: #4ade80;'>▶ Kept Target Track {unit_name} ({len(items)}):</b>"
                             f"<div style='margin-top: 4px;'><div style='margin-left: 4px;'>{list_rows}{more_txt}</div></div>"
                             f"{click_hint}"
