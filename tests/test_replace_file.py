@@ -55,6 +55,8 @@ class TestReplaceFileBackend(unittest.TestCase):
                     DJPlayCount INTEGER,
                     StockDate VARCHAR(255),
                     DateCreated VARCHAR(255),
+                    ImagePath VARCHAR(255),
+                    UUID VARCHAR(255),
                     AnalysisDataPath VARCHAR(255),
                     TrackInfoUpdated VARCHAR(255),
                     AnalysisUpdated VARCHAR(255),
@@ -116,11 +118,11 @@ class TestReplaceFileBackend(unittest.TestCase):
             conn.execute(
                 text("""
                     INSERT INTO djmdContent (
-                        ID, FolderPath, FileNameL, FileNameS, Title, Length, BitRate, BitDepth,
+                        ID, UUID, ImagePath, FolderPath, FileNameL, FileNameS, Title, Length, BitRate, BitDepth,
                         SampleRate, FileSize, FileType, DJPlayCount, StockDate, AnalysisDataPath,
                         TrackInfoUpdated, rb_local_deleted, created_at, updated_at
                     ) VALUES (
-                        'track-100', :folder_path, 'OldSong.mp3', '', 'Classic Track', 240, 320, 16,
+                        'track-100', '11122233-4455-6677-8899-aabbccddeeff', '/PIONEER/Artwork/111/22233-4455-6677-8899-aabbccddeeff/artwork.jpg', :folder_path, 'OldSong.mp3', '', 'Classic Track', 240, 320, 16,
                         44100, 1024, 1, 10, '2024-01-15', '/PIONEER/ANLZ/ANLZ0000.DAT',
                         '1', 0, '2024-01-15 12:00:00', '2024-01-15 12:00:00'
                     );
@@ -227,6 +229,56 @@ class TestReplaceFileBackend(unittest.TestCase):
                 text("SELECT count(*) FROM djmdSongPlaylist WHERE ContentID = 'track-100';")
             ).fetchone()[0]
             self.assertEqual(p_count, 2)
+
+    def test_replace_track_artwork_choice_new_and_old(self):
+        """Verify selecting 'new' artwork writes artwork files and updates ImagePath, while 'old' preserves ImagePath."""
+        from PySide6.QtGui import QImage
+        from PySide6.QtCore import Qt
+
+        # Create mock database file path so install_rekordbox_artwork creates share directory inside temp_dir
+        mock_db_path = os.path.join(self.temp_dir, "master.db")
+        with open(mock_db_path, "w") as f:
+            f.write("")
+
+        # Create a sample replacement image
+        art_src = os.path.join(self.temp_dir, "new_cover.jpg")
+        img = QImage(300, 300, QImage.Format.Format_RGB32)
+        img.fill(Qt.GlobalColor.magenta)
+        img.save(art_src, "JPEG")
+
+        # 1. Test artwork_choice: 'new'
+        opts_new = {
+            "artwork_choice": "new",
+            "artwork_source_path": art_src,
+            "db_path": mock_db_path,
+        }
+        res_new = replace_track_audio_file(self.engine, "track-100", self.new_aiff_path, options=opts_new)
+        with self.engine.connect() as conn:
+            row = conn.execute(text("SELECT ImagePath, UUID FROM djmdContent WHERE ID = 'track-100';")).mappings().fetchone()
+            self.assertEqual(row["ImagePath"], "/PIONEER/Artwork/111/22233-4455-6677-8899-aabbccddeeff/artwork.jpg")
+
+        # Verify artwork files were generated in mock share folder
+        share_art_dir = os.path.join(self.temp_dir, "share", "PIONEER", "Artwork", "111", "22233-4455-6677-8899-aabbccddeeff")
+        self.assertTrue(os.path.exists(os.path.join(share_art_dir, "artwork.jpg")))
+        self.assertTrue(os.path.exists(os.path.join(share_art_dir, "artwork_m.jpg")))
+        self.assertTrue(os.path.exists(os.path.join(share_art_dir, "artwork_s.jpg")))
+
+        # 2. Test artwork_choice: 'old' (does not overwrite ImagePath)
+        with self.engine.begin() as conn:
+            conn.execute(
+                text("UPDATE djmdContent SET FolderPath = :fp, ImagePath = '/PIONEER/Artwork/custom/custom.jpg' WHERE ID = 'track-100';"),
+                {"fp": self.old_mp3_path},
+            )
+
+        opts_old = {
+            "artwork_choice": "old",
+            "artwork_source_path": art_src,
+            "db_path": mock_db_path,
+        }
+        res_old = replace_track_audio_file(self.engine, "track-100", self.new_aiff_path, options=opts_old)
+        with self.engine.connect() as conn:
+            row = conn.execute(text("SELECT ImagePath FROM djmdContent WHERE ID = 'track-100';")).mappings().fetchone()
+            self.assertEqual(row["ImagePath"], "/PIONEER/Artwork/custom/custom.jpg")
 
     def test_replace_track_old_file_backup_action(self):
         """Verify that choosing 'backup' renames the old file to .bak."""

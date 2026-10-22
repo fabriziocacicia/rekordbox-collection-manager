@@ -19,11 +19,13 @@ from rekordbox_collection_manager.utils import (
     detect_content_table,
     ensure_rekordbox_not_running,
     extract_date_from_name,
+    extract_embedded_artwork,
     extract_year_month_from_name_or_date,
     format_duration,
     format_rating_stars,
     get_rekordbox_timestamp,
     get_store_comment,
+    install_rekordbox_artwork,
     is_aiff_track,
     is_mp3_track,
     is_purchased_path,
@@ -572,6 +574,75 @@ class TestUtils(unittest.TestCase):
         self.assertEqual(record["comment"], "Purchased at Traxsource.com")
         self.assertEqual(record["comments"], "Purchased at Traxsource.com")
         self.assertTrue(record["is_purchased"])
+
+    def test_install_rekordbox_artwork_generates_three_sizes(self):
+        """Verify install_rekordbox_artwork creates full, medium (240x240), and small (80x80) JPEG files."""
+        import tempfile
+        from PySide6.QtGui import QImage
+        from PySide6.QtCore import Qt
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mock_db = os.path.join(tmpdir, "master.db")
+            with open(mock_db, "w") as f:
+                f.write("")
+
+            src_img = QImage(500, 500, QImage.Format.Format_RGB32)
+            src_img.fill(Qt.GlobalColor.cyan)
+
+            track_uuid = "e7492c10-9118-4235-8669-001122334455"
+            rel_path = install_rekordbox_artwork(track_uuid, src_img, db_path=mock_db)
+
+            self.assertEqual(rel_path, "/PIONEER/Artwork/e74/92c10-9118-4235-8669-001122334455/artwork.jpg")
+
+            art_dir = os.path.join(tmpdir, "share", "PIONEER", "Artwork", "e74", "92c10-9118-4235-8669-001122334455")
+            full_f = os.path.join(art_dir, "artwork.jpg")
+            med_f = os.path.join(art_dir, "artwork_m.jpg")
+            small_f = os.path.join(art_dir, "artwork_s.jpg")
+
+            self.assertTrue(os.path.exists(full_f))
+            self.assertTrue(os.path.exists(med_f))
+            self.assertTrue(os.path.exists(small_f))
+
+            q_full = QImage(full_f)
+            self.assertEqual(q_full.width(), 500)
+            self.assertEqual(q_full.height(), 500)
+
+            q_med = QImage(med_f)
+            self.assertEqual(q_med.width(), 240)
+            self.assertEqual(q_med.height(), 240)
+
+            q_small = QImage(small_f)
+            self.assertEqual(q_small.width(), 80)
+            self.assertEqual(q_small.height(), 80)
+
+    def test_extract_embedded_artwork_from_id3(self):
+        """Verify extract_embedded_artwork extracts APIC tags from an audio file."""
+        import tempfile
+        from PySide6.QtGui import QImage, QColor
+        from PySide6.QtCore import Qt, QBuffer, QByteArray
+        from mutagen.id3 import ID3, APIC
+
+        img = QImage(120, 120, QImage.Format.Format_RGB32)
+        img.fill(Qt.GlobalColor.yellow)
+        ba = QByteArray()
+        buf = QBuffer(ba)
+        buf.open(QBuffer.OpenModeFlag.WriteOnly)
+        img.save(buf, "JPEG")
+        raw_jpeg = bytes(ba)
+
+        with tempfile.NamedTemporaryFile(suffix=".mp3") as f:
+            f.write(b"ID3\x04\x00\x00\x00\x00\x00\x00")
+            f.flush()
+
+            tags = ID3()
+            tags.add(APIC(encoding=3, mime="image/jpeg", type=3, desc="Cover", data=raw_jpeg))
+            tags.save(f.name)
+
+            extracted = extract_embedded_artwork(f.name)
+            self.assertIsNotNone(extracted)
+            cached_path, res_str = extracted
+            self.assertTrue(os.path.exists(cached_path))
+            self.assertEqual(res_str, "120×120")
 
 
 if __name__ == "__main__":

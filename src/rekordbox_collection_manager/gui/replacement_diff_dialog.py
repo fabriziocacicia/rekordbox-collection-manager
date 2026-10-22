@@ -18,6 +18,7 @@ from PySide6.QtGui import (
     QColor,
     QFont,
     QIcon,
+    QImage,
     QKeyEvent,
     QPainter,
     QPainterPath,
@@ -97,6 +98,8 @@ class FieldDiff:
         old_items: Optional[List[str]] = None,
         new_items: Optional[List[str]] = None,
         merge_items: Optional[List[str]] = None,
+        old_meta: str = "",
+        new_meta: str = "",
     ):
         self.key = key
         self.label = label
@@ -106,6 +109,8 @@ class FieldDiff:
         self.default_origin = default_origin
         self.is_editable = is_editable
         self.help_tip = help_tip
+        self.old_meta = old_meta
+        self.new_meta = new_meta
 
         self.old_result_val = old_result_val if old_result_val is not None else old_val
         self.new_result_val = new_result_val if new_result_val is not None else new_val
@@ -119,13 +124,54 @@ class FieldDiff:
             self.merge_items = sorted(list(set(self.old_items).union(set(self.new_items))), key=lambda s: s.lower())
 
         # Determine conflict / match status
-        old_s = self._str(old_val)
-        new_s = self._str(new_val)
+        if self.key == "artwork":
+            old_p = str(old_val or "").strip()
+            new_p = str(new_val or "").strip()
+            old_exists = bool(old_p and os.path.exists(old_p))
+            new_exists = bool(new_p and os.path.exists(new_p))
 
-        self.is_match = (old_s.lower() == new_s.lower()) and bool(old_s or new_s)
-        self.is_both_empty = not old_s and not new_s
-
-        if self.category == "preservation":
+            if not old_exists and not new_exists:
+                self.is_match = False
+                self.is_both_empty = True
+                self.status = "match"
+                self.origin = "old"
+                self.result_val = ""
+            elif old_exists and not new_exists:
+                self.is_match = False
+                self.is_both_empty = False
+                self.status = "kept_old"
+                self.origin = "old"
+                self.result_val = old_val
+            elif not old_exists and new_exists:
+                self.is_match = False
+                self.is_both_empty = False
+                self.status = "new_data"
+                self.origin = "new"
+                self.result_val = new_val
+            else:
+                same_file = (old_p == new_p)
+                if not same_file and os.path.exists(old_p) and os.path.exists(new_p):
+                    try:
+                        same_file = (os.path.getsize(old_p) == os.path.getsize(new_p))
+                    except Exception:
+                        pass
+                if same_file:
+                    self.is_match = True
+                    self.is_both_empty = False
+                    self.status = "match"
+                    self.origin = "old"
+                    self.result_val = old_val
+                else:
+                    self.is_match = False
+                    self.is_both_empty = False
+                    self.status = "conflict"
+                    self.origin = default_origin
+                    self.result_val = old_val if default_origin == "old" else new_val
+        elif self.category == "preservation":
+            old_s = self._str(old_val)
+            new_s = self._str(new_val)
+            self.is_match = (old_s.lower() == new_s.lower()) and bool(old_s or new_s)
+            self.is_both_empty = not old_s and not new_s
             self.origin = default_origin
             if default_origin == "merge":
                 self.status = "merged"
@@ -137,6 +183,11 @@ class FieldDiff:
                 self.status = "kept_old"
                 self.result_val = self.old_result_val
         else:
+            old_s = self._str(old_val)
+            new_s = self._str(new_val)
+            self.is_match = (old_s.lower() == new_s.lower()) and bool(old_s or new_s)
+            self.is_both_empty = not old_s and not new_s
+
             if self.is_match or self.is_both_empty:
                 self.status = "match"
                 self.origin = "old"
@@ -156,7 +207,14 @@ class FieldDiff:
 
     def set_origin(self, origin: str) -> None:
         self.origin = origin
-        if self.category == "preservation":
+        if self.key == "artwork":
+            if origin == "old":
+                self.result_val = self.old_val
+                self.status = "match" if self.is_match else "kept_old"
+            elif origin == "new":
+                self.result_val = self.new_val
+                self.status = "match" if self.is_match else "new_data"
+        elif self.category == "preservation":
             if origin == "old":
                 self.result_val = self.old_result_val
                 self.status = "kept_old"
@@ -194,23 +252,56 @@ def calculate_metadata_diff(
     # 1. Rekordbox "Info" (Track Tags & Metadata)
     # Note: Genre, BPM, and Musical Key are deliberately excluded from conflict resolution & porting.
     # The user does not use Genre, and BPM and Musical Key are rediscovered by Rekordbox analysis.
+    old_art = old_data.get("artwork_path") or old_data.get("image_path") or ""
+    new_art = new_data.get("artwork_path") or new_data.get("image_path") or ""
+    if old_art and not os.path.isabs(old_art):
+        resolved = resolve_artwork_path(old_art)
+        if resolved:
+            old_art = resolved
+    if new_art and not os.path.isabs(new_art):
+        resolved = resolve_artwork_path(new_art)
+        if resolved:
+            new_art = resolved
+
+    old_res = old_data.get("artwork_resolution") or ""
+    if not old_res and old_art and os.path.exists(old_art):
+        try:
+            q = QImage(old_art)
+            if not q.isNull():
+                old_res = f"{q.width()}×{q.height()}"
+        except Exception:
+            pass
+
+    new_res = new_data.get("artwork_resolution") or ""
+    if not new_res and new_art and os.path.exists(new_art):
+        try:
+            q = QImage(new_art)
+            if not q.isNull():
+                new_res = f"{q.width()}×{q.height()}"
+        except Exception:
+            pass
+
     info_definitions = [
-        ("title", "Track Title", old_data.get("title", ""), new_data.get("title", ""), "old"),
-        ("artist", "Artist", old_data.get("artist", ""), new_data.get("artist", ""), "old"),
-        ("album", "Album", old_data.get("album", ""), new_data.get("album", ""), "old"),
-        ("rating", "Rating", old_data.get("rating") or 0, new_data.get("rating") or 0, "old"),
-        ("release_year", "Release Year", old_data.get("release_year") or old_data.get("year") or 0, new_data.get("release_year") or new_data.get("year") or 0, "old"),
-        ("track_no", "Track No.", old_data.get("track_no") or 0, new_data.get("track_no") or 0, "old"),
-        ("disc_no", "Disc No.", old_data.get("disc_no") or 0, new_data.get("disc_no") or 0, "old"),
-        ("remixer", "Remixer", old_data.get("remixer", ""), new_data.get("remixer", ""), "old"),
-        ("label", "Record Label", old_data.get("label", ""), new_data.get("label", ""), "old"),
-        ("mix_name", "Mix Name", old_data.get("mix_name", ""), new_data.get("mix_name", ""), "old"),
-        ("composer", "Composer", old_data.get("composer", ""), new_data.get("composer", ""), "old"),
-        ("comment", "Comment / Notes", old_data.get("comment", ""), new_data.get("comment", ""), "old"),
-        ("color_id", "Color Code", old_data.get("color_id", ""), new_data.get("color_id", ""), "old"),
+        ("title", "Track Title", old_data.get("title", ""), new_data.get("title", ""), "old", "", ""),
+        ("artist", "Artist", old_data.get("artist", ""), new_data.get("artist", ""), "old", "", ""),
+        ("album", "Album", old_data.get("album", ""), new_data.get("album", ""), "old", "", ""),
+        ("artwork", "Album Artwork", old_art, new_art, "old", old_res, new_res),
+        ("rating", "Rating", old_data.get("rating") or 0, new_data.get("rating") or 0, "old", "", ""),
+        ("release_year", "Release Year", old_data.get("release_year") or old_data.get("year") or 0, new_data.get("release_year") or new_data.get("year") or 0, "old", "", ""),
+        ("track_no", "Track No.", old_data.get("track_no") or 0, new_data.get("track_no") or 0, "old", "", ""),
+        ("disc_no", "Disc No.", old_data.get("disc_no") or 0, new_data.get("disc_no") or 0, "old", "", ""),
+        ("remixer", "Remixer", old_data.get("remixer", ""), new_data.get("remixer", ""), "old", "", ""),
+        ("label", "Record Label", old_data.get("label", ""), new_data.get("label", ""), "old", "", ""),
+        ("mix_name", "Mix Name", old_data.get("mix_name", ""), new_data.get("mix_name", ""), "old", "", ""),
+        ("composer", "Composer", old_data.get("composer", ""), new_data.get("composer", ""), "old", "", ""),
+        ("comment", "Comment / Notes", old_data.get("comment", ""), new_data.get("comment", ""), "old", "", ""),
+        ("color_id", "Color Code", old_data.get("color_id", ""), new_data.get("color_id", ""), "old", "", ""),
     ]
 
-    for key, label, old_v, new_v, def_origin in info_definitions:
+    for item in info_definitions:
+        key, label, old_v, new_v, def_origin = item[:5]
+        old_m = item[5] if len(item) > 5 else ""
+        new_m = item[6] if len(item) > 6 else ""
         fields.append(
             FieldDiff(
                 key=key,
@@ -220,6 +311,8 @@ def calculate_metadata_diff(
                 new_val=new_v,
                 default_origin=def_origin,
                 is_editable=True,
+                old_meta=old_m,
+                new_meta=new_m,
             )
         )
 
@@ -719,12 +812,37 @@ class DiffRowWidget(QFrame):
         self.old_frame.setCursor(Qt.CursorShape.PointingHandCursor if self.diff.is_editable else Qt.CursorShape.ArrowCursor)
         old_layout = QHBoxLayout(self.old_frame)
         old_layout.setContentsMargins(8, 6, 8, 6)
-        old_layout.setSpacing(6)
+        old_layout.setSpacing(8)
 
-        self.old_text_label = QLabel(self._format_display(self.diff.old_val))
-        self.old_text_label.setStyleSheet(f"color: {COLOR_TEXT_PRIMARY}; font-size: 12px;")
-        self.old_text_label.setWordWrap(True)
-        old_layout.addWidget(self.old_text_label, stretch=1)
+        if self.diff.key == "artwork":
+            self.old_art_thumb = QLabel()
+            self.old_art_thumb.setFixedSize(40, 40)
+            self.old_art_thumb.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.old_art_thumb.setStyleSheet("background-color: #121216; border-radius: 4px; font-size: 18px;")
+            old_p = str(self.diff.old_val or "")
+            if old_p and os.path.exists(old_p):
+                pix = QPixmap(old_p).scaled(40, 40, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
+                self.old_art_thumb.setPixmap(pix)
+            else:
+                self.old_art_thumb.setText("🎵")
+            old_layout.addWidget(self.old_art_thumb)
+
+            old_text_col = QVBoxLayout()
+            old_text_col.setSpacing(2)
+            lbl_top = QLabel("Current Artwork")
+            lbl_top.setStyleSheet(f"color: {COLOR_TEXT_PRIMARY}; font-size: 12px; font-weight: 600;")
+            old_text_col.addWidget(lbl_top)
+
+            res_txt = getattr(self.diff, "old_meta", "") or ("Present" if (old_p and os.path.exists(old_p)) else "No Artwork")
+            lbl_sub = QLabel(res_txt)
+            lbl_sub.setStyleSheet(f"color: {COLOR_TEXT_MUTED}; font-size: 10px;")
+            old_text_col.addWidget(lbl_sub)
+            old_layout.addLayout(old_text_col, stretch=1)
+        else:
+            self.old_text_label = QLabel(self._format_display(self.diff.old_val))
+            self.old_text_label.setStyleSheet(f"color: {COLOR_TEXT_PRIMARY}; font-size: 12px;")
+            self.old_text_label.setWordWrap(True)
+            old_layout.addWidget(self.old_text_label, stretch=1)
 
         if self.diff.is_editable:
             self.btn_use_old = QPushButton("◀ Use")
@@ -746,12 +864,38 @@ class DiffRowWidget(QFrame):
         self.new_frame.setCursor(Qt.CursorShape.PointingHandCursor if self.diff.is_editable else Qt.CursorShape.ArrowCursor)
         new_layout = QHBoxLayout(self.new_frame)
         new_layout.setContentsMargins(8, 6, 8, 6)
-        new_layout.setSpacing(6)
+        new_layout.setSpacing(8)
 
-        self.new_text_label = QLabel(self._format_display(self.diff.new_val))
-        self.new_text_label.setStyleSheet(f"color: {COLOR_TEXT_PRIMARY}; font-size: 12px;")
-        self.new_text_label.setWordWrap(True)
-        new_layout.addWidget(self.new_text_label, stretch=1)
+        if self.diff.key == "artwork":
+            self.new_art_thumb = QLabel()
+            self.new_art_thumb.setFixedSize(40, 40)
+            self.new_art_thumb.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.new_art_thumb.setStyleSheet("background-color: #121216; border-radius: 4px; font-size: 18px;")
+            new_p = str(self.diff.new_val or "")
+            has_new = bool(new_p and os.path.exists(new_p))
+            if has_new:
+                pix = QPixmap(new_p).scaled(40, 40, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
+                self.new_art_thumb.setPixmap(pix)
+            else:
+                self.new_art_thumb.setText("📁")
+            new_layout.addWidget(self.new_art_thumb)
+
+            new_text_col = QVBoxLayout()
+            new_text_col.setSpacing(2)
+            lbl_top_n = QLabel("Replacement Cover")
+            lbl_top_n.setStyleSheet(f"color: {COLOR_TEXT_PRIMARY}; font-size: 12px; font-weight: 600;")
+            new_text_col.addWidget(lbl_top_n)
+
+            res_txt_n = getattr(self.diff, "new_meta", "") or ("Present" if has_new else "No Embedded Art")
+            lbl_sub_n = QLabel(res_txt_n)
+            lbl_sub_n.setStyleSheet(f"color: {COLOR_TEXT_MUTED}; font-size: 10px;")
+            new_text_col.addWidget(lbl_sub_n)
+            new_layout.addLayout(new_text_col, stretch=1)
+        else:
+            self.new_text_label = QLabel(self._format_display(self.diff.new_val))
+            self.new_text_label.setStyleSheet(f"color: {COLOR_TEXT_PRIMARY}; font-size: 12px;")
+            self.new_text_label.setWordWrap(True)
+            new_layout.addWidget(self.new_text_label, stretch=1)
 
         if self.diff.is_editable:
             self.btn_use_new = QPushButton("Use ▶")
@@ -762,6 +906,9 @@ class DiffRowWidget(QFrame):
                 f"QPushButton {{ background-color: {COLOR_BG_CARD}; color: {COLOR_GREEN}; border: 1px solid {COLOR_BORDER_LIGHT}; border-radius: 4px; font-size: 10px; font-weight: bold; padding: 0px; }} "
                 f"QPushButton:hover {{ background-color: {COLOR_GREEN_BG}; border-color: {COLOR_GREEN}; color: #ffffff; }}"
             )
+            if self.diff.key == "artwork" and not (self.diff.new_val and os.path.exists(str(self.diff.new_val))):
+                self.btn_use_new.setEnabled(False)
+                self.btn_use_new.setToolTip("Replacement audio file has no embedded artwork")
             self.btn_use_new.clicked.connect(self._select_new)
             new_layout.addWidget(self.btn_use_new)
 
@@ -780,7 +927,24 @@ class DiffRowWidget(QFrame):
         self.origin_pill.setStyleSheet("font-size: 9px; font-weight: bold; border-radius: 3px; padding: 1px 5px;")
         res_layout.addWidget(self.origin_pill)
 
-        if self.diff.is_editable and self.diff.category == "info":
+        if self.diff.key == "artwork":
+            self.res_art_thumb = QLabel()
+            self.res_art_thumb.setFixedSize(40, 40)
+            self.res_art_thumb.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.res_art_thumb.setStyleSheet("background-color: #121216; border-radius: 4px; font-size: 18px;")
+            res_layout.addWidget(self.res_art_thumb)
+
+            res_text_col = QVBoxLayout()
+            res_text_col.setSpacing(2)
+            self.res_art_title = QLabel("Using Current Artwork")
+            self.res_art_title.setStyleSheet(f"color: {COLOR_TEXT_PRIMARY}; font-size: 12px; font-weight: bold;")
+            res_text_col.addWidget(self.res_art_title)
+
+            self.res_art_sub = QLabel("")
+            self.res_art_sub.setStyleSheet(f"color: {COLOR_GREEN}; font-size: 10px; font-weight: 600;")
+            res_text_col.addWidget(self.res_art_sub)
+            res_layout.addLayout(res_text_col, stretch=1)
+        elif self.diff.is_editable and self.diff.category == "info":
             self.result_input = QLineEdit()
             self.result_input.setText(str(self.diff.result_val) if self.diff.result_val is not None else "")
             self.result_input.setStyleSheet(
@@ -808,9 +972,16 @@ class DiffRowWidget(QFrame):
         # Connect cell click events
         if self.diff.is_editable:
             self.old_frame.mousePressEvent = lambda e: self._select_old()
-            self.old_text_label.mousePressEvent = lambda e: self._select_old()
+            if hasattr(self, "old_text_label"):
+                self.old_text_label.mousePressEvent = lambda e: self._select_old()
+            if hasattr(self, "old_art_thumb"):
+                self.old_art_thumb.mousePressEvent = lambda e: self._select_old()
+
             self.new_frame.mousePressEvent = lambda e: self._select_new()
-            self.new_text_label.mousePressEvent = lambda e: self._select_new()
+            if hasattr(self, "new_text_label"):
+                self.new_text_label.mousePressEvent = lambda e: self._select_new()
+            if hasattr(self, "new_art_thumb"):
+                self.new_art_thumb.mousePressEvent = lambda e: self._select_new()
             if self.diff.category == "preservation":
                 self.result_frame.setCursor(Qt.CursorShape.PointingHandCursor)
                 self.result_frame.mousePressEvent = lambda e: self._select_merge()
@@ -1018,6 +1189,8 @@ class DiffRowWidget(QFrame):
                 return f"{float(val):.1f} BPM"
             except (ValueError, TypeError):
                 pass
+        if self.diff.key == "artwork":
+            return "Cover Art" if val else "(No Artwork)"
         return str(val)
 
     def _update_styling(self) -> None:
@@ -1168,6 +1341,28 @@ class DiffRowWidget(QFrame):
                 f"QPushButton:hover {{ background-color: #2e1065; border-color: #8b5cf6; color: #ffffff; }}"
             )
 
+        # 4. Artwork custom result updates
+        if self.diff.key == "artwork":
+            is_new = (self.diff.origin == "new")
+            cur_p = str(self.diff.new_val if is_new else self.diff.old_val or "")
+            cur_res = getattr(self.diff, "new_meta" if is_new else "old_meta", "")
+
+            if hasattr(self, "res_art_thumb"):
+                if cur_p and os.path.exists(cur_p):
+                    pix = QPixmap(cur_p).scaled(40, 40, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
+                    self.res_art_thumb.setPixmap(pix)
+                    self.res_art_thumb.setText("")
+                else:
+                    self.res_art_thumb.setPixmap(QPixmap())
+                    self.res_art_thumb.setText("🎵")
+
+            if hasattr(self, "res_art_title"):
+                self.res_art_title.setText("Using Replacement Artwork" if is_new else "Using Current Artwork")
+                self.res_art_title.setStyleSheet(f"color: {COLOR_GREEN if is_new else COLOR_BLUE}; font-size: 12px; font-weight: bold;")
+
+            if hasattr(self, "res_art_sub"):
+                self.res_art_sub.setText(cur_res or ("Present" if (cur_p and os.path.exists(cur_p)) else "No Artwork"))
+
         self._update_tooltips()
 
     def _select_old(self) -> None:
@@ -1205,12 +1400,22 @@ class DiffRowWidget(QFrame):
         if not self.diff.is_editable:
             return
         if origin == "auto":
+            if self.diff.key == "artwork":
+                has_old = bool(self.diff.old_val and os.path.exists(str(self.diff.old_val)))
+                has_new = bool(self.diff.new_val and os.path.exists(str(self.diff.new_val)))
+                target_origin = "new" if (not has_old and has_new) else "old"
+                self.set_origin(target_origin)
+                return
             if self.diff.category == "info":
                 old_s = str(self.diff.old_val or "").strip()
                 new_s = str(self.diff.new_val or "").strip()
                 target_origin = "new" if (not old_s and new_s) else "old"
                 self.set_origin(target_origin)
             return
+
+        if origin == "new" and self.diff.key == "artwork":
+            if not (self.diff.new_val and os.path.exists(str(self.diff.new_val))):
+                return
 
         self.diff.set_origin(origin)
         if hasattr(self, "result_input"):
@@ -1553,9 +1758,12 @@ class TrackReplacementDiffView(QWidget):
         art_label.setStyleSheet("background-color: #121216; border-radius: 6px; font-size: 22px;")
 
         img_p = resolve_artwork_path(track_data.get("image_path"), db_path=self.db_path)
+        if not img_p and track_data.get("artwork_path"):
+            img_p = track_data.get("artwork_path")
         if img_p and os.path.exists(img_p):
             pix = QPixmap(img_p).scaled(48, 48, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
             art_label.setPixmap(pix)
+            art_label.setText("")
         else:
             art_label.setText("📁" if is_file else "🎵")
         info_row.addWidget(art_label)
@@ -1614,9 +1822,12 @@ class TrackReplacementDiffView(QWidget):
         self.res_art_label.setStyleSheet("background-color: #121216; border-radius: 6px; font-size: 22px;")
 
         img_p = resolve_artwork_path(self.old_track.get("image_path"), db_path=self.db_path)
+        if not img_p and self.old_track.get("artwork_path"):
+            img_p = self.old_track.get("artwork_path")
         if img_p and os.path.exists(img_p):
             pix = QPixmap(img_p).scaled(48, 48, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
             self.res_art_label.setPixmap(pix)
+            self.res_art_label.setText("")
         else:
             self.res_art_label.setText("🎵")
         info_row.addWidget(self.res_art_label)
@@ -1737,17 +1948,34 @@ class TrackReplacementDiffView(QWidget):
             self._update_preservation_header_buttons()
 
     def _update_result_hero_card(self) -> None:
-        """Update live preview card when title or artist is changed."""
+        """Update live preview card when title, artist, or artwork is changed."""
         res_title = ""
         res_artist = ""
+        res_art_path = ""
         for d in self.diffs:
             if d.key == "title":
                 res_title = str(d.result_val or "").strip()
             elif d.key == "artist":
                 res_artist = str(d.result_val or "").strip()
+            elif d.key == "artwork":
+                res_art_path = str(d.new_val if d.origin == "new" else d.old_val or "")
 
         self.res_title_label.setText(res_title or "(Untitled)")
         self.res_artist_label.setText(res_artist or "Unknown Artist")
+
+        if hasattr(self, "res_art_label"):
+            if not res_art_path:
+                res_art_path = self.old_track.get("artwork_path") or self.old_track.get("image_path") or ""
+            img_p = resolve_artwork_path(res_art_path, db_path=self.db_path)
+            if not img_p and os.path.exists(res_art_path):
+                img_p = res_art_path
+            if img_p and os.path.exists(img_p):
+                pix = QPixmap(img_p).scaled(48, 48, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
+                self.res_art_label.setPixmap(pix)
+                self.res_art_label.setText("")
+            else:
+                self.res_art_label.setPixmap(QPixmap())
+                self.res_art_label.setText("🎵")
 
     def _update_conflict_banner(self) -> None:
         """Recalculate conflict statistics and update top summary badge."""
@@ -1832,7 +2060,7 @@ class TrackReplacementDiffView(QWidget):
         """Collect final resolved metadata dictionary to be stored in database."""
         result: Dict[str, Any] = {}
         for d in self.diffs:
-            if d.category == "info":
+            if d.category == "info" and d.key != "artwork":
                 result[d.key] = d.result_val
         return result
 
@@ -1846,12 +2074,23 @@ class TrackReplacementDiffView(QWidget):
             if d.category == "preservation":
                 preservation_fields[d.key] = str(d.origin)
 
+        artwork_origin = "old"
+        artwork_src_path = ""
+        for d in self.diffs:
+            if d.key == "artwork":
+                artwork_origin = d.origin
+                artwork_src_path = str(d.new_val if d.origin == "new" else d.old_val or "")
+                break
+
         opts = {
             "old_file_action": action_val,
             "move_new_file_to_track_folder": self.chk_move_folder.isChecked() if hasattr(self, "chk_move_folder") else False,
             "resolved_metadata": self.get_resolved_metadata(),
             "preservation_fields": preservation_fields,
             "preservation_strategy": getattr(self, "preservation_strategy", "merge"),
+            "artwork_choice": artwork_origin,
+            "artwork_source_path": artwork_src_path,
+            "db_path": self.db_path,
         }
         return opts
 

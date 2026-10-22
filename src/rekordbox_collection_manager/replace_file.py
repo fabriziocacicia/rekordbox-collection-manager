@@ -24,10 +24,13 @@ from rekordbox_collection_manager.utils import (
     FILE_TYPE_TO_NAME,
     _resolve_tag_matching_ids,
     ensure_rekordbox_not_running,
+    extract_embedded_artwork,
     format_duration,
     get_rekordbox_timestamp,
+    install_rekordbox_artwork,
     is_rekordbox_running,
     open_database,
+    resolve_artwork_path,
     resolve_db_path,
     resolve_file_type,
 )
@@ -100,6 +103,10 @@ def inspect_audio_file(file_path: str) -> Dict[str, Any]:
         "track_no": 0,
         "disc_no": 0,
         "rating": 0,
+        "image_path": "",
+        "artwork_path": "",
+        "artwork_resolution": "",
+        "has_artwork": False,
     }
 
     # 1. Primary: Use mutagen
@@ -203,6 +210,14 @@ def inspect_audio_file(file_path: str) -> Dict[str, Any]:
 
     except Exception:
         pass
+
+    # Extract embedded artwork
+    art_info = extract_embedded_artwork(file_path)
+    if art_info:
+        info["image_path"] = art_info[0]
+        info["artwork_path"] = art_info[0]
+        info["artwork_resolution"] = art_info[1]
+        info["has_artwork"] = True
 
     # 2. Refine bitrate for uncompressed audio (AIFF/WAV) if missing or default
     if ext in ("AIFF", "AIF", "WAV", "WAVE"):
@@ -349,9 +364,12 @@ def fetch_track_full_info(engine: Engine, content_id: str) -> Dict[str, Any]:
         fn_col = "COALESCE(c.FileNameL, '')" if "FileNameL" in cols else "''"
         title_col = "COALESCE(c.Title, '')" if "Title" in cols else "''"
 
+        uuid_col = "COALESCE(c.UUID, '')" if "UUID" in cols else "''"
+
         sql = f"""
             SELECT 
                 c.ID,
+                {uuid_col} AS UUID,
                 {title_col} AS Title,
                 {artist_expr} AS Artist,
                 {album_expr} AS Album,
@@ -559,6 +577,9 @@ def fetch_track_full_info(engine: Engine, content_id: str) -> Dict[str, Any]:
             "tag_count": tag_count,
             "tags": tags_list,
             "cue_count": cue_count,
+            "uuid": r.get("UUID") or "",
+            "artwork_path": resolve_artwork_path(r.get("ImagePath"), db_path=getattr(getattr(engine, "url", None), "database", None)) or "",
+            "has_artwork": bool(r.get("ImagePath")),
         }
 
 
@@ -1027,6 +1048,29 @@ def replace_track_audio_file(
                 update_clauses.append("Title = :new_title")
                 params["new_title"] = new_info["title"]
 
+        # Artwork replacement handling
+        artwork_choice = opts.get("artwork_choice", "old")
+        artwork_src = opts.get("artwork_source_path")
+        if artwork_choice == "new":
+            if not artwork_src or not os.path.exists(artwork_src):
+                extracted = extract_embedded_artwork(resolved_new_path)
+                if extracted:
+                    artwork_src = extracted[0]
+
+            if artwork_src and os.path.exists(artwork_src):
+                track_uuid = old_track.get("UUID")
+                if not track_uuid:
+                    track_uuid = str(uuid.uuid4())
+                    if "UUID" in cols:
+                        update_clauses.append("UUID = :new_uuid")
+                        params["new_uuid"] = track_uuid
+
+                db_p = opts.get("db_path") or getattr(getattr(engine, "url", None), "database", None)
+                new_img_rel = install_rekordbox_artwork(track_uuid, artwork_src, db_path=db_p)
+                if new_img_rel and "ImagePath" in cols:
+                    update_clauses.append("ImagePath = :new_image_path")
+                    params["new_image_path"] = new_img_rel
+
         update_sql = f"UPDATE djmdContent SET {', '.join(update_clauses)} WHERE ID = :id;"
         conn.execute(text(update_sql), params)
 
@@ -1228,6 +1272,22 @@ def merge_imported_tracks(
             filtered_meta = {k: v for k, v in resolved_meta.items() if k not in ("genre", "bpm", "key")}
             if filtered_meta:
                 _apply_resolved_metadata(conn, cols, tables, str(target_content_id), filtered_meta, now_utc)
+
+        # 2c. Artwork merge handling
+        artwork_choice = opts.get("artwork_choice", "old" if default_strategy == "old" else "new")
+        if artwork_choice == "old":
+            src_img = src_dict.get("ImagePath")
+            db_p = opts.get("db_path") or getattr(getattr(engine, "url", None), "database", None)
+            resolved_src_img = resolve_artwork_path(src_img, db_path=db_p)
+            if resolved_src_img and os.path.exists(resolved_src_img):
+                tgt_uuid = tgt_dict.get("UUID")
+                if tgt_uuid:
+                    new_img_rel = install_rekordbox_artwork(tgt_uuid, resolved_src_img, db_path=db_p)
+                    if new_img_rel and "ImagePath" in cols:
+                        conn.execute(
+                            text("UPDATE djmdContent SET ImagePath = :img WHERE ID = :id;"),
+                            {"img": new_img_rel, "id": str(target_content_id)},
+                        )
 
         # 3. Transfer or manage history entries
         hist_transferred = 0

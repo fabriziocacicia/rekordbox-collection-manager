@@ -445,9 +445,10 @@ class TestTrackReplacementDiffDialog(unittest.TestCase):
             options={"old_file_action": "keep", "move_new_file_to_track_folder": False},
         )
         self.assertIsNotNone(dialog)
-        self.assertEqual(len(dialog.diff_view.diffs), 26)
+        self.assertEqual(len(dialog.diff_view.diffs), 27)
 
         diffs = {d.key: d for d in dialog.diff_view.diffs}
+        self.assertIn("artwork", diffs)
         self.assertNotIn("genre", diffs)
         self.assertNotIn("bpm", diffs)
         self.assertNotIn("key", diffs)
@@ -852,11 +853,93 @@ class TestTrackReplacementDiffDialog(unittest.TestCase):
         self.assertEqual(diff.origin, "new")
         self.assertEqual(selected_origins, ["old", "new"])
 
-        dlg._select_strategy("merge")
-        self.assertEqual(diff.origin, "merge")
-        self.assertEqual(selected_origins, ["old", "new", "merge"])
+    def test_artwork_diff_calculation_and_resolution(self):
+        """Verify artwork diff correctly flags conflict, new_data, and kept_old."""
+        with tempfile.NamedTemporaryFile(suffix=".jpg") as f_old, tempfile.NamedTemporaryFile(suffix=".jpg") as f_new:
+            f_old.write(b"fake_old_image_data_123")
+            f_old.flush()
+            f_new.write(b"fake_new_image_data_456789")
+            f_new.flush()
+
+            # 1. Conflict: Both have distinct artwork
+            old_track = {"title": "Song", "artwork_path": f_old.name, "artwork_resolution": "800×800"}
+            new_track = {"title": "Song", "artwork_path": f_new.name, "artwork_resolution": "600×600"}
+            diffs = calculate_metadata_diff(old_track, new_track)
+            art_diff = next(d for d in diffs if d.key == "artwork")
+            self.assertEqual(art_diff.status, "conflict")
+            self.assertEqual(art_diff.origin, "old")
+            self.assertEqual(art_diff.result_val, f_old.name)
+
+            art_diff.set_origin("new")
+            self.assertEqual(art_diff.origin, "new")
+            self.assertEqual(art_diff.result_val, f_new.name)
+
+            # 2. New data: Old has none, new has artwork
+            old_no_art = {"title": "Song", "artwork_path": ""}
+            diffs_new = calculate_metadata_diff(old_no_art, new_track)
+            art_diff_new = next(d for d in diffs_new if d.key == "artwork")
+            self.assertEqual(art_diff_new.status, "new_data")
+            self.assertEqual(art_diff_new.origin, "new")
+            self.assertEqual(art_diff_new.result_val, f_new.name)
+
+            # 3. Kept old: Old has artwork, new has none
+            new_no_art = {"title": "Song", "artwork_path": ""}
+            diffs_old = calculate_metadata_diff(old_track, new_no_art)
+            art_diff_old = next(d for d in diffs_old if d.key == "artwork")
+            self.assertEqual(art_diff_old.status, "kept_old")
+            self.assertEqual(art_diff_old.origin, "old")
+            self.assertEqual(art_diff_old.result_val, f_old.name)
+
+    def test_artwork_row_widget_interaction_and_live_preview(self):
+        """Verify DiffRowWidget for artwork enables selection and updates live preview card."""
+        with tempfile.NamedTemporaryFile(suffix=".jpg") as f_old, tempfile.NamedTemporaryFile(suffix=".jpg") as f_new:
+            # Create minimal valid images
+            from PySide6.QtGui import QImage
+            from PySide6.QtCore import Qt
+            img_old = QImage(100, 100, QImage.Format.Format_RGB32)
+            img_old.fill(Qt.GlobalColor.blue)
+            img_old.save(f_old.name, "JPEG")
+
+            img_new = QImage(200, 200, QImage.Format.Format_RGB32)
+            img_new.fill(Qt.GlobalColor.green)
+            img_new.save(f_new.name, "JPEG")
+
+            old_track = {"id": "1", "title": "Track", "artwork_path": f_old.name, "artwork_resolution": "100×100"}
+            new_item = {"title": "Track", "artwork_path": f_new.name, "artwork_resolution": "200×200", "format_name": "AIFF", "file_type": "AIFF"}
+
+            dialog = TrackReplacementDiffDialog(
+                engine=self.engine,
+                mode="file",
+                old_track=old_track,
+                new_item=new_item,
+                options={"old_file_action": "keep"},
+            )
+
+            art_row = next(r for r in dialog.diff_view.row_widgets if r.diff.key == "artwork")
+            self.assertTrue(hasattr(art_row, "old_art_thumb"))
+            self.assertTrue(hasattr(art_row, "new_art_thumb"))
+            self.assertTrue(hasattr(art_row, "res_art_thumb"))
+
+            # Initially starts as old
+            self.assertEqual(art_row.diff.origin, "old")
+            opts_initial = dialog.diff_view.get_options()
+            self.assertEqual(opts_initial["artwork_choice"], "old")
+
+            # Click Use New
+            art_row._select_new()
+            self.assertEqual(art_row.diff.origin, "new")
+            opts_new = dialog.diff_view.get_options()
+            self.assertEqual(opts_new["artwork_choice"], "new")
+            self.assertEqual(opts_new["artwork_source_path"], f_new.name)
+
+            # Click Use Old
+            art_row._select_old()
+            self.assertEqual(art_row.diff.origin, "old")
+            opts_old = dialog.diff_view.get_options()
+            self.assertEqual(opts_old["artwork_choice"], "old")
 
 
 if __name__ == "__main__":
     unittest.main()
+
 

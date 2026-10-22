@@ -1208,3 +1208,145 @@ def resolve_artwork_path(
             return c
 
     return None
+
+
+def extract_embedded_artwork(file_path: str) -> Optional[Tuple[str, str]]:
+    """Extract embedded cover artwork from audio file (AIFF, MP3, M4A, FLAC).
+
+    Caches the extracted image as a JPEG in ~/.cache/rekordbox-collection-manager/artwork_cache/
+    and returns (cached_preview_path, resolution_str) or None if no embedded artwork.
+    """
+    if not file_path or not os.path.exists(file_path):
+        return None
+
+    try:
+        import mutagen
+
+        try:
+            audio = mutagen.File(file_path)
+        except Exception:
+            audio = None
+
+        if not audio:
+            try:
+                from mutagen.id3 import ID3
+                audio = ID3(file_path)
+            except Exception:
+                return None
+
+        raw_data: Optional[bytes] = None
+        # 1. ID3 / AIFF / MP3
+        tags = getattr(audio, "tags", audio)
+        if tags:
+            for k in tags.keys():
+                if str(k).startswith("APIC"):
+                    val = tags[k]
+                    if hasattr(val, "data") and val.data:
+                        raw_data = bytes(val.data)
+                        break
+            if not raw_data and "covr" in tags:
+                covers = tags["covr"]
+                if covers and len(covers) > 0:
+                    raw_data = bytes(covers[0])
+
+        # 2. FLAC
+        if not raw_data and hasattr(audio, "pictures") and audio.pictures:
+            raw_data = bytes(audio.pictures[0].data)
+
+        if not raw_data:
+            return None
+
+        import hashlib
+
+        cache_dir = os.path.expanduser("~/.cache/rekordbox-collection-manager/artwork_cache")
+        os.makedirs(cache_dir, exist_ok=True)
+        mtime = os.path.getmtime(file_path)
+        h = hashlib.md5(f"{file_path}_{mtime}".encode()).hexdigest()
+        out_path = os.path.join(cache_dir, f"{h}.jpg")
+
+        from PySide6.QtGui import QImage
+
+        img = QImage.fromData(raw_data)
+        if img.isNull():
+            return None
+
+        img.save(out_path, "JPEG", 95)
+        res_str = f"{img.width()}×{img.height()}"
+        return out_path, res_str
+    except Exception:
+        return None
+
+
+def install_rekordbox_artwork(
+    track_uuid: str,
+    artwork_file_or_bytes: Union[str, bytes, Any],
+    db_path: Optional[str] = None,
+) -> Optional[str]:
+    """Install artwork for a Rekordbox track by UUID into the Pioneer share directory.
+
+    Generates:
+      - artwork.jpg (full size, JPEG 95)
+      - artwork_m.jpg (240x240, JPEG 90)
+      - artwork_s.jpg (80x80, JPEG 90)
+
+    Returns the relative ImagePath (e.g. '/PIONEER/Artwork/797/7e8a4-811f-4d7b-aeb4-7a4326ba6326/artwork.jpg')
+    or None on failure.
+    """
+    if not track_uuid:
+        return None
+    clean_uuid = str(track_uuid).strip()
+    if len(clean_uuid) < 4:
+        return None
+
+    # Determine share dir
+    share_dir = None
+    if db_path:
+        db_dir = os.path.dirname(os.path.abspath(db_path))
+        share_cand = os.path.join(db_dir, "share")
+        if os.path.isdir(share_cand):
+            share_dir = share_cand
+        else:
+            pioneer_default = os.path.expanduser("~/Library/Pioneer/rekordbox")
+            if os.path.exists(db_path) and not os.path.abspath(db_path).startswith(pioneer_default):
+                share_dir = share_cand
+
+    if not share_dir:
+        candidates = [
+            os.path.expanduser("~/Library/Pioneer/rekordbox/share"),
+            os.path.expanduser("~/Library/Pioneer/rekordbox"),
+        ]
+        for c in candidates:
+            if os.path.exists(c) and os.path.isdir(c):
+                share_dir = c
+                break
+
+    if not share_dir:
+        share_dir = os.path.expanduser("~/Library/Pioneer/rekordbox/share")
+
+    rel_dir = os.path.join("PIONEER", "Artwork", clean_uuid[:3], clean_uuid[3:])
+    full_dir = os.path.join(share_dir, rel_dir)
+    os.makedirs(full_dir, exist_ok=True)
+
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QImage
+
+    if isinstance(artwork_file_or_bytes, bytes):
+        img = QImage.fromData(artwork_file_or_bytes)
+    elif hasattr(artwork_file_or_bytes, "isNull"):
+        img = artwork_file_or_bytes.toImage() if hasattr(artwork_file_or_bytes, "toImage") else artwork_file_or_bytes
+    else:
+        img = QImage(str(artwork_file_or_bytes))
+
+    if img.isNull():
+        return None
+
+    full_p = os.path.join(full_dir, "artwork.jpg")
+    med_p = os.path.join(full_dir, "artwork_m.jpg")
+    small_p = os.path.join(full_dir, "artwork_s.jpg")
+
+    img.save(full_p, "JPEG", 95)
+    img.scaled(240, 240, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation).save(med_p, "JPEG", 90)
+    img.scaled(80, 80, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation).save(small_p, "JPEG", 90)
+
+    return f"/PIONEER/Artwork/{clean_uuid[:3]}/{clean_uuid[3:]}/artwork.jpg"
+
