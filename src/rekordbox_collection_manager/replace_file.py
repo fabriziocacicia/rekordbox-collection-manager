@@ -403,18 +403,35 @@ def fetch_track_full_info(engine: Engine, content_id: str) -> Dict[str, Any]:
 
         # 1. History sets played
         history_count = 0
+        history_list: List[str] = []
         if "djmdSongHistory" in tables:
             try:
                 sh_cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(djmdSongHistory);").fetchall()}
-                sh_del = "AND (rb_local_deleted = 0 OR rb_local_deleted IS NULL)" if "rb_local_deleted" in sh_cols else ""
-                h_sql = f"""
-                    SELECT count(DISTINCT HistoryID)
-                    FROM djmdSongHistory
-                    WHERE (ContentID = :cid OR ContentID = CAST(:cid AS INTEGER) OR CAST(ContentID AS TEXT) = :cid)
-                    {sh_del};
-                """
-                row_h = conn.execute(text(h_sql), cid_params).fetchone()
-                history_count = int(row_h[0]) if row_h and row_h[0] is not None else 0
+                sh_del = "AND (sh.rb_local_deleted = 0 OR sh.rb_local_deleted IS NULL)" if "rb_local_deleted" in sh_cols else ""
+                if "djmdHistory" in tables:
+                    h_cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(djmdHistory);").fetchall()}
+                    h_del = "AND (h.rb_local_deleted = 0 OR h.rb_local_deleted IS NULL)" if "rb_local_deleted" in h_cols else ""
+                    h_attr = "AND (h.Attribute = 0 OR h.Attribute IS NULL)" if "Attribute" in h_cols else ""
+                    rows_h = conn.execute(
+                        text(f"""
+                            SELECT DISTINCT h.Name
+                            FROM djmdSongHistory sh
+                            JOIN djmdHistory h ON sh.HistoryID = h.ID
+                            WHERE (sh.ContentID = :cid OR sh.ContentID = CAST(:cid AS INTEGER) OR CAST(sh.ContentID AS TEXT) = :cid)
+                              {h_attr} {h_del} {sh_del}
+                            ORDER BY lower(h.Name) ASC;
+                        """),
+                        cid_params,
+                    ).fetchall()
+                    history_list = [str(rh[0]).strip() for rh in rows_h if rh[0] and str(rh[0]).strip()]
+                    history_count = len(history_list)
+                else:
+                    h_del_raw = "AND (rb_local_deleted = 0 OR rb_local_deleted IS NULL)" if "rb_local_deleted" in sh_cols else ""
+                    row_h = conn.execute(
+                        text(f"SELECT count(DISTINCT HistoryID) FROM djmdSongHistory WHERE (ContentID = :cid OR ContentID = CAST(:cid AS INTEGER) OR CAST(ContentID AS TEXT) = :cid) {h_del_raw};"),
+                        cid_params,
+                    ).fetchone()
+                    history_count = int(row_h[0]) if row_h and row_h[0] is not None else 0
             except Exception:
                 pass
 
@@ -535,6 +552,8 @@ def fetch_track_full_info(engine: Engine, content_id: str) -> Dict[str, Any]:
             "duration_str": format_duration(dur_sec),
             "file_size": int(r.get("FileSize") or 0),
             "history_count": history_count,
+            "history_sessions": history_list,
+            "history_plays": history_list,
             "playlist_count": playlist_count,
             "playlists": playlists_list,
             "tag_count": tag_count,
@@ -1149,16 +1168,45 @@ def merge_imported_tracks(
             raise ValueError(f"Target track must be an AIFF file (selected track is {tgt_fmt}).")
 
         src_plays = int(src_dict.get("DJPlayCount") or 0)
-        src_stock_date = str(src_dict.get("StockDate") or "")
+        tgt_plays = int(tgt_dict.get("DJPlayCount") or 0)
+        src_stock_date = str(src_dict.get("StockDate") or "").strip()
+        tgt_stock_date = str(tgt_dict.get("StockDate") or "").strip()
+
+        pres_fields = opts.get("preservation_fields") or {}
+        default_strategy = opts.get("preservation_strategy", "merge")
+
+        play_mode = pres_fields.get("play_count", default_strategy)
+        date_mode = pres_fields.get("date_added", default_strategy)
+        hist_mode = pres_fields.get("history_sessions", default_strategy)
+        pl_mode = pres_fields.get("playlists", default_strategy)
+        tag_mode = pres_fields.get("tags", default_strategy)
+        cue_mode = pres_fields.get("cues", default_strategy)
+
+        # 2. Determine resolved Play Count and StockDate (Date Added)
+        if play_mode == "old":
+            final_plays = src_plays
+        elif play_mode == "new":
+            final_plays = tgt_plays
+        else:  # merge
+            final_plays = src_plays + tgt_plays
+
+        if date_mode == "old":
+            final_date = src_stock_date or tgt_stock_date
+        elif date_mode == "new":
+            final_date = tgt_stock_date or src_stock_date
+        else:  # merge
+            if src_stock_date and tgt_stock_date:
+                final_date = min(src_stock_date, tgt_stock_date)
+            else:
+                final_date = src_stock_date or tgt_stock_date
 
         cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(djmdContent);").fetchall()}
         tables = {r[0] for r in conn.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table';").fetchall()}
 
-        # 2. Transfer play count and StockDate to target
         set_clauses = ["DJPlayCount = :plays", "StockDate = :stock_date"]
         update_params: Dict[str, Any] = {
-            "plays": src_plays,
-            "stock_date": src_stock_date,
+            "plays": final_plays,
+            "stock_date": final_date,
             "target_id": str(target_content_id),
         }
         if "updated_at" in cols:
@@ -1181,84 +1229,183 @@ def merge_imported_tracks(
             if filtered_meta:
                 _apply_resolved_metadata(conn, cols, tables, str(target_content_id), filtered_meta, now_utc)
 
-        # 3. Transfer history entries
-        hist_res = conn.execute(
-            text("UPDATE djmdSongHistory SET ContentID = :target_id WHERE ContentID = :source_id;"),
-            {"target_id": str(target_content_id), "source_id": str(source_content_id)},
-        )
-        hist_transferred = hist_res.rowcount or 0
+        # 3. Transfer or manage history entries
+        hist_transferred = 0
+        if "djmdSongHistory" in tables:
+            if hist_mode == "merge":
+                hist_res = conn.execute(
+                    text("UPDATE djmdSongHistory SET ContentID = :target_id WHERE ContentID = :source_id;"),
+                    {"target_id": str(target_content_id), "source_id": str(source_content_id)},
+                )
+                hist_transferred = hist_res.rowcount or 0
+            elif hist_mode == "old":
+                conn.execute(
+                    text("DELETE FROM djmdSongHistory WHERE ContentID = :target_id;"),
+                    {"target_id": str(target_content_id)},
+                )
+                hist_res = conn.execute(
+                    text("UPDATE djmdSongHistory SET ContentID = :target_id WHERE ContentID = :source_id;"),
+                    {"target_id": str(target_content_id), "source_id": str(source_content_id)},
+                )
+                hist_transferred = hist_res.rowcount or 0
+            elif hist_mode == "new":
+                conn.execute(
+                    text("DELETE FROM djmdSongHistory WHERE ContentID = :source_id;"),
+                    {"source_id": str(source_content_id)},
+                )
+                hist_transferred = 0
 
-        # 4. Transfer playlists
-        tgt_pls = {
-            r[0]
-            for r in conn.execute(
-                text("SELECT PlaylistID FROM djmdSongPlaylist WHERE ContentID = :id;"),
-                {"id": str(target_content_id)},
-            ).fetchall()
-        }
-        src_pl_rows = conn.execute(
-            text("SELECT ID, PlaylistID FROM djmdSongPlaylist WHERE ContentID = :id;"),
-            {"id": str(source_content_id)},
-        ).fetchall()
+        # 4. Transfer or manage playlists
         pl_transferred = 0
-        for pl_entry_id, pl_id in src_pl_rows:
-            if pl_id not in tgt_pls:
+        if "djmdSongPlaylist" in tables:
+            if pl_mode == "merge":
+                tgt_pls = {
+                    r[0]
+                    for r in conn.execute(
+                        text("SELECT PlaylistID FROM djmdSongPlaylist WHERE ContentID = :id;"),
+                        {"id": str(target_content_id)},
+                    ).fetchall()
+                }
+                src_pl_rows = conn.execute(
+                    text("SELECT ID, PlaylistID FROM djmdSongPlaylist WHERE ContentID = :id;"),
+                    {"id": str(source_content_id)},
+                ).fetchall()
+                for pl_entry_id, pl_id in src_pl_rows:
+                    if pl_id not in tgt_pls:
+                        conn.execute(
+                            text("UPDATE djmdSongPlaylist SET ContentID = :target_id WHERE ID = :entry_id;"),
+                            {"target_id": str(target_content_id), "entry_id": pl_entry_id},
+                        )
+                        tgt_pls.add(pl_id)
+                        pl_transferred += 1
+                    else:
+                        # Target already in playlist; remove duplicate source entry
+                        conn.execute(
+                            text("DELETE FROM djmdSongPlaylist WHERE ID = :entry_id;"),
+                            {"entry_id": pl_entry_id},
+                        )
+            elif pl_mode == "old":
                 conn.execute(
-                    text("UPDATE djmdSongPlaylist SET ContentID = :target_id WHERE ID = :entry_id;"),
-                    {"target_id": str(target_content_id), "entry_id": pl_entry_id},
+                    text("DELETE FROM djmdSongPlaylist WHERE ContentID = :target_id;"),
+                    {"target_id": str(target_content_id)},
                 )
-                tgt_pls.add(pl_id)
-                pl_transferred += 1
-            else:
-                # Target already in playlist; remove duplicate source entry
+                pl_res = conn.execute(
+                    text("UPDATE djmdSongPlaylist SET ContentID = :target_id WHERE ContentID = :source_id;"),
+                    {"target_id": str(target_content_id), "source_id": str(source_content_id)},
+                )
+                pl_transferred = pl_res.rowcount or 0
+            elif pl_mode == "new":
                 conn.execute(
-                    text("DELETE FROM djmdSongPlaylist WHERE ID = :entry_id;"),
-                    {"entry_id": pl_entry_id},
+                    text("DELETE FROM djmdSongPlaylist WHERE ContentID = :source_id;"),
+                    {"source_id": str(source_content_id)},
                 )
+                pl_transferred = 0
 
-        # 5. Transfer tags
-        tgt_tags: Set[str] = set()
-        for r in conn.execute(
-            text("SELECT MyTagID FROM djmdSongMyTag WHERE ContentID = :id;"),
-            {"id": str(target_content_id)},
-        ).fetchall():
-            if r[0] is not None:
-                for mid in _resolve_tag_matching_ids(r[0]):
-                    tgt_tags.add(mid)
-
-        src_tag_rows = conn.execute(
-            text("SELECT ID, MyTagID FROM djmdSongMyTag WHERE ContentID = :id;"),
-            {"id": str(source_content_id)},
-        ).fetchall()
+        # 5. Transfer or manage tags
         tags_transferred = 0
-        for tag_entry_id, tag_id in src_tag_rows:
-            tag_id_str = str(tag_id) if tag_id is not None else ""
-            if tag_id_str and not any(mid in tgt_tags for mid in _resolve_tag_matching_ids(tag_id_str)):
-                conn.execute(
-                    text("UPDATE djmdSongMyTag SET ContentID = :target_id WHERE ID = :entry_id;"),
-                    {"target_id": str(target_content_id), "entry_id": tag_entry_id},
-                )
-                for mid in _resolve_tag_matching_ids(tag_id_str):
-                    tgt_tags.add(mid)
-                tags_transferred += 1
-            else:
-                conn.execute(
-                    text("DELETE FROM djmdSongMyTag WHERE ID = :entry_id;"),
-                    {"entry_id": tag_entry_id},
-                )
+        if "djmdSongMyTag" in tables:
+            if tag_mode == "merge":
+                tgt_tags: Set[str] = set()
+                for r in conn.execute(
+                    text("SELECT MyTagID FROM djmdSongMyTag WHERE ContentID = :id;"),
+                    {"id": str(target_content_id)},
+                ).fetchall():
+                    if r[0] is not None:
+                        for mid in _resolve_tag_matching_ids(r[0]):
+                            tgt_tags.add(mid)
 
-        # 6. Transfer cues if target has none
-        tgt_cues_count = conn.execute(
-            text("SELECT count(*) FROM djmdCue WHERE ContentID = :id;"),
-            {"id": str(target_content_id)},
-        ).fetchone()[0]
+                src_tag_rows = conn.execute(
+                    text("SELECT ID, MyTagID FROM djmdSongMyTag WHERE ContentID = :id;"),
+                    {"id": str(source_content_id)},
+                ).fetchall()
+                for tag_entry_id, tag_id in src_tag_rows:
+                    tag_id_str = str(tag_id) if tag_id is not None else ""
+                    if tag_id_str and not any(mid in tgt_tags for mid in _resolve_tag_matching_ids(tag_id_str)):
+                        conn.execute(
+                            text("UPDATE djmdSongMyTag SET ContentID = :target_id WHERE ID = :entry_id;"),
+                            {"target_id": str(target_content_id), "entry_id": tag_entry_id},
+                        )
+                        for mid in _resolve_tag_matching_ids(tag_id_str):
+                            tgt_tags.add(mid)
+                        tags_transferred += 1
+                    else:
+                        conn.execute(
+                            text("DELETE FROM djmdSongMyTag WHERE ID = :entry_id;"),
+                            {"entry_id": tag_entry_id},
+                        )
+            elif tag_mode == "old":
+                conn.execute(
+                    text("DELETE FROM djmdSongMyTag WHERE ContentID = :target_id;"),
+                    {"target_id": str(target_content_id)},
+                )
+                tag_res = conn.execute(
+                    text("UPDATE djmdSongMyTag SET ContentID = :target_id WHERE ContentID = :source_id;"),
+                    {"target_id": str(target_content_id), "source_id": str(source_content_id)},
+                )
+                tags_transferred = tag_res.rowcount or 0
+            elif tag_mode == "new":
+                conn.execute(
+                    text("DELETE FROM djmdSongMyTag WHERE ContentID = :source_id;"),
+                    {"source_id": str(source_content_id)},
+                )
+                tags_transferred = 0
+
+        # 6. Transfer or manage cues
         cues_transferred = 0
-        if tgt_cues_count == 0:
-            cue_res = conn.execute(
-                text("UPDATE djmdCue SET ContentID = :target_id WHERE ContentID = :source_id;"),
-                {"target_id": str(target_content_id), "source_id": str(source_content_id)},
-            )
-            cues_transferred = cue_res.rowcount or 0
+        if "djmdCue" in tables:
+            if cue_mode == "merge":
+                tgt_cues_count = conn.execute(
+                    text("SELECT count(*) FROM djmdCue WHERE ContentID = :id;"),
+                    {"id": str(target_content_id)},
+                ).fetchone()[0]
+                if tgt_cues_count == 0:
+                    cue_res = conn.execute(
+                        text("UPDATE djmdCue SET ContentID = :target_id WHERE ContentID = :source_id;"),
+                        {"target_id": str(target_content_id), "source_id": str(source_content_id)},
+                    )
+                    cues_transferred = cue_res.rowcount or 0
+                else:
+                    tgt_inmsec_rows = conn.execute(
+                        text("SELECT InMsec FROM djmdCue WHERE ContentID = :id;"),
+                        {"id": str(target_content_id)},
+                    ).fetchall()
+                    tgt_msecs = [int(r[0]) for r in tgt_inmsec_rows if r[0] is not None]
+
+                    src_cue_rows = conn.execute(
+                        text("SELECT ID, InMsec FROM djmdCue WHERE ContentID = :id;"),
+                        {"id": str(source_content_id)},
+                    ).fetchall()
+                    for c_entry_id, c_inmsec in src_cue_rows:
+                        is_collision = any(abs(int(c_inmsec or 0) - tm) < 100 for tm in tgt_msecs) if c_inmsec is not None else False
+                        if not is_collision:
+                            conn.execute(
+                                text("UPDATE djmdCue SET ContentID = :target_id WHERE ID = :entry_id;"),
+                                {"target_id": str(target_content_id), "entry_id": c_entry_id},
+                            )
+                            if c_inmsec is not None:
+                                tgt_msecs.append(int(c_inmsec))
+                            cues_transferred += 1
+                        else:
+                            conn.execute(
+                                text("DELETE FROM djmdCue WHERE ID = :entry_id;"),
+                                {"entry_id": c_entry_id},
+                            )
+            elif cue_mode == "old":
+                conn.execute(
+                    text("DELETE FROM djmdCue WHERE ContentID = :target_id;"),
+                    {"target_id": str(target_content_id)},
+                )
+                cue_res = conn.execute(
+                    text("UPDATE djmdCue SET ContentID = :target_id WHERE ContentID = :source_id;"),
+                    {"target_id": str(target_content_id), "source_id": str(source_content_id)},
+                )
+                cues_transferred = cue_res.rowcount or 0
+            elif cue_mode == "new":
+                conn.execute(
+                    text("DELETE FROM djmdCue WHERE ContentID = :source_id;"),
+                    {"source_id": str(source_content_id)},
+                )
+                cues_transferred = 0
 
         # 7. Soft delete old source track
         del_clauses = ["rb_local_deleted = 1"]
@@ -1295,13 +1442,23 @@ def merge_imported_tracks(
         "source_id": str(source_content_id),
         "target_id": str(target_content_id),
         "title": tgt_dict.get("Title") or "(Untitled)",
-        "play_count_transferred": src_plays,
-        "stock_date_transferred": src_stock_date,
+        "play_count": final_plays,
+        "stock_date": final_date,
+        "play_count_transferred": final_plays,
+        "stock_date_transferred": final_date,
         "history_transferred": hist_transferred,
         "playlists_transferred": pl_transferred,
         "tags_transferred": tags_transferred,
         "cues_transferred": cues_transferred,
         "old_file_handled": old_file_handled,
+        "preservation_modes": {
+            "play_count": play_mode,
+            "date_added": date_mode,
+            "history_sessions": hist_mode,
+            "playlists": pl_mode,
+            "tags": tag_mode,
+            "cues": cue_mode,
+        },
     }
 
 

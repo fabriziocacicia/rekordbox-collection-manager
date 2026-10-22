@@ -9,8 +9,9 @@ Highlights conflicting Rekordbox 'Info' metadata, allows granular field-by-field
 or batch resolution, live preview, and safe database execution.
 """
 
+import html
 import os
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from PySide6.QtCore import QPoint, QRect, QSize, Qt, Signal
 from PySide6.QtGui import (
@@ -87,17 +88,35 @@ class FieldDiff:
         category: str,  # "info", "audio", "preservation"
         old_val: Any,
         new_val: Any,
-        default_origin: str = "old",  # "old" or "new"
+        default_origin: str = "old",  # "old", "new", or "merge"
         is_editable: bool = True,
         help_tip: str = "",
+        old_result_val: Any = None,
+        new_result_val: Any = None,
+        merge_result_val: Any = None,
+        old_items: Optional[List[str]] = None,
+        new_items: Optional[List[str]] = None,
+        merge_items: Optional[List[str]] = None,
     ):
         self.key = key
         self.label = label
         self.category = category
         self.old_val = old_val
         self.new_val = new_val
+        self.default_origin = default_origin
         self.is_editable = is_editable
         self.help_tip = help_tip
+
+        self.old_result_val = old_result_val if old_result_val is not None else old_val
+        self.new_result_val = new_result_val if new_result_val is not None else new_val
+        self.merge_result_val = merge_result_val if merge_result_val is not None else new_val
+
+        self.old_items: List[str] = [str(x).strip() for x in (old_items or []) if str(x).strip()]
+        self.new_items: List[str] = [str(x).strip() for x in (new_items or []) if str(x).strip()]
+        if merge_items is not None:
+            self.merge_items: List[str] = [str(x).strip() for x in merge_items if str(x).strip()]
+        else:
+            self.merge_items = sorted(list(set(self.old_items).union(set(self.new_items))), key=lambda s: s.lower())
 
         # Determine conflict / match status
         old_s = self._str(old_val)
@@ -106,22 +125,52 @@ class FieldDiff:
         self.is_match = (old_s.lower() == new_s.lower()) and bool(old_s or new_s)
         self.is_both_empty = not old_s and not new_s
 
-        if self.is_match or self.is_both_empty:
-            self.status = "match"
-            self.origin = "old"
-            self.result_val = old_val if old_s else new_val
-        elif old_s and new_s and old_s.lower() != new_s.lower():
-            self.status = "conflict"
+        if self.category == "preservation":
             self.origin = default_origin
-            self.result_val = old_val if default_origin == "old" else new_val
-        elif not old_s and new_s:
-            self.status = "new_data"
-            self.origin = "new"
-            self.result_val = new_val
-        else:  # old_s and not new_s
-            self.status = "kept_old"
-            self.origin = "old"
-            self.result_val = old_val
+            if default_origin == "merge":
+                self.status = "merged"
+                self.result_val = self.merge_result_val
+            elif default_origin == "new":
+                self.status = "kept_new"
+                self.result_val = self.new_result_val
+            else:
+                self.status = "kept_old"
+                self.result_val = self.old_result_val
+        else:
+            if self.is_match or self.is_both_empty:
+                self.status = "match"
+                self.origin = "old"
+                self.result_val = old_val if old_s else new_val
+            elif old_s and new_s and old_s.lower() != new_s.lower():
+                self.status = "conflict"
+                self.origin = default_origin
+                self.result_val = old_val if default_origin == "old" else new_val
+            elif not old_s and new_s:
+                self.status = "new_data"
+                self.origin = "new"
+                self.result_val = new_val
+            else:  # old_s and not new_s
+                self.status = "kept_old"
+                self.origin = "old"
+                self.result_val = old_val
+
+    def set_origin(self, origin: str) -> None:
+        self.origin = origin
+        if self.category == "preservation":
+            if origin == "old":
+                self.result_val = self.old_result_val
+                self.status = "kept_old"
+            elif origin == "new":
+                self.result_val = self.new_result_val
+                self.status = "kept_new"
+            elif origin == "merge":
+                self.result_val = self.merge_result_val
+                self.status = "merged"
+        else:
+            if origin == "old":
+                self.result_val = self.old_val
+            elif origin == "new":
+                self.result_val = self.new_val
 
     @staticmethod
     def _str(val: Any) -> str:
@@ -221,7 +270,7 @@ def calculate_metadata_diff(
         f.origin = "new"
         fields.append(f)
 
-    # 3. Collection Preservation (100% Guaranteed from Current Track)
+    # 3. Collection Preservation
     old_plays_num = int(old_data.get('play_count', 0) or 0)
     new_plays_num = int(new_data.get('play_count', 0) or 0)
     old_plays = f"{old_plays_num} {'play' if old_plays_num == 1 else 'plays'}"
@@ -266,45 +315,367 @@ def calculate_metadata_diff(
 
     old_h_disp = f"{old_h_cnt} {h_unit}"
     new_h_disp = f"{new_h_cnt} {new_h_unit}" if mode == "merge" else "0 sets"
-    res_h_disp = f"Preserved ({old_h_disp})" if old_h_cnt > 0 else "100% Preserved intact"
 
     old_p_disp = f"{old_p_cnt} {p_unit}"
     new_p_disp = f"{new_p_cnt} {new_p_unit}" if mode == "merge" else "0 playlists"
-    res_p_disp = f"Preserved ({old_p_disp})" if old_p_cnt > 0 else "All playlist memberships preserved"
 
     old_t_disp = f"{old_t_cnt} {t_unit}"
     new_t_disp = f"{new_t_cnt} {new_t_unit}" if mode == "merge" else "0 tags"
-    res_t_disp = f"Preserved ({old_t_disp})" if old_t_cnt > 0 else "All My Tags preserved"
 
     old_c_disp = f"{old_c_cnt} {c_unit}"
     new_c_disp = f"{new_c_cnt} {new_c_unit}" if mode == "merge" else "Re-analyzed"
-    res_c_disp = f"Preserved ({old_c_disp})" if old_c_cnt > 0 else "All cue points preserved"
+
+    # Define results for each origin choice: Old, New/Target, and Merge
+    sum_plays = old_plays_num + new_plays_num
+    pc_old_res = f"Preserved ({old_plays})"
+    pc_new_res = f"Preserved ({new_plays})"
+    pc_merge_res = f"{sum_plays} {'play' if sum_plays == 1 else 'plays'} ({old_plays_num} old + {new_plays_num} target)"
+
+    da_old_res = f"Preserved ({old_date})"
+    da_new_res = f"Preserved ({new_date})"
+    if old_date and old_date != "—" and new_date and new_date != "—":
+        earliest_date = min(str(old_date), str(new_date))
+    else:
+        earliest_date = old_date if (old_date and old_date != "—") else new_date
+    da_merge_res = f"{earliest_date} (Earliest Added)"
+
+    hs_old_res = f"Preserved ({old_h_disp})" if old_h_cnt > 0 else "0 sets (Current)"
+    hs_new_res = f"Preserved ({new_h_disp})" if new_h_cnt > 0 else "0 sets (Target)"
+    tot_h = old_h_cnt + new_h_cnt
+    hs_merge_res = f"{tot_h} {'set' if tot_h == 1 else 'sets'} (Combined all history plays)"
+
+    pl_old_res = f"Preserved ({old_p_disp})" if old_p_cnt > 0 else "0 playlists (Current)"
+    pl_new_res = f"Preserved ({new_p_disp})" if new_p_cnt > 0 else "0 playlists (Target)"
+    pl_old_items = [str(x).strip() for x in (old_data.get("playlists") or []) if str(x).strip()]
+    pl_new_items = [str(x).strip() for x in (new_data.get("playlists") or []) if str(x).strip()] if mode == "merge" else []
+    pl_merge_items = sorted(list(set(pl_old_items).union(set(pl_new_items))), key=lambda s: s.lower())
+    if pl_old_items or pl_new_items:
+        pl_comb_cnt = len(pl_merge_items)
+    else:
+        pl_comb_cnt = old_p_cnt + new_p_cnt
+    pl_merge_res = f"{pl_comb_cnt} {'playlist' if pl_comb_cnt == 1 else 'playlists'} (Combined memberships)"
+
+    tag_old_res = f"Preserved ({old_t_disp})" if old_t_cnt > 0 else "0 tags (Current)"
+    tag_new_res = f"Preserved ({new_t_disp})" if new_t_cnt > 0 else "0 tags (Target)"
+    t_old_items = [str(x).strip() for x in (old_data.get("tags") or []) if str(x).strip()]
+    t_new_items = [str(x).strip() for x in (new_data.get("tags") or []) if str(x).strip()] if mode == "merge" else []
+    t_merge_items = sorted(list(set(t_old_items).union(set(t_new_items))), key=lambda s: s.lower())
+    if t_old_items or t_new_items:
+        t_comb_cnt = len(t_merge_items)
+    else:
+        t_comb_cnt = old_t_cnt + new_t_cnt
+    tag_merge_res = f"{t_comb_cnt} {'tag' if t_comb_cnt == 1 else 'tags'} (Combined tags)"
+
+    h_old_items = [str(x).strip() for x in (old_data.get("history_sessions") or old_data.get("history_plays") or []) if str(x).strip()]
+    h_new_items = [str(x).strip() for x in (new_data.get("history_sessions") or new_data.get("history_plays") or []) if str(x).strip()] if mode == "merge" else []
+    h_merge_items = sorted(list(set(h_old_items).union(set(h_new_items))), key=lambda s: s.lower())
+
+    cue_old_res = f"Preserved ({old_c_disp})" if old_c_cnt > 0 else "All cue points from Current"
+    cue_new_res = f"Preserved ({new_c_disp})" if new_c_disp and new_c_cnt > 0 else "All cue points from Target"
+    tot_cues = max(old_c_cnt, new_c_cnt) if (old_c_cnt == 0 or new_c_cnt == 0) else (old_c_cnt + new_c_cnt)
+    cue_merge_res = f"{tot_cues} {'cue' if tot_cues == 1 else 'cues'} (Combined cue points)"
 
     preservation_defs = [
-        ("play_count", "Play Count", old_plays, new_plays, f"Preserved ({old_plays})"),
-        ("date_added", "Date Added (StockDate)", old_date, new_date, f"Preserved ({old_date})"),
-        ("history_sessions", "History Sets Played", old_h_disp, new_h_disp, res_h_disp),
-        ("playlists", "Playlists", old_p_disp, new_p_disp, res_p_disp),
-        ("tags", "My Tags", old_t_disp, new_t_disp, res_t_disp),
-        ("cues", "Cue Points & Hot Cues", old_c_disp, new_c_disp, res_c_disp),
+        ("play_count", "Play Count", old_plays, new_plays, pc_old_res, pc_new_res, pc_merge_res, [], [], []),
+        ("date_added", "Date Added (StockDate)", old_date, new_date, da_old_res, da_new_res, da_merge_res, [], [], []),
+        ("history_sessions", "History Sets Played", old_h_disp, new_h_disp, hs_old_res, hs_new_res, hs_merge_res, h_old_items, h_new_items, h_merge_items),
+        ("playlists", "Playlists", old_p_disp, new_p_disp, pl_old_res, pl_new_res, pl_merge_res, pl_old_items, pl_new_items, pl_merge_items),
+        ("tags", "My Tags", old_t_disp, new_t_disp, tag_old_res, tag_new_res, tag_merge_res, t_old_items, t_new_items, t_merge_items),
+        ("cues", "Cue Points & Hot Cues", old_c_disp, new_c_disp, cue_old_res, cue_new_res, cue_merge_res, [], [], []),
     ]
 
-    for key, label, old_v, new_v, res_v in preservation_defs:
+    is_merge_mode = (mode == "merge")
+    default_origin = "merge" if is_merge_mode else "old"
+
+    for key, label, old_v, new_v, old_r, new_r, merge_r, old_its, new_its, merge_its in preservation_defs:
         f = FieldDiff(
             key=key,
             label=label,
             category="preservation",
             old_val=old_v,
             new_val=new_v,
-            default_origin="old",
-            is_editable=False,
-            help_tip="Historical collection metrics are 100% preserved into the replacement track.",
+            default_origin=default_origin,
+            is_editable=is_merge_mode,
+            help_tip="Collection metrics and playlist/tag relationships.",
+            old_result_val=old_r,
+            new_result_val=new_r,
+            merge_result_val=merge_r,
+            old_items=old_its,
+            new_items=new_its,
+            merge_items=merge_its,
         )
-        f.result_val = res_v
-        f.origin = "old"
         fields.append(f)
 
     return fields
+
+
+class ItemsComparisonDialog(QDialog):
+    """Side-by-side comparison modal dialog for Playlists, My Tags, or History Sessions."""
+
+    def __init__(
+        self,
+        diff: FieldDiff,
+        parent: Optional[QWidget] = None,
+        on_origin_selected: Optional[Callable[[str], None]] = None,
+    ):
+        super().__init__(parent)
+        self.diff = diff
+        self.on_origin_selected = on_origin_selected
+        self.col_frames: Dict[str, QFrame] = {}
+        self._init_ui()
+
+    def _init_ui(self) -> None:
+        unit_name = self.diff.label
+        self.setWindowTitle(f"Compare {unit_name} — Current vs. Target Track")
+        self.resize(860, 520)
+        self.setMinimumSize(700, 420)
+        self.setStyleSheet(f"QDialog {{ background-color: {COLOR_BG_DARK}; color: {COLOR_TEXT_PRIMARY}; }}")
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(14)
+
+        # Header
+        header = QFrame()
+        header.setStyleSheet("background: transparent; border: none;")
+        hl = QVBoxLayout(header)
+        hl.setContentsMargins(0, 0, 0, 0)
+        hl.setSpacing(4)
+
+        icon = "📁" if self.diff.key == "playlists" else ("🏷️" if self.diff.key == "tags" else "🕒")
+        title_lbl = QLabel(f"{icon} Compare {unit_name}")
+        title_lbl.setStyleSheet("font-size: 16px; font-weight: 700; color: #ffffff;")
+        hl.addWidget(title_lbl)
+
+        sub_lbl = QLabel(
+            f"Review items assigned to both tracks. You can choose to keep only Current track items, only Target track items, or merge both collections together."
+        )
+        sub_lbl.setStyleSheet(f"font-size: 12px; color: {COLOR_TEXT_MUTED};")
+        sub_lbl.setWordWrap(True)
+        hl.addWidget(sub_lbl)
+        layout.addWidget(header)
+
+        # Columns container (3 columns)
+        cols_container = QWidget()
+        cols_layout = QHBoxLayout(cols_container)
+        cols_layout.setContentsMargins(0, 0, 0, 0)
+        cols_layout.setSpacing(12)
+
+        old_items = self.diff.old_items
+        new_items = self.diff.new_items
+        merge_items = self.diff.merge_items
+
+        # Column 1: Current Track (Old)
+        self.col_frames["old"] = self._create_column_card(
+            col_id="old",
+            title="Current Track (Old)",
+            count=len(old_items),
+            items=[(it, None) for it in old_items],
+            accent_color=COLOR_BLUE,
+            accent_bg=COLOR_BLUE_BG,
+            btn_text="◀ Keep Current Only",
+            btn_action=lambda: self._select_strategy("old"),
+        )
+        cols_layout.addWidget(self.col_frames["old"])
+
+        # Column 2: Combined / Merged
+        old_set = set(old_items)
+        new_set = set(new_items)
+        merged_annotated: List[Tuple[str, Optional[str]]] = []
+        for it in merge_items:
+            in_old = it in old_set
+            in_new = it in new_set
+            if in_old and in_new:
+                origin_badge = "Both"
+            elif in_old:
+                origin_badge = "Current"
+            else:
+                origin_badge = "Target"
+            merged_annotated.append((it, origin_badge))
+
+        self.col_frames["merge"] = self._create_column_card(
+            col_id="merge",
+            title="Merged Result",
+            count=len(merge_items),
+            items=merged_annotated,
+            accent_color="#c084fc",
+            accent_bg="#2e1065",
+            btn_text="🔀 Merge Both Collections",
+            btn_action=lambda: self._select_strategy("merge"),
+        )
+        cols_layout.addWidget(self.col_frames["merge"])
+
+        # Column 3: Target Track (New)
+        self.col_frames["new"] = self._create_column_card(
+            col_id="new",
+            title="Target Track (New)",
+            count=len(new_items),
+            items=[(it, None) for it in new_items],
+            accent_color=COLOR_GREEN,
+            accent_bg=COLOR_GREEN_BG,
+            btn_text="Keep Target Only ▶",
+            btn_action=lambda: self._select_strategy("new"),
+        )
+        cols_layout.addWidget(self.col_frames["new"])
+
+        layout.addWidget(cols_container, stretch=1)
+
+        # Bottom Bar: Close button & status text
+        bottom_bar = QFrame()
+        b_layout = QHBoxLayout(bottom_bar)
+        b_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.status_msg = QLabel("")
+        self.status_msg.setStyleSheet(f"color: {COLOR_TEXT_MUTED}; font-size: 11px;")
+        b_layout.addWidget(self.status_msg)
+        b_layout.addStretch(1)
+
+        btn_close = QPushButton("Done / Close")
+        btn_close.setFixedSize(110, 32)
+        btn_close.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_close.setStyleSheet(
+            f"QPushButton {{ background-color: {COLOR_BG_CARD}; color: {COLOR_TEXT_PRIMARY}; border: 1px solid {COLOR_BORDER}; border-radius: 5px; font-weight: 600; font-size: 12px; }} "
+            f"QPushButton:hover {{ background-color: {COLOR_BG_HOVER}; border-color: {COLOR_BORDER_LIGHT}; }}"
+        )
+        btn_close.clicked.connect(self.accept)
+        b_layout.addWidget(btn_close)
+        layout.addWidget(bottom_bar)
+
+        self._update_card_highlights()
+
+    def _create_column_card(
+        self,
+        col_id: str,
+        title: str,
+        count: int,
+        items: List[Tuple[str, Optional[str]]],
+        accent_color: str,
+        accent_bg: str,
+        btn_text: str,
+        btn_action: Any,
+    ) -> QFrame:
+        card = QFrame()
+        card.setObjectName(f"colCard_{col_id}")
+        card_l = QVBoxLayout(card)
+        card_l.setContentsMargins(12, 12, 12, 12)
+        card_l.setSpacing(10)
+
+        # Header row
+        hdr = QHBoxLayout()
+        hdr.setContentsMargins(0, 0, 0, 0)
+        t_lbl = QLabel(title)
+        t_lbl.setStyleSheet(f"font-size: 13px; font-weight: 700; color: {accent_color};")
+        hdr.addWidget(t_lbl)
+        hdr.addStretch(1)
+
+        badge = QLabel(f"{count} {'item' if count == 1 else 'items'}")
+        badge.setStyleSheet(f"font-size: 10px; font-weight: 700; background-color: {accent_bg}; color: {accent_color}; border: 1px solid {accent_color}; border-radius: 4px; padding: 1px 6px;")
+        hdr.addWidget(badge)
+        card_l.addLayout(hdr)
+
+        # Action Button at top of card
+        btn = QPushButton(btn_text)
+        btn.setFixedHeight(28)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setEnabled(self.diff.is_editable)
+        btn.setObjectName(f"btnAction_{col_id}")
+        btn.clicked.connect(btn_action)
+        card_l.addWidget(btn)
+
+        # Active state indicator
+        active_lbl = QLabel("✓ CURRENTLY SELECTED" if self.diff.origin == col_id else "")
+        active_lbl.setObjectName(f"activeLbl_{col_id}")
+        active_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        active_lbl.setStyleSheet(f"font-size: 10px; font-weight: 700; color: {accent_color}; height: 14px;")
+        card_l.addWidget(active_lbl)
+
+        # Scrollable items area
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea { background-color: #0f121d; border: 1px solid #1e2233; border-radius: 6px; } QScrollBar:vertical { width: 8px; }")
+
+        items_widget = QWidget()
+        items_widget.setStyleSheet("background-color: transparent;")
+        items_layout = QVBoxLayout(items_widget)
+        items_layout.setContentsMargins(8, 8, 8, 8)
+        items_layout.setSpacing(6)
+
+        if not items:
+            none_lbl = QLabel("(No items assigned)")
+            none_lbl.setStyleSheet("color: #64748b; font-style: italic; font-size: 11px; padding: 10px;")
+            none_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            items_layout.addWidget(none_lbl)
+        else:
+            for item_name, origin_badge in items:
+                row_f = QFrame()
+                row_f.setStyleSheet("background-color: #171b29; border: 1px solid #23283b; border-radius: 4px;")
+                row_l = QHBoxLayout(row_f)
+                row_l.setContentsMargins(8, 5, 8, 5)
+                row_l.setSpacing(6)
+
+                it_lbl = QLabel(item_name)
+                it_lbl.setStyleSheet("color: #f1f5f9; font-size: 11px; font-weight: 500;")
+                it_lbl.setWordWrap(True)
+                row_l.addWidget(it_lbl, stretch=1)
+
+                if origin_badge:
+                    b_color = "#d8b4fe" if origin_badge == "Both" else ("#7dd3fc" if origin_badge == "Current" else "#86efac")
+                    b_bg = "#4c1d95" if origin_badge == "Both" else ("#0369a1" if origin_badge == "Current" else "#14532d")
+                    b_lbl = QLabel(origin_badge)
+                    b_lbl.setStyleSheet(f"font-size: 9px; font-weight: 700; background-color: {b_bg}; color: {b_color}; border-radius: 3px; padding: 1px 5px;")
+                    row_l.addWidget(b_lbl)
+
+                items_layout.addWidget(row_f)
+
+        items_layout.addStretch(1)
+        scroll.setWidget(items_widget)
+        card_l.addWidget(scroll, stretch=1)
+
+        return card
+
+    def _select_strategy(self, origin: str) -> None:
+        if not self.diff.is_editable:
+            return
+        self.diff.origin = origin
+        if self.on_origin_selected:
+            self.on_origin_selected(origin)
+        self._update_card_highlights()
+        origin_str = "Current Track Only" if origin == "old" else ("Target Track Only" if origin == "new" else "Both Tracks (Merged)")
+        self.status_msg.setText(f"✓ Selection updated: {origin_str}")
+
+    def _update_card_highlights(self) -> None:
+        for origin_key, card in self.col_frames.items():
+            is_active = (self.diff.origin == origin_key)
+            if origin_key == "old":
+                border_color = COLOR_BLUE if is_active else COLOR_BORDER
+                btn_bg = COLOR_BLUE if is_active else COLOR_BG_CARD
+                btn_color = "#ffffff" if is_active else COLOR_BLUE
+                active_text = "✓ CURRENTLY SELECTED" if is_active else ""
+            elif origin_key == "new":
+                border_color = COLOR_GREEN if is_active else COLOR_BORDER
+                btn_bg = COLOR_GREEN if is_active else COLOR_BG_CARD
+                btn_color = "#ffffff" if is_active else COLOR_GREEN
+                active_text = "✓ CURRENTLY SELECTED" if is_active else ""
+            else:  # merge
+                border_color = "#8b5cf6" if is_active else COLOR_BORDER
+                btn_bg = "#7c3aed" if is_active else COLOR_BG_CARD
+                btn_color = "#ffffff" if is_active else "#c084fc"
+                active_text = "✓ CURRENTLY SELECTED" if is_active else ""
+
+            card.setStyleSheet(
+                f"QFrame#colCard_{origin_key} {{ background-color: {COLOR_BG_CARD}; border: {2 if is_active else 1}px solid {border_color}; border-radius: 8px; }}"
+            )
+
+            btn = card.findChild(QPushButton, f"btnAction_{origin_key}")
+            if btn:
+                btn.setStyleSheet(
+                    f"QPushButton {{ background-color: {btn_bg}; color: {btn_color}; border: 1px solid {border_color}; border-radius: 4px; font-weight: bold; font-size: 11px; }} "
+                    f"QPushButton:hover {{ opacity: 0.9; }}"
+                )
+
+            lbl = card.findChild(QLabel, f"activeLbl_{origin_key}")
+            if lbl:
+                lbl.setText(active_text)
 
 
 class DiffRowWidget(QFrame):
@@ -346,7 +717,6 @@ class DiffRowWidget(QFrame):
         self.old_frame = QFrame()
         self.old_frame.setObjectName("oldCell")
         self.old_frame.setCursor(Qt.CursorShape.PointingHandCursor if self.diff.is_editable else Qt.CursorShape.ArrowCursor)
-        self.old_frame.setToolTip("Click to use Current (Old) value for this field" if self.diff.is_editable else "")
         old_layout = QHBoxLayout(self.old_frame)
         old_layout.setContentsMargins(8, 6, 8, 6)
         old_layout.setSpacing(6)
@@ -374,7 +744,6 @@ class DiffRowWidget(QFrame):
         self.new_frame = QFrame()
         self.new_frame.setObjectName("newCell")
         self.new_frame.setCursor(Qt.CursorShape.PointingHandCursor if self.diff.is_editable else Qt.CursorShape.ArrowCursor)
-        self.new_frame.setToolTip("Click to use New value for this field" if self.diff.is_editable else "")
         new_layout = QHBoxLayout(self.new_frame)
         new_layout.setContentsMargins(8, 6, 8, 6)
         new_layout.setSpacing(6)
@@ -405,13 +774,13 @@ class DiffRowWidget(QFrame):
         res_layout.setContentsMargins(8, 4, 8, 4)
         res_layout.setSpacing(8)
 
-        # Origin pill: [OLD] / [NEW] / [CUSTOM]
+        # Origin pill: [OLD] / [NEW] / [CUSTOM] / [MERGED]
         self.origin_pill = QLabel("OLD")
         self.origin_pill.setFixedHeight(18)
         self.origin_pill.setStyleSheet("font-size: 9px; font-weight: bold; border-radius: 3px; padding: 1px 5px;")
         res_layout.addWidget(self.origin_pill)
 
-        if self.diff.is_editable:
+        if self.diff.is_editable and self.diff.category == "info":
             self.result_input = QLineEdit()
             self.result_input.setText(str(self.diff.result_val) if self.diff.result_val is not None else "")
             self.result_input.setStyleSheet(
@@ -426,12 +795,214 @@ class DiffRowWidget(QFrame):
             self.result_label.setWordWrap(True)
             res_layout.addWidget(self.result_label, stretch=1)
 
+            if self.diff.category == "preservation" and self.diff.is_editable:
+                self.btn_use_merge = QPushButton("🔀 Merge")
+                self.btn_use_merge.setFixedSize(68, 22)
+                self.btn_use_merge.setCursor(Qt.CursorShape.PointingHandCursor)
+                self.btn_use_merge.setToolTip("Combine and merge data from both tracks")
+                self.btn_use_merge.clicked.connect(self._select_merge)
+                res_layout.addWidget(self.btn_use_merge)
+
         layout.addWidget(self.result_frame, stretch=1)
 
         # Connect cell click events
         if self.diff.is_editable:
             self.old_frame.mousePressEvent = lambda e: self._select_old()
+            self.old_text_label.mousePressEvent = lambda e: self._select_old()
             self.new_frame.mousePressEvent = lambda e: self._select_new()
+            self.new_text_label.mousePressEvent = lambda e: self._select_new()
+            if self.diff.category == "preservation":
+                self.result_frame.setCursor(Qt.CursorShape.PointingHandCursor)
+                self.result_frame.mousePressEvent = lambda e: self._select_merge()
+                if hasattr(self, "result_label"):
+                    self.result_label.setCursor(Qt.CursorShape.PointingHandCursor)
+                    self.result_label.mousePressEvent = lambda e: self._select_merge()
+
+        self._update_tooltips()
+
+    def _get_result_items(self) -> List[str]:
+        if self.diff.origin == "old":
+            return self.diff.old_items
+        elif self.diff.origin == "new":
+            return self.diff.new_items
+        else:
+            return self.diff.merge_items
+
+    def _build_tooltip(self, origin_type: str) -> str:
+        """Build rich HTML tooltip displaying old/new/merged items and active choices."""
+        if self.diff.category == "preservation":
+            icon = "📁" if self.diff.key == "playlists" else ("🏷️" if self.diff.key == "tags" else "🕒")
+            unit_name = self.diff.label
+            has_items = bool(self.diff.old_items or self.diff.new_items or self.diff.merge_items)
+
+            if origin_type == "old":
+                if has_items:
+                    items = self.diff.old_items
+                    items_html = ""
+                    if not items:
+                        items_html = "<div style='color: #94a3b8; font-style: italic;'>None (0 items assigned)</div>"
+                    else:
+                        limit = 20
+                        shown = items[:limit]
+                        list_rows = "".join(f"<div style='margin: 1px 0;'>• {html.escape(it)}</div>" for it in shown)
+                        more_cnt = len(items) - limit
+                        more_txt = f"<div style='color: #94a3b8; font-size: 10px; margin-top: 3px;'>... and {more_cnt} more</div>" if more_cnt > 0 else ""
+                        items_html = f"<div style='margin-left: 4px;'>{list_rows}{more_txt}</div>"
+
+                    click_hint = ""
+                    if self.diff.is_editable:
+                        click_hint = (
+                            "<hr style='border: 0; border-top: 1px solid #334155; margin: 6px 0;'/>"
+                            f"<span style='color: #38bdf8; font-size: 11px;'>💡 Click cell or [◀ Use] to keep only Current track {unit_name.lower()}</span>"
+                        )
+                    return (
+                        f"<div style='font-family: sans-serif; font-size: 12px; line-height: 1.35;'>"
+                        f"<b style='color: #38bdf8;'>{icon} Current Track {unit_name} ({len(items)}):</b>"
+                        f"<div style='margin-top: 4px;'>{items_html}</div>"
+                        f"{click_hint}"
+                        f"</div>"
+                    )
+                else:
+                    hint = f"\n\nClick to keep Current (Old) {unit_name.lower()}" if self.diff.is_editable else ""
+                    return f"Current Track: {self.diff.old_val}{hint}"
+
+            elif origin_type == "new":
+                if has_items:
+                    items = self.diff.new_items
+                    items_html = ""
+                    if not items:
+                        items_html = "<div style='color: #94a3b8; font-style: italic;'>None (0 items assigned)</div>"
+                    else:
+                        limit = 20
+                        shown = items[:limit]
+                        list_rows = "".join(f"<div style='margin: 1px 0;'>• {html.escape(it)}</div>" for it in shown)
+                        more_cnt = len(items) - limit
+                        more_txt = f"<div style='color: #94a3b8; font-size: 10px; margin-top: 3px;'>... and {more_cnt} more</div>" if more_cnt > 0 else ""
+                        items_html = f"<div style='margin-left: 4px;'>{list_rows}{more_txt}</div>"
+
+                    click_hint = ""
+                    if self.diff.is_editable:
+                        click_hint = (
+                            "<hr style='border: 0; border-top: 1px solid #334155; margin: 6px 0;'/>"
+                            f"<span style='color: #4ade80; font-size: 11px;'>💡 Click cell or [Use ▶] to keep only Target track {unit_name.lower()}</span>"
+                        )
+                    return (
+                        f"<div style='font-family: sans-serif; font-size: 12px; line-height: 1.35;'>"
+                        f"<b style='color: #4ade80;'>{icon} Target Track {unit_name} ({len(items)}):</b>"
+                        f"<div style='margin-top: 4px;'>{items_html}</div>"
+                        f"{click_hint}"
+                        f"</div>"
+                    )
+                else:
+                    hint = f"\n\nClick to keep Target (New) {unit_name.lower()}" if self.diff.is_editable else ""
+                    return f"Target Track: {self.diff.new_val}{hint}"
+
+            else:  # result
+                if has_items:
+                    if self.diff.origin == "merge":
+                        old_s = set(self.diff.old_items)
+                        new_s = set(self.diff.new_items)
+                        limit = 20
+                        shown = self.diff.merge_items[:limit]
+                        rows = []
+                        for it in shown:
+                            in_old = it in old_s
+                            in_new = it in new_s
+                            if in_old and in_new:
+                                badge = "<span style='color: #d8b4fe; font-size: 10px;'> (in both)</span>"
+                            elif in_old:
+                                badge = "<span style='color: #7dd3fc; font-size: 10px;'> (from Current)</span>"
+                            else:
+                                badge = "<span style='color: #86efac; font-size: 10px;'> (from Target)</span>"
+                            rows.append(f"<div style='margin: 1px 0;'>• <b>{html.escape(it)}</b>{badge}</div>")
+                        more_cnt = len(self.diff.merge_items) - limit
+                        more_txt = f"<div style='color: #94a3b8; font-size: 10px; margin-top: 3px;'>... and {more_cnt} more</div>" if more_cnt > 0 else ""
+                        items_html = f"<div style='margin-left: 4px;'>{''.join(rows)}{more_txt}</div>"
+
+                        click_hint = (
+                            "<hr style='border: 0; border-top: 1px solid #334155; margin: 6px 0;'/>"
+                            "<span style='color: #c084fc; font-size: 11px;'>💡 Active choice: Merged collection from both tracks</span>"
+                        )
+                        return (
+                            f"<div style='font-family: sans-serif; font-size: 12px; line-height: 1.35;'>"
+                            f"<b style='color: #c084fc;'>🔀 Merged {unit_name} ({len(self.diff.merge_items)} total):</b>"
+                            f"<div style='margin-top: 4px;'>{items_html}</div>"
+                            f"{click_hint}"
+                            f"</div>"
+                        )
+                    elif self.diff.origin == "old":
+                        items = self.diff.old_items
+                        limit = 20
+                        shown = items[:limit]
+                        list_rows = "".join(f"<div style='margin: 1px 0;'>• {html.escape(it)}</div>" for it in shown)
+                        more_cnt = len(items) - limit
+                        more_txt = f"<div style='color: #94a3b8; font-size: 10px; margin-top: 3px;'>... and {more_cnt} more</div>" if more_cnt > 0 else ""
+                        click_hint = (
+                            "<hr style='border: 0; border-top: 1px solid #334155; margin: 6px 0;'/>"
+                            "<span style='color: #38bdf8; font-size: 11px;'>💡 Active choice: Keeping Current track only</span>"
+                        )
+                        return (
+                            f"<div style='font-family: sans-serif; font-size: 12px; line-height: 1.35;'>"
+                            f"<b style='color: #38bdf8;'>◀ Kept Current Track {unit_name} ({len(items)}):</b>"
+                            f"<div style='margin-top: 4px;'><div style='margin-left: 4px;'>{list_rows}{more_txt}</div></div>"
+                            f"{click_hint}"
+                            f"</div>"
+                        )
+                    else:  # new
+                        items = self.diff.new_items
+                        limit = 20
+                        shown = items[:limit]
+                        list_rows = "".join(f"<div style='margin: 1px 0;'>• {html.escape(it)}</div>" for it in shown)
+                        more_cnt = len(items) - limit
+                        more_txt = f"<div style='color: #94a3b8; font-size: 10px; margin-top: 3px;'>... and {more_cnt} more</div>" if more_cnt > 0 else ""
+                        click_hint = (
+                            "<hr style='border: 0; border-top: 1px solid #334155; margin: 6px 0;'/>"
+                            "<span style='color: #4ade80; font-size: 11px;'>💡 Active choice: Keeping Target track only</span>"
+                        )
+                        return (
+                            f"<div style='font-family: sans-serif; font-size: 12px; line-height: 1.35;'>"
+                            f"<b style='color: #4ade80;'>▶ Kept Target Track {unit_name} ({len(items)}):</b>"
+                            f"<div style='margin-top: 4px;'><div style='margin-left: 4px;'>{list_rows}{more_txt}</div></div>"
+                            f"{click_hint}"
+                            f"</div>"
+                        )
+                else:
+                    return f"Result: {self.diff.result_val}"
+
+        elif self.diff.category == "info":
+            if origin_type == "old":
+                return f"Current Track:\n\"{self.diff.old_val}\"\n\nClick to use Current value"
+            elif origin_type == "new":
+                return f"Target Track:\n\"{self.diff.new_val}\"\n\nClick to use Target value"
+            else:
+                return "Resolved value that will be saved in your Rekordbox collection."
+
+        elif self.diff.category == "audio":
+            if origin_type == "old":
+                return f"Current Audio:\n{self.diff.old_val}"
+            elif origin_type == "new":
+                return f"Target Audio:\n{self.diff.new_val}\n\n(Specifications will be upgraded to this file)"
+            else:
+                return f"Upgraded audio specifications: {self.diff.result_val}"
+
+        return ""
+
+    def _update_tooltips(self) -> None:
+        old_tip = self._build_tooltip("old")
+        new_tip = self._build_tooltip("new")
+        res_tip = self._build_tooltip("result")
+
+        self.old_frame.setToolTip(old_tip)
+        if hasattr(self, "old_text_label"):
+            self.old_text_label.setToolTip(old_tip)
+
+        self.new_frame.setToolTip(new_tip)
+        if hasattr(self, "new_text_label"):
+            self.new_text_label.setToolTip(new_tip)
+
+        self.result_frame.setToolTip(res_tip)
+        if hasattr(self, "result_label"):
+            self.result_label.setToolTip(res_tip)
 
     def _format_display(self, val: Any) -> str:
         if val is None or val == "":
@@ -494,20 +1065,71 @@ class DiffRowWidget(QFrame):
                 f"background-color: {COLOR_GREEN_BG}; color: {COLOR_GREEN}; border: 1px solid {COLOR_GREEN_BORDER}; border-radius: 3px; padding: 1px 6px; font-size: 10px; font-weight: bold;"
             )
         else:  # preservation
-            self.setStyleSheet(
-                f"QFrame#diffRow {{ background-color: transparent; border-left: 3px solid transparent; border-bottom: 1px solid {COLOR_BORDER}; }}"
-            )
-            self.badge_status.setText("🔒 PRESERVED")
-            self.badge_status.setStyleSheet(
-                f"background-color: {COLOR_BLUE_BG}; color: {COLOR_BLUE}; border: 1px solid #005f9e; border-radius: 3px; padding: 1px 6px; font-size: 10px; font-weight: bold;"
-            )
+            if self.diff.is_editable:
+                if self.diff.origin == "merge":
+                    self.setStyleSheet(
+                        f"QFrame#diffRow {{ background-color: rgba(139, 92, 246, 0.05); border-left: 3px solid #8b5cf6; border-bottom: 1px solid {COLOR_BORDER}; }}"
+                    )
+                    self.badge_status.setText("🔀 MERGED")
+                    self.badge_status.setStyleSheet(
+                        "background-color: #2e1065; color: #c084fc; border: 1px solid #7c3aed; border-radius: 3px; padding: 1px 6px; font-size: 10px; font-weight: bold;"
+                    )
+                elif self.diff.origin == "old":
+                    self.setStyleSheet(
+                        f"QFrame#diffRow {{ background-color: rgba(0, 162, 255, 0.04); border-left: 3px solid {COLOR_BLUE}; border-bottom: 1px solid {COLOR_BORDER}; }}"
+                    )
+                    self.badge_status.setText("◀ KEPT OLD")
+                    self.badge_status.setStyleSheet(
+                        f"background-color: {COLOR_BLUE_BG}; color: {COLOR_BLUE}; border: 1px solid #005f9e; border-radius: 3px; padding: 1px 6px; font-size: 10px; font-weight: bold;"
+                    )
+                elif self.diff.origin == "new":
+                    self.setStyleSheet(
+                        f"QFrame#diffRow {{ background-color: rgba(16, 185, 129, 0.04); border-left: 3px solid {COLOR_GREEN}; border-bottom: 1px solid {COLOR_BORDER}; }}"
+                    )
+                    self.badge_status.setText("▶ KEPT TARGET")
+                    self.badge_status.setStyleSheet(
+                        f"background-color: {COLOR_GREEN_BG}; color: {COLOR_GREEN}; border: 1px solid {COLOR_GREEN_BORDER}; border-radius: 3px; padding: 1px 6px; font-size: 10px; font-weight: bold;"
+                    )
+            else:
+                self.setStyleSheet(
+                    f"QFrame#diffRow {{ background-color: transparent; border-left: 3px solid transparent; border-bottom: 1px solid {COLOR_BORDER}; }}"
+                )
+                self.badge_status.setText("🔒 PRESERVED")
+                self.badge_status.setStyleSheet(
+                    f"background-color: {COLOR_BLUE_BG}; color: {COLOR_BLUE}; border: 1px solid #005f9e; border-radius: 3px; padding: 1px 6px; font-size: 10px; font-weight: bold;"
+                )
 
         # 2. Origin pill
         if self.diff.category == "preservation":
-            self.origin_pill.setText("KEEP")
-            self.origin_pill.setStyleSheet(
-                f"background-color: {COLOR_GREEN_BG}; color: {COLOR_GREEN}; border: 1px solid {COLOR_GREEN_BORDER}; border-radius: 3px; padding: 1px 5px; font-size: 9px; font-weight: bold;"
-            )
+            if self.diff.is_editable:
+                if self.diff.origin == "merge":
+                    self.origin_pill.setText("MERGED")
+                    self.origin_pill.setStyleSheet(
+                        "background-color: #2e1065; color: #c084fc; border: 1px solid #7c3aed; border-radius: 3px; padding: 1px 5px; font-size: 9px; font-weight: bold;"
+                    )
+                    if hasattr(self, "result_label"):
+                        self.result_label.setStyleSheet("color: #c084fc; font-size: 12px; font-weight: 600;")
+                elif self.diff.origin == "old":
+                    self.origin_pill.setText("OLD")
+                    self.origin_pill.setStyleSheet(
+                        f"background-color: {COLOR_BLUE_BG}; color: {COLOR_BLUE}; border: 1px solid #005f9e; border-radius: 3px; padding: 1px 5px; font-size: 9px; font-weight: bold;"
+                    )
+                    if hasattr(self, "result_label"):
+                        self.result_label.setStyleSheet(f"color: {COLOR_BLUE}; font-size: 12px; font-weight: 600;")
+                elif self.diff.origin == "new":
+                    self.origin_pill.setText("TARGET")
+                    self.origin_pill.setStyleSheet(
+                        f"background-color: {COLOR_GREEN_BG}; color: {COLOR_GREEN}; border: 1px solid {COLOR_GREEN_BORDER}; border-radius: 3px; padding: 1px 5px; font-size: 9px; font-weight: bold;"
+                    )
+                    if hasattr(self, "result_label"):
+                        self.result_label.setStyleSheet(f"color: {COLOR_GREEN}; font-size: 12px; font-weight: 600;")
+            else:
+                self.origin_pill.setText("KEEP")
+                self.origin_pill.setStyleSheet(
+                    f"background-color: {COLOR_GREEN_BG}; color: {COLOR_GREEN}; border: 1px solid {COLOR_GREEN_BORDER}; border-radius: 3px; padding: 1px 5px; font-size: 9px; font-weight: bold;"
+                )
+                if hasattr(self, "result_label"):
+                    self.result_label.setStyleSheet(f"color: {COLOR_GREEN}; font-size: 12px; font-weight: 600;")
         elif self.diff.origin == "old":
             self.origin_pill.setText("OLD")
             self.origin_pill.setStyleSheet(
@@ -524,29 +1146,44 @@ class DiffRowWidget(QFrame):
                 "background-color: #3b1d54; color: #c084fc; border: 1px solid #6b21a8; border-radius: 3px; padding: 1px 5px; font-size: 9px; font-weight: bold;"
             )
 
+        # 3. Action buttons active highlight
+        if hasattr(self, "btn_use_old"):
+            is_active_old = (self.diff.origin == "old")
+            self.btn_use_old.setStyleSheet(
+                f"QPushButton {{ background-color: {COLOR_BLUE if is_active_old else COLOR_BG_CARD}; color: {'#ffffff' if is_active_old else COLOR_BLUE}; border: 1px solid {COLOR_BLUE if is_active_old else COLOR_BORDER_LIGHT}; border-radius: 4px; font-size: 10px; font-weight: bold; padding: 0px; }} "
+                f"QPushButton:hover {{ background-color: {COLOR_BLUE_BG}; border-color: {COLOR_BLUE}; color: #ffffff; }}"
+            )
+
+        if hasattr(self, "btn_use_new"):
+            is_active_new = (self.diff.origin == "new")
+            self.btn_use_new.setStyleSheet(
+                f"QPushButton {{ background-color: {COLOR_GREEN if is_active_new else COLOR_BG_CARD}; color: {'#ffffff' if is_active_new else COLOR_GREEN}; border: 1px solid {COLOR_GREEN if is_active_new else COLOR_BORDER_LIGHT}; border-radius: 4px; font-size: 10px; font-weight: bold; padding: 0px; }} "
+                f"QPushButton:hover {{ background-color: {COLOR_GREEN_BG}; border-color: {COLOR_GREEN}; color: #ffffff; }}"
+            )
+
+        if hasattr(self, "btn_use_merge"):
+            is_active_merge = (self.diff.origin == "merge")
+            self.btn_use_merge.setStyleSheet(
+                f"QPushButton {{ background-color: {'#7c3aed' if is_active_merge else COLOR_BG_CARD}; color: {'#ffffff' if is_active_merge else '#c084fc'}; border: 1px solid {'#8b5cf6' if is_active_merge else COLOR_BORDER_LIGHT}; border-radius: 4px; font-size: 10px; font-weight: bold; padding: 0px; }} "
+                f"QPushButton:hover {{ background-color: #2e1065; border-color: #8b5cf6; color: #ffffff; }}"
+            )
+
+        self._update_tooltips()
+
     def _select_old(self) -> None:
         if not self.diff.is_editable:
             return
-        self.diff.origin = "old"
-        self.diff.result_val = self.diff.old_val
-        if hasattr(self, "result_input"):
-            self.result_input.blockSignals(True)
-            self.result_input.setText(str(self.diff.old_val) if self.diff.old_val is not None else "")
-            self.result_input.blockSignals(False)
-        self._update_styling()
-        self.changed.emit()
+        self.set_origin("old")
 
     def _select_new(self) -> None:
         if not self.diff.is_editable:
             return
-        self.diff.origin = "new"
-        self.diff.result_val = self.diff.new_val
-        if hasattr(self, "result_input"):
-            self.result_input.blockSignals(True)
-            self.result_input.setText(str(self.diff.new_val) if self.diff.new_val is not None else "")
-            self.result_input.blockSignals(False)
-        self._update_styling()
-        self.changed.emit()
+        self.set_origin("new")
+
+    def _select_merge(self) -> None:
+        if not self.diff.is_editable or self.diff.category != "preservation":
+            return
+        self.set_origin("merge")
 
     def _on_result_text_edited(self, text: str) -> None:
         self.diff.result_val = text
@@ -567,18 +1204,23 @@ class DiffRowWidget(QFrame):
         """Programmatically apply resolution preset."""
         if not self.diff.is_editable:
             return
-        if origin == "old":
-            self._select_old()
-        elif origin == "new":
-            self._select_new()
-        elif origin == "auto":
-            # Auto: if new has value and old is empty, take new; else keep old
-            old_s = str(self.diff.old_val or "").strip()
-            new_s = str(self.diff.new_val or "").strip()
-            if not old_s and new_s:
-                self._select_new()
-            else:
-                self._select_old()
+        if origin == "auto":
+            if self.diff.category == "info":
+                old_s = str(self.diff.old_val or "").strip()
+                new_s = str(self.diff.new_val or "").strip()
+                target_origin = "new" if (not old_s and new_s) else "old"
+                self.set_origin(target_origin)
+            return
+
+        self.diff.set_origin(origin)
+        if hasattr(self, "result_input"):
+            self.result_input.blockSignals(True)
+            self.result_input.setText(str(self.diff.result_val) if self.diff.result_val is not None else "")
+            self.result_input.blockSignals(False)
+        elif hasattr(self, "result_label"):
+            self.result_label.setText(self._format_display(self.diff.result_val))
+        self._update_styling()
+        self.changed.emit()
 
 
 class TrackReplacementDiffView(QWidget):
@@ -625,6 +1267,7 @@ class TrackReplacementDiffView(QWidget):
 
         self.diffs = calculate_metadata_diff(self.old_track, self.new_item, mode=self.mode)
         self.row_widgets: List[DiffRowWidget] = []
+        self.preservation_strategy = "merge" if self.mode == "merge" else "old"
 
         self._init_ui()
 
@@ -1018,16 +1661,53 @@ class TrackReplacementDiffView(QWidget):
                 self.row_widgets.append(row_w)
 
         # Section 3: Collection Preservation
-        self._add_section_header("🔒 COLLECTION PRESERVATION (100% GUARANTEED)", "Plays, history sets, date added, playlists, and cue points preserved intact")
+        if self.mode == "merge":
+            sec3_actions = QWidget()
+            s3_layout = QHBoxLayout(sec3_actions)
+            s3_layout.setContentsMargins(0, 0, 0, 0)
+            s3_layout.setSpacing(6)
+
+            self.btn_sec3_old = QPushButton("◀ Keep All Old")
+            self.btn_sec3_merge = QPushButton("🔀 Merge All Both")
+            self.btn_sec3_new = QPushButton("Keep All Target ▶")
+
+            for b in (self.btn_sec3_old, self.btn_sec3_merge, self.btn_sec3_new):
+                b.setCursor(Qt.CursorShape.PointingHandCursor)
+                b.setFixedHeight(24)
+
+            self.btn_sec3_old.clicked.connect(lambda: self._apply_preservation_preset("old"))
+            self.btn_sec3_merge.clicked.connect(lambda: self._apply_preservation_preset("merge"))
+            self.btn_sec3_new.clicked.connect(lambda: self._apply_preservation_preset("new"))
+
+            s3_layout.addWidget(self.btn_sec3_old)
+            s3_layout.addWidget(self.btn_sec3_merge)
+            s3_layout.addWidget(self.btn_sec3_new)
+
+            self._add_section_header(
+                "🔀 COLLECTION PRESERVATION & MERGE RESOLUTION",
+                "Plays, history sets, date added, playlists, and cues - choose Old, Target, or Merge",
+                action_widget=sec3_actions,
+            )
+        else:
+            self._add_section_header(
+                "🔒 COLLECTION PRESERVATION (100% GUARANTEED)",
+                "Plays, history sets, date added, playlists, and cue points preserved intact",
+            )
+
         for d in self.diffs:
             if d.category == "preservation":
                 row_w = DiffRowWidget(d, self)
+                if self.mode == "merge":
+                    row_w.changed.connect(self._on_row_value_changed)
                 self.table_layout.addWidget(row_w)
                 self.row_widgets.append(row_w)
 
+        if self.mode == "merge":
+            self._update_preservation_header_buttons()
+
         self.table_layout.addStretch(1)
 
-    def _add_section_header(self, title: str, subtitle: str) -> None:
+    def _add_section_header(self, title: str, subtitle: str, action_widget: Optional[QWidget] = None) -> QFrame:
         hdr = QFrame()
         hdr.setStyleSheet(
             f"background-color: {COLOR_BG_CARD}; border-top: 1px solid {COLOR_BORDER}; border-bottom: 1px solid {COLOR_BORDER}; padding: 6px 14px;"
@@ -1044,11 +1724,17 @@ class TrackReplacementDiffView(QWidget):
         s_lbl.setStyleSheet(f"color: {COLOR_TEXT_MUTED}; font-size: 11px;")
         l.addWidget(s_lbl, stretch=1)
 
+        if action_widget:
+            l.addWidget(action_widget)
+
         self.table_layout.addWidget(hdr)
+        return hdr
 
     def _on_row_value_changed(self) -> None:
         self._update_conflict_banner()
         self._update_result_hero_card()
+        if self.mode == "merge":
+            self._update_preservation_header_buttons()
 
     def _update_result_hero_card(self) -> None:
         """Update live preview card when title or artist is changed."""
@@ -1087,12 +1773,43 @@ class TrackReplacementDiffView(QWidget):
             )
 
     def _apply_global_preset(self, origin: str) -> None:
-        """Apply preset resolution to all editable rows."""
+        """Apply preset resolution to all editable metadata tag rows."""
         for row in self.row_widgets:
-            if row.diff.is_editable:
+            if row.diff.is_editable and row.diff.category == "info":
                 row.set_origin(origin)
         self._update_conflict_banner()
         self._update_result_hero_card()
+
+    def _apply_preservation_preset(self, origin: str) -> None:
+        """Apply preservation preset (old, merge, new) to all preservation rows."""
+        self.preservation_strategy = origin
+        for row in self.row_widgets:
+            if row.diff.category == "preservation" and row.diff.is_editable:
+                row.set_origin(origin)
+        self._update_preservation_header_buttons()
+
+    def _update_preservation_header_buttons(self) -> None:
+        """Update active highlights on Section 3 header buttons."""
+        if self.mode != "merge" or not hasattr(self, "btn_sec3_old"):
+            return
+        pres_rows = [r for r in self.row_widgets if r.diff.category == "preservation"]
+        if not pres_rows:
+            return
+        origins = {r.diff.origin for r in pres_rows}
+        current_state = origins.pop() if len(origins) == 1 else "custom"
+
+        style_inactive_old = f"QPushButton {{ background-color: {COLOR_BG_CARD}; color: {COLOR_BLUE}; border: 1px solid {COLOR_BORDER}; border-radius: 4px; padding: 2px 10px; font-size: 10px; font-weight: 600; }} QPushButton:hover {{ background-color: {COLOR_BLUE_BG}; border-color: {COLOR_BLUE}; }}"
+        style_active_old = f"QPushButton {{ background-color: {COLOR_BLUE}; color: #ffffff; border: 1px solid {COLOR_BLUE_HOVER}; border-radius: 4px; padding: 2px 10px; font-size: 10px; font-weight: bold; }}"
+
+        style_inactive_merge = f"QPushButton {{ background-color: {COLOR_BG_CARD}; color: #c084fc; border: 1px solid {COLOR_BORDER}; border-radius: 4px; padding: 2px 10px; font-size: 10px; font-weight: 600; }} QPushButton:hover {{ background-color: #2e1065; border-color: #8b5cf6; }}"
+        style_active_merge = f"QPushButton {{ background-color: #7c3aed; color: #ffffff; border: 1px solid #8b5cf6; border-radius: 4px; padding: 2px 10px; font-size: 10px; font-weight: bold; }}"
+
+        style_inactive_new = f"QPushButton {{ background-color: {COLOR_BG_CARD}; color: {COLOR_GREEN}; border: 1px solid {COLOR_BORDER}; border-radius: 4px; padding: 2px 10px; font-size: 10px; font-weight: 600; }} QPushButton:hover {{ background-color: {COLOR_GREEN_BG}; border-color: {COLOR_GREEN}; }}"
+        style_active_new = f"QPushButton {{ background-color: {COLOR_GREEN}; color: #ffffff; border: 1px solid #1cd496; border-radius: 4px; padding: 2px 10px; font-size: 10px; font-weight: bold; }}"
+
+        self.btn_sec3_old.setStyleSheet(style_active_old if current_state == "old" else style_inactive_old)
+        self.btn_sec3_merge.setStyleSheet(style_active_merge if current_state == "merge" else style_inactive_merge)
+        self.btn_sec3_new.setStyleSheet(style_active_new if current_state == "new" else style_inactive_new)
 
     def _update_safety_chip(self) -> None:
         running = is_rekordbox_running()
@@ -1123,10 +1840,18 @@ class TrackReplacementDiffView(QWidget):
         """Collect user-selected replacement options."""
         act_idx = self.old_file_combo.currentIndex()
         action_val = "keep" if act_idx == 0 else ("trash" if act_idx == 1 else "backup")
+
+        preservation_fields: Dict[str, str] = {}
+        for d in self.diffs:
+            if d.category == "preservation":
+                preservation_fields[d.key] = str(d.origin)
+
         opts = {
             "old_file_action": action_val,
             "move_new_file_to_track_folder": self.chk_move_folder.isChecked() if hasattr(self, "chk_move_folder") else False,
             "resolved_metadata": self.get_resolved_metadata(),
+            "preservation_fields": preservation_fields,
+            "preservation_strategy": getattr(self, "preservation_strategy", "merge"),
         }
         return opts
 

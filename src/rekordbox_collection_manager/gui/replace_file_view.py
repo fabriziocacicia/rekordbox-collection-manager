@@ -1605,10 +1605,12 @@ class ReplaceFileView(QWidget):
         msg = (
             f"🎉 Successfully Merged Tracks!\n\n"
             f"Target: {res['title']} (ID: {res['target_id']})\n\n"
-            f"✅ Transferred {res['play_count_transferred']} plays\n"
-            f"✅ Transferred Date Added: {res['stock_date_transferred']}\n"
-            f"✅ Transferred {res['history_transferred']} history sessions\n"
-            f"✅ Transferred {res['playlists_transferred']} playlist memberships\n"
+            f"✅ Final Play Count: {res.get('play_count', res.get('play_count_transferred'))} plays\n"
+            f"✅ Final Date Added: {res.get('stock_date', res.get('stock_date_transferred'))}\n"
+            f"✅ History Sessions: {res.get('history_transferred')} sessions transferred/updated\n"
+            f"✅ Playlists: {res.get('playlists_transferred')} playlists transferred/updated\n"
+            f"✅ My Tags: {res.get('tags_transferred')} tags transferred/updated\n"
+            f"✅ Cue Points: {res.get('cues_transferred')} cue points transferred/updated\n"
             f"✅ Old duplicate track archived.\n"
         )
         QMessageBox.information(self, "Merge Complete", msg)

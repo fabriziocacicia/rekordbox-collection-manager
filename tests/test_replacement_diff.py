@@ -13,7 +13,9 @@ from PySide6.QtWidgets import QApplication
 from sqlalchemy import create_engine, text
 
 from rekordbox_collection_manager.gui.replacement_diff_dialog import (
+    DiffRowWidget,
     FieldDiff,
+    ItemsComparisonDialog,
     TrackReplacementDiffDialog,
     TrackReplacementDiffView,
     calculate_metadata_diff,
@@ -547,6 +549,314 @@ class TestTrackReplacementDiffDialog(unittest.TestCase):
             self.assertIsNone(row[2])
             self.assertIsNone(row[3])
 
+    def test_preservation_diff_calculation_merge_mode(self):
+        """Verify calculate_metadata_diff computes old, new, and merged values for Section 3."""
+        old_data = {
+            "play_count": 4,
+            "date_added": "2025-11-09",
+            "history_count": 4,
+            "playlists": ["Afro", "Warmup"],
+            "playlist_count": 2,
+            "tags": ["Peak Time"],
+            "tag_count": 1,
+            "cue_count": 3,
+        }
+        tgt_data = {
+            "play_count": 3,
+            "date_added": "2026-04-12",
+            "history_count": 3,
+            "playlists": ["Afro", "Favorites"],
+            "playlist_count": 2,
+            "tags": ["Driving"],
+            "tag_count": 1,
+            "cue_count": 2,
+        }
+        diffs = calculate_metadata_diff(old_data, tgt_data, mode="merge")
+        diff_map = {d.key: d for d in diffs if d.category == "preservation"}
+
+        # Verify all preservation fields are editable in merge mode
+        for d in diff_map.values():
+            self.assertTrue(d.is_editable)
+            self.assertEqual(d.origin, "merge")
+            self.assertEqual(d.status, "merged")
+
+        # Play count: sum is 4 + 3 = 7
+        pc = diff_map["play_count"]
+        self.assertIn("7 plays", str(pc.result_val))
+        self.assertIn("4 old + 3 target", str(pc.result_val))
+        self.assertIn("4 plays", str(pc.old_result_val))
+        self.assertIn("3 plays", str(pc.new_result_val))
+
+        # Date added: earliest date is 2025-11-09
+        da = diff_map["date_added"]
+        self.assertIn("2025-11-09 (Earliest Added)", str(da.result_val))
+        self.assertIn("2025-11-09", str(da.old_result_val))
+        self.assertIn("2026-04-12", str(da.new_result_val))
+
+        # History sessions: combined is 4 + 3 = 7 sets
+        hs = diff_map["history_sessions"]
+        self.assertIn("7 sets", str(hs.result_val))
+
+        # Playlists: union of ['Afro', 'Warmup'] and ['Afro', 'Favorites'] is 3
+        pl = diff_map["playlists"]
+        self.assertIn("3 playlists", str(pl.result_val))
+
+        # Tags: union of ['Peak Time'] and ['Driving'] is 2
+        tg = diff_map["tags"]
+        self.assertIn("2 tags", str(tg.result_val))
+
+        # Cues: combined cues
+        cq = diff_map["cues"]
+        self.assertIn("5 cues", str(cq.result_val))
+
+    def test_diff_row_widget_preservation_interactive_selection(self):
+        """Verify DiffRowWidget allows toggling between Old, Target, and Merge."""
+        old_data = {"play_count": 4}
+        tgt_data = {"play_count": 3}
+        diffs = calculate_metadata_diff(old_data, tgt_data, mode="merge")
+        pc_diff = next(d for d in diffs if d.key == "play_count")
+
+        row = dialog = None
+        from rekordbox_collection_manager.gui.replacement_diff_dialog import DiffRowWidget
+
+        row = DiffRowWidget(pc_diff)
+        self.assertEqual(row.diff.origin, "merge")
+        self.assertIn("7 plays", row.diff.result_val)
+        self.assertEqual(row.origin_pill.text(), "MERGED")
+
+        # User chooses OLD
+        row.set_origin("old")
+        self.assertEqual(row.diff.origin, "old")
+        self.assertIn("4 plays", row.diff.result_val)
+        self.assertEqual(row.origin_pill.text(), "OLD")
+
+        # User chooses NEW / TARGET
+        row.set_origin("new")
+        self.assertEqual(row.diff.origin, "new")
+        self.assertIn("3 plays", row.diff.result_val)
+        self.assertEqual(row.origin_pill.text(), "TARGET")
+
+        # User chooses MERGE again
+        row.set_origin("merge")
+        self.assertEqual(row.diff.origin, "merge")
+        self.assertIn("7 plays", row.diff.result_val)
+        self.assertEqual(row.origin_pill.text(), "MERGED")
+
+    def test_dialog_preservation_presets_and_options(self):
+        """Verify Section 3 header buttons apply Old, Target, and Merge presets, and get_options() outputs them."""
+        old_track = {
+            "id": "t1",
+            "title": "Song A",
+            "play_count": 4,
+            "date_added": "2025-11-09",
+        }
+        target_track = {
+            "id": "t2",
+            "title": "Song A",
+            "play_count": 3,
+            "date_added": "2026-04-12",
+        }
+
+        dialog = TrackReplacementDiffDialog(
+            engine=self.engine,
+            mode="merge",
+            old_track=old_track,
+            new_item=target_track,
+        )
+
+        view = dialog.diff_view
+        self.assertTrue(hasattr(view, "btn_sec3_old"))
+        self.assertTrue(hasattr(view, "btn_sec3_merge"))
+        self.assertTrue(hasattr(view, "btn_sec3_new"))
+
+        # Default is merge
+        opts = view.get_options()
+        self.assertEqual(opts["preservation_fields"]["play_count"], "merge")
+
+        # Click Keep All Old
+        view.btn_sec3_old.click()
+        opts_old = view.get_options()
+        self.assertEqual(opts_old["preservation_fields"]["play_count"], "old")
+        self.assertEqual(opts_old["preservation_fields"]["date_added"], "old")
+
+        # Click Keep All Target
+        view.btn_sec3_new.click()
+        opts_new = view.get_options()
+        self.assertEqual(opts_new["preservation_fields"]["play_count"], "new")
+        self.assertEqual(opts_new["preservation_fields"]["date_added"], "new")
+
+        # Click Merge All Both
+        view.btn_sec3_merge.click()
+        opts_merge = view.get_options()
+        self.assertEqual(opts_merge["preservation_fields"]["play_count"], "merge")
+        self.assertEqual(opts_merge["preservation_fields"]["date_added"], "merge")
+
+    def test_merge_imported_tracks_preservation_strategies(self):
+        """Verify backend merge_imported_tracks respects preservation options for old, new, and merge."""
+        # 1. Strategy = 'old': keeps source play count (10) and date added ('2024-01-15')
+        with self.engine.begin() as conn:
+            conn.exec_driver_sql("""
+                INSERT OR REPLACE INTO djmdContent (
+                    ID, Title, Length, BitRate, BitDepth, SampleRate, FileSize, FileType,
+                    DJPlayCount, StockDate, FolderPath, FileNameL, rb_local_deleted
+                ) VALUES
+                    ('src-a', 'Old Track', 240, 320, 16, 44100, 1000, 1, 10, '2024-01-15', '/path/a.mp3', 'a.mp3', 0),
+                    ('tgt-a', 'New Track', 240, 1411, 24, 48000, 2000, 12, 5, '2026-05-20', '/path/b.aiff', 'b.aiff', 0);
+            """)
+
+        res_old = merge_imported_tracks(
+            self.engine,
+            "src-a",
+            "tgt-a",
+            options={"preservation_strategy": "old"},
+        )
+        self.assertEqual(res_old["play_count"], 10)
+        self.assertEqual(res_old["stock_date"], "2024-01-15")
+
+        # 2. Strategy = 'new': keeps target play count (5) and target date ('2026-05-20')
+        with self.engine.begin() as conn:
+            conn.exec_driver_sql("""
+                INSERT OR REPLACE INTO djmdContent (
+                    ID, Title, Length, BitRate, BitDepth, SampleRate, FileSize, FileType,
+                    DJPlayCount, StockDate, FolderPath, FileNameL, rb_local_deleted
+                ) VALUES
+                    ('src-b', 'Old Track', 240, 320, 16, 44100, 1000, 1, 10, '2024-01-15', '/path/a.mp3', 'a.mp3', 0),
+                    ('tgt-b', 'New Track', 240, 1411, 24, 48000, 2000, 12, 5, '2026-05-20', '/path/b.aiff', 'b.aiff', 0);
+            """)
+
+        res_new = merge_imported_tracks(
+            self.engine,
+            "src-b",
+            "tgt-b",
+            options={"preservation_strategy": "new"},
+        )
+        self.assertEqual(res_new["play_count"], 5)
+        self.assertEqual(res_new["stock_date"], "2026-05-20")
+
+        # 3. Strategy = 'merge': sums play count (10 + 5 = 15) and takes earliest date ('2024-01-15')
+        with self.engine.begin() as conn:
+            conn.exec_driver_sql("""
+                INSERT OR REPLACE INTO djmdContent (
+                    ID, Title, Length, BitRate, BitDepth, SampleRate, FileSize, FileType,
+                    DJPlayCount, StockDate, FolderPath, FileNameL, rb_local_deleted
+                ) VALUES
+                    ('src-c', 'Old Track', 240, 320, 16, 44100, 1000, 1, 10, '2024-01-15', '/path/a.mp3', 'a.mp3', 0),
+                    ('tgt-c', 'New Track', 240, 1411, 24, 48000, 2000, 12, 5, '2026-05-20', '/path/b.aiff', 'b.aiff', 0);
+            """)
+
+        res_merge = merge_imported_tracks(
+            self.engine,
+            "src-c",
+            "tgt-c",
+            options={"preservation_strategy": "merge"},
+        )
+        self.assertEqual(res_merge["play_count"], 15)
+        self.assertEqual(res_merge["stock_date"], "2024-01-15")
+
+    def test_field_diff_item_lists_and_previews(self):
+        """Verify FieldDiff stores old/new/merged item lists and formats previews."""
+        old_track = {
+            "playlists": ["Afro House", "Melodic Tech"],
+            "playlist_count": 2,
+            "tags": ["Peak Time"],
+            "tag_count": 1,
+        }
+        target_track = {
+            "playlists": ["Afro House", "Summer 2024"],
+            "playlist_count": 2,
+            "tags": ["Peak Time", "Vocal"],
+            "tag_count": 2,
+        }
+        diffs = {d.key: d for d in calculate_metadata_diff(old_track, target_track, mode="merge")}
+
+        pl = diffs["playlists"]
+        self.assertEqual(pl.old_items, ["Afro House", "Melodic Tech"])
+        self.assertEqual(pl.new_items, ["Afro House", "Summer 2024"])
+        self.assertEqual(sorted(pl.merge_items), ["Afro House", "Melodic Tech", "Summer 2024"])
+
+        tags = diffs["tags"]
+        self.assertEqual(tags.old_items, ["Peak Time"])
+        self.assertEqual(tags.new_items, ["Peak Time", "Vocal"])
+        self.assertEqual(sorted(tags.merge_items), ["Peak Time", "Vocal"])
+
+    def test_diff_row_widget_rich_tooltips_and_previews(self):
+        """Verify DiffRowWidget keeps cells uncluttered and displays item lists on hover."""
+        diff = FieldDiff(
+            key="playlists",
+            label="Playlists",
+            category="preservation",
+            old_val="2 playlists",
+            new_val="1 playlist",
+            default_origin="merge",
+            is_editable=True,
+            old_result_val="Preserved (2 playlists)",
+            new_result_val="Preserved (1 playlist)",
+            merge_result_val="3 playlists (Combined memberships)",
+            old_items=["Afro House", "Melodic Tech"],
+            new_items=["Summer 2024"],
+            merge_items=["Afro House", "Melodic Tech", "Summer 2024"],
+        )
+        row = DiffRowWidget(diff)
+
+        # Check clean, uncluttered inline cell formatting (counts only, no overflowing text)
+        self.assertEqual(row.old_text_label.text(), "2 playlists")
+        self.assertEqual(row.new_text_label.text(), "1 playlist")
+        self.assertEqual(row.result_label.text(), "3 playlists (Combined memberships)")
+
+        # Check tooltips display full item lists on hover
+        old_tip = row._build_tooltip("old")
+        self.assertIn("Current Track Playlists (2)", old_tip)
+        self.assertIn("Afro House", old_tip)
+        self.assertIn("Melodic Tech", old_tip)
+
+        new_tip = row._build_tooltip("new")
+        self.assertIn("Target Track Playlists (1)", new_tip)
+        self.assertIn("Summer 2024", new_tip)
+
+        # When merged, check origin annotations in tooltip
+        res_tip_merge = row._build_tooltip("result")
+        self.assertIn("Merged Playlists (3 total)", res_tip_merge)
+        self.assertIn("(from Current)", res_tip_merge)
+        self.assertIn("(from Target)", res_tip_merge)
+
+    def test_items_comparison_dialog_and_strategy_selection(self):
+        """Verify ItemsComparisonDialog displays 3-column cards and updates chosen strategy."""
+        diff = FieldDiff(
+            key="playlists",
+            label="Playlists",
+            category="preservation",
+            old_val="2 playlists",
+            new_val="2 playlists",
+            default_origin="merge",
+            is_editable=True,
+            old_items=["Afro House", "Melodic Tech"],
+            new_items=["Afro House", "Summer 2024"],
+            merge_items=["Afro House", "Melodic Tech", "Summer 2024"],
+        )
+        selected_origins = []
+        dlg = ItemsComparisonDialog(
+            diff=diff,
+            on_origin_selected=selected_origins.append,
+        )
+
+        self.assertIn("old", dlg.col_frames)
+        self.assertIn("new", dlg.col_frames)
+        self.assertIn("merge", dlg.col_frames)
+
+        # Check strategy selection
+        dlg._select_strategy("old")
+        self.assertEqual(diff.origin, "old")
+        self.assertEqual(selected_origins, ["old"])
+
+        dlg._select_strategy("new")
+        self.assertEqual(diff.origin, "new")
+        self.assertEqual(selected_origins, ["old", "new"])
+
+        dlg._select_strategy("merge")
+        self.assertEqual(diff.origin, "merge")
+        self.assertEqual(selected_origins, ["old", "new", "merge"])
+
 
 if __name__ == "__main__":
     unittest.main()
+
