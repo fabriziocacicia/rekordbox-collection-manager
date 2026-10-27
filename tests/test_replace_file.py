@@ -453,6 +453,192 @@ class TestReplaceFileBackend(unittest.TestCase):
             replace_track_audio_file(self.engine, "track-aiff-same", self.new_aiff_path)
         self.assertIn("identical to the current track's audio file path", str(ctx.exception))
 
+    def test_replace_track_moves_new_file_into_track_folder(self):
+        """Verify move_new_file_to_track_folder actually moves (not copies) the replacement file."""
+        music_dir = os.path.join(self.temp_dir, "MusicLibrary")
+        downloads_dir = os.path.join(self.temp_dir, "Downloads")
+        os.makedirs(music_dir, exist_ok=True)
+        os.makedirs(downloads_dir, exist_ok=True)
+
+        old_mp3 = os.path.join(music_dir, "OriginalSong.mp3")
+        with open(old_mp3, "wb") as f:
+            f.write(b"ID3" + b"\x00" * 512)
+
+        new_aiff_src = os.path.join(downloads_dir, "UpgradedSong.aiff")
+        with open(new_aiff_src, "wb") as f:
+            f.write(b"FORM" + b"\x00\x00\x08\x00" + b"AIFF" + b"\x00" * 2048)
+
+        with self.engine.begin() as conn:
+            conn.execute(
+                text("""
+                    INSERT INTO djmdContent (
+                        ID, FolderPath, FileNameL, FileNameS, Title, Length, BitRate, BitDepth,
+                        SampleRate, FileSize, FileType, DJPlayCount, StockDate, rb_local_deleted,
+                        created_at, updated_at
+                    ) VALUES (
+                        'track-move-test-1', :folder_path, 'OriginalSong.mp3', '', 'Move Test Song',
+                        200, 320, 16, 44100, 512, 1, 7, '2024-02-01', 0,
+                        '2024-02-01 10:00:00', '2024-02-01 10:00:00'
+                    );
+                """),
+                {"folder_path": old_mp3},
+            )
+
+        res = replace_track_audio_file(
+            self.engine,
+            "track-move-test-1",
+            new_aiff_src,
+            options={"old_file_action": "keep", "move_new_file_to_track_folder": True},
+        )
+
+        self.assertTrue(res["success"])
+        expected_dest = os.path.join(music_dir, "UpgradedSong.aiff")
+        self.assertEqual(res["new_file"]["path"], expected_dest)
+        self.assertEqual(res["new_file"]["status"], "moved")
+
+        # Crucial: The source file in downloads MUST NO LONGER EXIST (it was moved, not just copied!)
+        self.assertFalse(os.path.exists(new_aiff_src), "Source file still exists in downloads; it was copied, not moved!")
+        self.assertTrue(os.path.exists(expected_dest), "Destination file does not exist in track folder!")
+        # Old file was kept
+        self.assertTrue(os.path.exists(old_mp3))
+
+        with self.engine.connect() as conn:
+            row = conn.execute(
+                text("SELECT FolderPath, FileNameL, FileType FROM djmdContent WHERE ID = 'track-move-test-1';")
+            ).mappings().fetchone()
+            self.assertEqual(row["FolderPath"], expected_dest)
+            self.assertEqual(row["FileNameL"], "UpgradedSong.aiff")
+            self.assertEqual(row["FileType"], 12)
+
+    def test_replace_track_copies_when_move_flag_is_false(self):
+        """Verify that when move_new_file_to_track_folder is False, the new file remains at its source."""
+        downloads_dir = os.path.join(self.temp_dir, "DownloadsKeep")
+        os.makedirs(downloads_dir, exist_ok=True)
+
+        new_aiff_src = os.path.join(downloads_dir, "KeepInPlace.aiff")
+        with open(new_aiff_src, "wb") as f:
+            f.write(b"FORM" + b"\x00\x00\x08\x00" + b"AIFF" + b"\x00" * 2048)
+
+        with self.engine.begin() as conn:
+            conn.execute(
+                text("""
+                    INSERT INTO djmdContent (
+                        ID, FolderPath, FileNameL, FileNameS, Title, Length, BitRate, BitDepth,
+                        SampleRate, FileSize, FileType, DJPlayCount, StockDate, rb_local_deleted,
+                        created_at, updated_at
+                    ) VALUES (
+                        'track-nomove-test', :folder_path, 'OldSong.mp3', '', 'No Move Song',
+                        200, 320, 16, 44100, 512, 1, 7, '2024-02-01', 0,
+                        '2024-02-01 10:00:00', '2024-02-01 10:00:00'
+                    );
+                """),
+                {"folder_path": self.old_mp3_path},
+            )
+
+        res = replace_track_audio_file(
+            self.engine,
+            "track-nomove-test",
+            new_aiff_src,
+            options={"old_file_action": "keep", "move_new_file_to_track_folder": False},
+        )
+
+        self.assertTrue(res["success"])
+        self.assertEqual(res["new_file"]["path"], os.path.abspath(new_aiff_src))
+        self.assertEqual(res["new_file"]["status"], "kept")
+        self.assertTrue(os.path.exists(new_aiff_src))
+
+    def test_replace_track_move_with_same_name_backup_collision(self):
+        """Verify move handles filename collision with old file when backing up."""
+        music_dir = os.path.join(self.temp_dir, "CollisionMusic")
+        downloads_dir = os.path.join(self.temp_dir, "CollisionDownloads")
+        os.makedirs(music_dir, exist_ok=True)
+        os.makedirs(downloads_dir, exist_ok=True)
+
+        old_aiff = os.path.join(music_dir, "SameTrack.aiff")
+        with open(old_aiff, "wb") as f:
+            f.write(b"FORM" + b"\x00\x00\x04\x00" + b"AIFF" + b"\x00" * 1024)
+
+        new_aiff_src = os.path.join(downloads_dir, "SameTrack.aiff")
+        with open(new_aiff_src, "wb") as f:
+            f.write(b"FORM" + b"\x00\x00\x08\x00" + b"AIFF" + b"\x00" * 2048)
+
+        with self.engine.begin() as conn:
+            conn.execute(
+                text("""
+                    INSERT INTO djmdContent (
+                        ID, FolderPath, FileNameL, FileNameS, Title, Length, BitRate, BitDepth,
+                        SampleRate, FileSize, FileType, DJPlayCount, StockDate, rb_local_deleted,
+                        created_at, updated_at
+                    ) VALUES (
+                        'track-collision-1', :folder_path, 'SameTrack.aiff', '', 'Collision Track',
+                        200, 1411, 16, 44100, 1024, 12, 12, '2023-05-01', 0,
+                        '2023-05-01 10:00:00', '2023-05-01 10:00:00'
+                    );
+                """),
+                {"folder_path": old_aiff},
+            )
+
+        res = replace_track_audio_file(
+            self.engine,
+            "track-collision-1",
+            new_aiff_src,
+            options={"old_file_action": "backup", "move_new_file_to_track_folder": True},
+        )
+
+        self.assertTrue(res["success"])
+        self.assertFalse(os.path.exists(new_aiff_src), "Source file should have been moved from downloads!")
+        self.assertTrue(os.path.exists(old_aiff), "Replacement file should now be at target path!")
+        expected_bak = f"{old_aiff}.bak"
+        self.assertTrue(os.path.exists(expected_bak), "Old file should be safely backed up to .bak!")
+        self.assertEqual(res["new_file"]["path"], old_aiff)
+        self.assertEqual(res["new_file"]["status"], "moved")
+
+    def test_replace_track_move_with_same_name_keep_collision(self):
+        """Verify move handles filename collision with old file when keeping old file (disambiguates new name)."""
+        music_dir = os.path.join(self.temp_dir, "CollisionKeepMusic")
+        downloads_dir = os.path.join(self.temp_dir, "CollisionKeepDownloads")
+        os.makedirs(music_dir, exist_ok=True)
+        os.makedirs(downloads_dir, exist_ok=True)
+
+        old_aiff = os.path.join(music_dir, "TrackKeep.aiff")
+        with open(old_aiff, "wb") as f:
+            f.write(b"FORM" + b"\x00\x00\x04\x00" + b"AIFF" + b"\x00" * 1024)
+
+        new_aiff_src = os.path.join(downloads_dir, "TrackKeep.aiff")
+        with open(new_aiff_src, "wb") as f:
+            f.write(b"FORM" + b"\x00\x00\x08\x00" + b"AIFF" + b"\x00" * 2048)
+
+        with self.engine.begin() as conn:
+            conn.execute(
+                text("""
+                    INSERT INTO djmdContent (
+                        ID, FolderPath, FileNameL, FileNameS, Title, Length, BitRate, BitDepth,
+                        SampleRate, FileSize, FileType, DJPlayCount, StockDate, rb_local_deleted,
+                        created_at, updated_at
+                    ) VALUES (
+                        'track-collision-keep-1', :folder_path, 'TrackKeep.aiff', '', 'Keep Collision Track',
+                        200, 1411, 16, 44100, 1024, 12, 12, '2023-05-01', 0,
+                        '2023-05-01 10:00:00', '2023-05-01 10:00:00'
+                    );
+                """),
+                {"folder_path": old_aiff},
+            )
+
+        res = replace_track_audio_file(
+            self.engine,
+            "track-collision-keep-1",
+            new_aiff_src,
+            options={"old_file_action": "keep", "move_new_file_to_track_folder": True},
+        )
+
+        self.assertTrue(res["success"])
+        self.assertFalse(os.path.exists(new_aiff_src), "Source file should have been moved from downloads!")
+        self.assertTrue(os.path.exists(old_aiff), "Old file should remain intact!")
+        expected_new = os.path.join(music_dir, "TrackKeep (1).aiff")
+        self.assertTrue(os.path.exists(expected_new), "New file should be renamed to TrackKeep (1).aiff!")
+        self.assertEqual(res["new_file"]["path"], expected_new)
+        self.assertEqual(res["new_file"]["status"], "moved")
+
     def test_replace_track_rejects_non_aiff_replacement(self):
         """Verify that passing a non-AIFF replacement file raises ValueError."""
         flac_path = os.path.join(self.temp_dir, "test.flac")

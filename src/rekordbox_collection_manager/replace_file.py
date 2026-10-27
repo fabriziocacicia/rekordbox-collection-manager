@@ -1238,189 +1238,251 @@ def replace_track_audio_file(
             "Currently only AIFF files (.aiff, .aif) are supported."
         )
 
-    with engine.begin() as conn:
-        cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(djmdContent);").fetchall()}
+    moved_new_file = False
+    original_new_path = resolved_new_path
+    target_dest_path = resolved_new_path
+    tmp_old_file_path: Optional[str] = None
+    old_file_path = ""
+    old_file_handled = "kept"
 
-        # 1. Fetch current track record
-        select_sql = "SELECT * FROM djmdContent WHERE ID = :id;"
-        row = conn.execute(text(select_sql), {"id": str(content_id)}).mappings().fetchone()
-        if not row:
-            raise ValueError(f"Track with ID '{content_id}' not found in djmdContent.")
+    try:
+        with engine.begin() as conn:
+            cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(djmdContent);").fetchall()}
 
-        old_track = dict(row)
-        old_file_path = old_track.get("FolderPath") or ""
-        old_file_name = old_track.get("FileNameL") or ""
-        old_file_type = old_track.get("FileType")
+            # 1. Fetch current track record
+            select_sql = "SELECT * FROM djmdContent WHERE ID = :id;"
+            row = conn.execute(text(select_sql), {"id": str(content_id)}).mappings().fetchone()
+            if not row:
+                raise ValueError(f"Track with ID '{content_id}' not found in djmdContent.")
 
-        # Enforce: Source track must be MP3 or AIFF
-        old_ext = os.path.splitext(old_file_name or old_file_path)[1].lower()
-        if old_file_type not in (1, 12) and old_ext not in (".mp3", ".aiff", ".aif"):
-            old_fmt = resolve_file_type(old_file_type, old_file_name, old_file_path)
-            raise ValueError(
-                f"Only MP3 and AIFF tracks can be replaced. The selected track is {old_fmt}."
-            )
+            old_track = dict(row)
+            old_file_path = old_track.get("FolderPath") or ""
+            old_file_name = old_track.get("FileNameL") or ""
+            old_file_type = old_track.get("FileType")
 
-        if old_file_path and os.path.abspath(old_file_path) == resolved_new_path:
-            raise ValueError(
-                "The replacement audio file is identical to the current track's audio file path."
-            )
+            # Enforce: Source track must be MP3 or AIFF
+            old_ext = os.path.splitext(old_file_name or old_file_path)[1].lower()
+            if old_file_type not in (1, 12) and old_ext not in (".mp3", ".aiff", ".aif"):
+                old_fmt = resolve_file_type(old_file_type, old_file_name, old_file_path)
+                raise ValueError(
+                    f"Only MP3 and AIFF tracks can be replaced. The selected track is {old_fmt}."
+                )
 
-        old_bitrate = old_track.get("BitRate")
-        old_size = old_track.get("FileSize")
-        old_length = old_track.get("Length")
-        old_play_count = int(old_track.get("DJPlayCount") or 0)
-        old_stock_date = str(old_track.get("StockDate") or "")
+            if old_file_path and os.path.realpath(old_file_path) == os.path.realpath(resolved_new_path):
+                raise ValueError(
+                    "The replacement audio file is identical to the current track's audio file path."
+                )
 
-        # Optional: Move new file into track folder
-        target_dest_path = resolved_new_path
-        if move_new_file_to_track_folder and old_file_path:
-            old_dir = os.path.dirname(old_file_path)
-            if os.path.isdir(old_dir) and old_dir != os.path.dirname(resolved_new_path):
-                dest_candidate = os.path.join(old_dir, new_info["file_name"])
-                if dest_candidate != resolved_new_path:
-                    shutil.copy2(resolved_new_path, dest_candidate)
-                    target_dest_path = dest_candidate
-                    new_info["file_path"] = target_dest_path
-                    new_info["file_name"] = os.path.basename(target_dest_path)
+            old_bitrate = old_track.get("BitRate")
+            old_size = old_track.get("FileSize")
+            old_length = old_track.get("Length")
+            old_play_count = int(old_track.get("DJPlayCount") or 0)
+            old_stock_date = str(old_track.get("StockDate") or "")
 
-        # 2. Build UPDATE statement for djmdContent
-        update_clauses = [
-            "FolderPath = :new_folder_path",
-            "FileNameL = :new_file_name",
-            "FileNameS = :new_file_name_s",
-            "FileType = :new_file_type",
-            "FileSize = :new_file_size",
-            "BitRate = :new_bitrate",
-            "BitDepth = :new_bit_depth",
-            "SampleRate = :new_sample_rate",
-            "updated_at = :updated_at",
-        ]
-        params: Dict[str, Any] = {
-            "id": str(content_id),
-            "new_folder_path": target_dest_path,
-            "new_file_name": new_info["file_name"],
-            "new_file_name_s": "",
-            "new_file_type": new_info["file_type"],
-            "new_file_size": new_info["file_size"],
-            "new_bitrate": new_info["bitrate"],
-            "new_bit_depth": new_info["bit_depth"],
-            "new_sample_rate": new_info["sample_rate"],
-            "updated_at": now_utc,
-        }
+            # Optional: Move new file into track folder
+            if move_new_file_to_track_folder and old_file_path:
+                old_dir = os.path.dirname(old_file_path)
+                if os.path.isdir(old_dir) and os.path.realpath(old_dir) != os.path.realpath(os.path.dirname(resolved_new_path)):
+                    dest_candidate = os.path.join(old_dir, new_info["file_name"])
 
-        # Update Length only if positive duration extracted
-        if new_info["duration_sec"] > 0 and "Length" in cols:
-            update_clauses.append("Length = :new_length")
-            params["new_length"] = new_info["duration_sec"]
+                    # Handle destination collision if dest_candidate already exists on disk
+                    if os.path.exists(dest_candidate):
+                        if os.path.realpath(dest_candidate) == os.path.realpath(old_file_path):
+                            if old_file_action == "keep":
+                                # Keep old file in place, disambiguate replacement file in old_dir
+                                base, ext = os.path.splitext(new_info["file_name"])
+                                counter = 1
+                                while os.path.exists(dest_candidate):
+                                    dest_candidate = os.path.join(old_dir, f"{base} ({counter}){ext}")
+                                    counter += 1
+                            else:
+                                # old_file_action is 'trash' or 'backup'
+                                # Temporarily rename old file out of the way so dest_candidate is free
+                                base, ext = os.path.splitext(old_file_path)
+                                tmp_candidate = f"{base}.tmp_replace_{secrets.token_hex(4)}{ext}"
+                                try:
+                                    os.rename(old_file_path, tmp_candidate)
+                                    tmp_old_file_path = tmp_candidate
+                                except Exception:
+                                    base_new, ext_new = os.path.splitext(new_info["file_name"])
+                                    counter = 1
+                                    while os.path.exists(dest_candidate):
+                                        dest_candidate = os.path.join(old_dir, f"{base_new} ({counter}){ext_new}")
+                                        counter += 1
+                        else:
+                            # Existing file is an unrelated file; disambiguate replacement file
+                            base, ext = os.path.splitext(new_info["file_name"])
+                            counter = 1
+                            while os.path.exists(dest_candidate):
+                                dest_candidate = os.path.join(old_dir, f"{base} ({counter}){ext}")
+                                counter += 1
 
-        # Track info updated counter
-        if "TrackInfoUpdated" in cols:
-            curr_val = old_track.get("TrackInfoUpdated")
+                    if dest_candidate != resolved_new_path:
+                        shutil.move(resolved_new_path, dest_candidate)
+                        moved_new_file = True
+                        target_dest_path = dest_candidate
+                        new_info["file_path"] = target_dest_path
+                        new_info["file_name"] = os.path.basename(target_dest_path)
+
+            # 2. Build UPDATE statement for djmdContent
+            update_clauses = [
+                "FolderPath = :new_folder_path",
+                "FileNameL = :new_file_name",
+                "FileNameS = :new_file_name_s",
+                "FileType = :new_file_type",
+                "FileSize = :new_file_size",
+                "BitRate = :new_bitrate",
+                "BitDepth = :new_bit_depth",
+                "SampleRate = :new_sample_rate",
+                "updated_at = :updated_at",
+            ]
+            params: Dict[str, Any] = {
+                "id": str(content_id),
+                "new_folder_path": target_dest_path,
+                "new_file_name": new_info["file_name"],
+                "new_file_name_s": "",
+                "new_file_type": new_info["file_type"],
+                "new_file_size": new_info["file_size"],
+                "new_bitrate": new_info["bitrate"],
+                "new_bit_depth": new_info["bit_depth"],
+                "new_sample_rate": new_info["sample_rate"],
+                "updated_at": now_utc,
+            }
+
+            # Update Length only if positive duration extracted
+            if new_info["duration_sec"] > 0 and "Length" in cols:
+                update_clauses.append("Length = :new_length")
+                params["new_length"] = new_info["duration_sec"]
+
+            # Track info updated counter
+            if "TrackInfoUpdated" in cols:
+                curr_val = old_track.get("TrackInfoUpdated")
+                try:
+                    next_val = str(int(curr_val) + 1) if curr_val and str(curr_val).isdigit() else "1"
+                except Exception:
+                    next_val = "1"
+                update_clauses.append("TrackInfoUpdated = :track_info_updated")
+                params["track_info_updated"] = next_val
+
+            if "rb_local_usn" in cols:
+                usn = _get_next_local_usn(conn)
+                if usn:
+                    update_clauses.append("rb_local_usn = :track_usn")
+                    params["track_usn"] = usn
+
+            # Reset analysis so Rekordbox cleanly calculates a fresh beatgrid and waveform for the new audio file
+            if "AnalysisUpdated" in cols:
+                update_clauses.append("AnalysisUpdated = '0'")
+            if "Analysed" in cols:
+                update_clauses.append("Analysed = 0")
+            if "AnalysisDataPath" in cols:
+                update_clauses.append("AnalysisDataPath = ''")
+
+            # Optional: ID3 tag updates
+            if update_id3_metadata:
+                if new_info.get("title") and "Title" in cols:
+                    update_clauses.append("Title = :new_title")
+                    params["new_title"] = new_info["title"]
+
+            # Artwork replacement handling
+            artwork_choice = opts.get("artwork_choice", "old")
+            artwork_src = opts.get("artwork_source_path")
+            if artwork_choice == "new":
+                if not artwork_src or not os.path.exists(artwork_src):
+                    extracted = extract_embedded_artwork(target_dest_path)
+                    if extracted:
+                        artwork_src = extracted[0]
+
+                if artwork_src and os.path.exists(artwork_src):
+                    track_uuid = old_track.get("UUID")
+                    if not track_uuid:
+                        track_uuid = str(uuid.uuid4())
+                        if "UUID" in cols:
+                            update_clauses.append("UUID = :new_uuid")
+                            params["new_uuid"] = track_uuid
+
+                    db_p = opts.get("db_path") or getattr(getattr(engine, "url", None), "database", None)
+                    new_img_rel = install_rekordbox_artwork(track_uuid, artwork_src, db_path=db_p)
+                    if new_img_rel and "ImagePath" in cols:
+                        update_clauses.append("ImagePath = :new_image_path")
+                        params["new_image_path"] = new_img_rel
+
+            update_sql = f"UPDATE djmdContent SET {', '.join(update_clauses)} WHERE ID = :id;"
+            conn.execute(text(update_sql), params)
+
+            # 2b. Apply resolved metadata if provided (excluding genre, bpm, key which are not ported)
+            resolved_meta = opts.get("resolved_metadata")
+            if resolved_meta:
+                filtered_meta = {k: v for k, v in resolved_meta.items() if k not in ("genre", "bpm", "key")}
+                if filtered_meta:
+                    tables = {r[0] for r in conn.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table';").fetchall()}
+                    _apply_resolved_metadata(conn, cols, tables, str(content_id), filtered_meta, now_utc)
+
+            # 3. Query preserved relational metrics
+            history_count = 0
             try:
-                next_val = str(int(curr_val) + 1) if curr_val and str(curr_val).isdigit() else "1"
+                h_row = conn.execute(
+                    text("SELECT count(*) FROM djmdSongHistory WHERE ContentID = :id;"),
+                    {"id": str(content_id)},
+                ).fetchone()
+                history_count = int(h_row[0]) if h_row else 0
             except Exception:
-                next_val = "1"
-            update_clauses.append("TrackInfoUpdated = :track_info_updated")
-            params["track_info_updated"] = next_val
+                pass
 
-        if "rb_local_usn" in cols:
-            usn = _get_next_local_usn(conn)
-            if usn:
-                update_clauses.append("rb_local_usn = :track_usn")
-                params["track_usn"] = usn
+            cue_count = 0
+            try:
+                c_row = conn.execute(
+                    text("SELECT count(*) FROM djmdCue WHERE ContentID = :id;"),
+                    {"id": str(content_id)},
+                ).fetchone()
+                cue_count = int(c_row[0]) if c_row else 0
+            except Exception:
+                pass
 
-        # Reset analysis so Rekordbox cleanly calculates a fresh beatgrid and waveform for the new audio file
-        if "AnalysisUpdated" in cols:
-            update_clauses.append("AnalysisUpdated = '0'")
-        if "Analysed" in cols:
-            update_clauses.append("Analysed = 0")
-        if "AnalysisDataPath" in cols:
-            update_clauses.append("AnalysisDataPath = ''")
-
-        # Optional: ID3 tag updates
-        if update_id3_metadata:
-            if new_info.get("title") and "Title" in cols:
-                update_clauses.append("Title = :new_title")
-                params["new_title"] = new_info["title"]
-
-        # Artwork replacement handling
-        artwork_choice = opts.get("artwork_choice", "old")
-        artwork_src = opts.get("artwork_source_path")
-        if artwork_choice == "new":
-            if not artwork_src or not os.path.exists(artwork_src):
-                extracted = extract_embedded_artwork(resolved_new_path)
-                if extracted:
-                    artwork_src = extracted[0]
-
-            if artwork_src and os.path.exists(artwork_src):
-                track_uuid = old_track.get("UUID")
-                if not track_uuid:
-                    track_uuid = str(uuid.uuid4())
-                    if "UUID" in cols:
-                        update_clauses.append("UUID = :new_uuid")
-                        params["new_uuid"] = track_uuid
-
-                db_p = opts.get("db_path") or getattr(getattr(engine, "url", None), "database", None)
-                new_img_rel = install_rekordbox_artwork(track_uuid, artwork_src, db_path=db_p)
-                if new_img_rel and "ImagePath" in cols:
-                    update_clauses.append("ImagePath = :new_image_path")
-                    params["new_image_path"] = new_img_rel
-
-        update_sql = f"UPDATE djmdContent SET {', '.join(update_clauses)} WHERE ID = :id;"
-        conn.execute(text(update_sql), params)
-
-        # 2b. Apply resolved metadata if provided (excluding genre, bpm, key which are not ported)
-        resolved_meta = opts.get("resolved_metadata")
-        if resolved_meta:
-            filtered_meta = {k: v for k, v in resolved_meta.items() if k not in ("genre", "bpm", "key")}
-            if filtered_meta:
-                tables = {r[0] for r in conn.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table';").fetchall()}
-                _apply_resolved_metadata(conn, cols, tables, str(content_id), filtered_meta, now_utc)
-
-        # 3. Query preserved relational metrics
-        history_count = 0
-        try:
-            h_row = conn.execute(
-                text("SELECT count(*) FROM djmdSongHistory WHERE ContentID = :id;"),
-                {"id": str(content_id)},
-            ).fetchone()
-            history_count = int(h_row[0]) if h_row else 0
-        except Exception:
-            pass
-
-        cue_count = 0
-        try:
-            c_row = conn.execute(
-                text("SELECT count(*) FROM djmdCue WHERE ContentID = :id;"),
-                {"id": str(content_id)},
-            ).fetchone()
-            cue_count = int(c_row[0]) if c_row else 0
-        except Exception:
-            pass
-
-        playlist_count = 0
-        try:
-            p_row = conn.execute(
-                text("SELECT count(*) FROM djmdSongPlaylist WHERE ContentID = :id;"),
-                {"id": str(content_id)},
-            ).fetchone()
-            playlist_count = int(p_row[0]) if p_row else 0
-        except Exception:
-            pass
+            playlist_count = 0
+            try:
+                p_row = conn.execute(
+                    text("SELECT count(*) FROM djmdSongPlaylist WHERE ContentID = :id;"),
+                    {"id": str(content_id)},
+                ).fetchone()
+                playlist_count = int(p_row[0]) if p_row else 0
+            except Exception:
+                pass
+    except Exception:
+        # Rollback moved files on transaction failure
+        if moved_new_file and os.path.exists(target_dest_path) and not os.path.exists(original_new_path):
+            try:
+                shutil.move(target_dest_path, original_new_path)
+            except Exception:
+                pass
+        if tmp_old_file_path and os.path.exists(tmp_old_file_path) and old_file_path and not os.path.exists(old_file_path):
+            try:
+                os.rename(tmp_old_file_path, old_file_path)
+            except Exception:
+                pass
+        raise
 
     # 4. Post-transaction: Handle old file on disk
-    old_file_handled = "kept"
-    if old_file_path and os.path.exists(old_file_path) and os.path.abspath(old_file_path) != os.path.abspath(target_dest_path):
+    old_target = tmp_old_file_path if tmp_old_file_path else old_file_path
+    if old_target and os.path.exists(old_target) and os.path.realpath(old_target) != os.path.realpath(target_dest_path):
         if old_file_action == "trash":
-            trashed = trash_file_macos(old_file_path)
+            trashed = trash_file_macos(old_target)
             old_file_handled = "trashed" if trashed else "failed_trash"
         elif old_file_action == "backup":
             bak_path = f"{old_file_path}.bak"
+            counter = 1
+            while os.path.exists(bak_path):
+                bak_path = f"{old_file_path}.{counter}.bak"
+                counter += 1
             try:
-                os.rename(old_file_path, bak_path)
+                os.rename(old_target, bak_path)
                 old_file_handled = f"renamed_to_{os.path.basename(bak_path)}"
             except Exception:
                 old_file_handled = "failed_rename"
+        else:
+            old_file_handled = "kept"
+    else:
+        old_file_handled = "kept"
 
     return {
         "success": True,
@@ -1448,6 +1510,7 @@ def replace_track_audio_file(
             "bitrate": new_info["bitrate"],
             "size": new_info["file_size"],
             "length": new_info["duration_sec"],
+            "status": "moved" if moved_new_file else "kept",
         },
     }
 
@@ -1831,6 +1894,11 @@ def main() -> None:
         default="keep",
         help="Action for old audio file on disk",
     )
+    parser.add_argument(
+        "--move",
+        action="store_true",
+        help="Move replacement audio file into original track's folder",
+    )
     parser.add_argument("--force", action="store_true", help="Force proceed if Rekordbox is open")
     args = parser.parse_args()
 
@@ -1845,7 +1913,10 @@ def main() -> None:
             engine,
             args.track_id,
             args.new_file,
-            options={"old_file_action": args.action},
+            options={
+                "old_file_action": args.action,
+                "move_new_file_to_track_folder": args.move,
+            },
         )
         print(f"✅ Successfully replaced audio file for track '{res['title']}' (ID: {res['content_id']})")
         print(f"   Play count preserved: {res['play_count']}")

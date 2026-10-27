@@ -1673,7 +1673,13 @@ class TrackReplacementDiffView(QWidget):
             self.chk_move_folder = QCheckBox("Move replacement file into track folder")
             self.chk_move_folder.setChecked(self.options.get("move_new_file_to_track_folder", False))
             self.chk_move_folder.setStyleSheet("font-size: 11px;")
+            self.chk_move_folder.setToolTip(
+                "Moves the replacement audio file into the existing track's folder instead of keeping it in its current location."
+            )
+            self.chk_move_folder.toggled.connect(self._on_move_folder_toggled)
             opt_layout.addWidget(self.chk_move_folder)
+            if self.chk_move_folder.isChecked():
+                self._on_move_folder_toggled(True)
 
         bottom_layout.addLayout(opt_layout, stretch=1)
 
@@ -2098,6 +2104,26 @@ class TrackReplacementDiffView(QWidget):
             "db_path": self.db_path,
         }
         return opts
+
+    def _on_move_folder_toggled(self, checked: bool) -> None:
+        """Update Audio Location in diff view when Move checkbox is toggled."""
+        old_path = str(self.old_track.get("file_path") or self.old_track.get("FolderPath") or self.old_track.get("folder_path") or "")
+        new_path = str(self.new_item.get("file_path") or self.new_item.get("folder_path") or "")
+        if os.path.isdir(old_path) or (old_path and not os.path.splitext(old_path)[1]):
+            old_dir = old_path
+        else:
+            old_dir = os.path.dirname(old_path) if old_path else ""
+        for row in self.row_widgets:
+            if row.diff.key == "file_path":
+                if checked and old_dir and new_path:
+                    dest = os.path.join(old_dir, os.path.basename(new_path))
+                    row.diff.result_val = dest
+                else:
+                    row.diff.result_val = new_path
+                if hasattr(row, "result_label"):
+                    row.result_label.setText(row._format_display(row.diff.result_val))
+                    row.result_label.setToolTip(str(row.diff.result_val))
+                break
 
     def _on_confirm_clicked(self) -> None:
         if is_rekordbox_running():

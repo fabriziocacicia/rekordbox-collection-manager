@@ -649,7 +649,7 @@ class ReplaceFileView(QWidget):
         opt_layout.addLayout(action_row)
 
         # Checkbox: Move new file into track folder
-        self.chk_move_to_folder = QCheckBox("Move/Copy replacement audio file into original track's folder")
+        self.chk_move_to_folder = QCheckBox("Move replacement audio file into original track's folder")
         self.chk_move_to_folder.setToolTip(
             "If your downloaded file is in Downloads, moves it next to your existing library collection."
         )
@@ -1264,10 +1264,12 @@ class ReplaceFileView(QWidget):
         self.btn_execute_replace.setEnabled(True)
         self.mode1_status_label.setText("✅ Audio file successfully replaced!")
 
+        moved_note = "✅ Replacement audio file moved to track folder\n" if res.get("new_file", {}).get("status") == "moved" else ""
         success_msg = (
             f"🎉 Successfully Replaced Audio File!\n\n"
             f"Track: {res['title']} (ID: {res['content_id']})\n"
             f"New File: {res['new_file']['filename']} ({res['new_file']['format']}, {res['new_file']['bitrate']} kbps)\n\n"
+            f"{moved_note}"
             f"✅ {res['play_count']} plays preserved\n"
             f"✅ Date added {res['stock_date']} preserved\n"
             f"✅ {res['history_plays_preserved']} history session plays preserved\n"

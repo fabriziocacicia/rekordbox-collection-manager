@@ -441,6 +441,7 @@ class TestTrackReplacementDiffDialog(unittest.TestCase):
             "bpm": 120.0,
             "file_type": "MP3",
             "play_count": 10,
+            "file_path": "/music/library/track_a.mp3",
         }
         new_item = {
             "title": "Track A (2024 Remaster)",
@@ -505,6 +506,21 @@ class TestTrackReplacementDiffDialog(unittest.TestCase):
         self.assertNotIn("genre", opts["resolved_metadata"])
         self.assertNotIn("bpm", opts["resolved_metadata"])
         self.assertNotIn("key", opts["resolved_metadata"])
+
+        # Test toggling the move folder checkbox updates Audio Location in the diff
+        self.assertTrue(hasattr(dialog.diff_view, "chk_move_folder"))
+        self.assertFalse(dialog.diff_view.chk_move_folder.isChecked())
+
+        file_row = next(r for r in dialog.diff_view.row_widgets if r.diff.key == "file_path")
+        self.assertEqual(file_row.diff.result_val, "/downloads/track_a.aiff")
+
+        dialog.diff_view.chk_move_folder.setChecked(True)
+        self.assertEqual(file_row.diff.result_val, "/music/track_a.aiff")
+        self.assertTrue(dialog.get_options()["move_new_file_to_track_folder"])
+
+        dialog.diff_view.chk_move_folder.setChecked(False)
+        self.assertEqual(file_row.diff.result_val, "/downloads/track_a.aiff")
+        self.assertFalse(dialog.get_options()["move_new_file_to_track_folder"])
 
     @patch("rekordbox_collection_manager.gui.replacement_diff_dialog.is_rekordbox_running", return_value=False)
     def test_dialog_instantiation_mode_merge(self, mock_running):
