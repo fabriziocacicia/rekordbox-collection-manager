@@ -187,6 +187,10 @@ class TestApplyResolvedMetadata(unittest.TestCase):
                     TrackNo INTEGER,
                     DiscNo INTEGER,
                     ColorID VARCHAR(255),
+                    OrgArtistID VARCHAR(255),
+                    Lyricist VARCHAR(255),
+                    DeliveryComment VARCHAR(255),
+                    ReleaseDate VARCHAR(255),
                     rb_local_deleted SMALLINT DEFAULT 0,
                     created_at DATETIME,
                     updated_at DATETIME
@@ -205,6 +209,7 @@ class TestApplyResolvedMetadata(unittest.TestCase):
                 CREATE TABLE djmdAlbum (
                     ID VARCHAR(255) PRIMARY KEY,
                     Name VARCHAR(255),
+                    AlbumArtistID VARCHAR(255),
                     SearchStr VARCHAR(255),
                     UUID VARCHAR(255),
                     rb_local_deleted SMALLINT DEFAULT 0
@@ -247,6 +252,11 @@ class TestApplyResolvedMetadata(unittest.TestCase):
             "title": "Brand New Title",
             "artist": "Armin van Buuren",
             "album": "A State of Trance",
+            "album_artist": "Armin van Buuren",
+            "original_artist": "Armin van Buuren Classic",
+            "lyricist": "John Poet",
+            "message": "Special Club Edit",
+            "release_date": "2024-05-15",
             "genre": "Trance",
             "bpm": 138.5,
             "key": "8A",
@@ -268,7 +278,7 @@ class TestApplyResolvedMetadata(unittest.TestCase):
 
         # Verify Content row updated
         with self.engine.connect() as conn:
-            row = conn.execute(text("SELECT Title, BPM, Rating, ReleaseYear, Subtitle, Commnt, ColorID FROM djmdContent WHERE ID = 'track-01';")).fetchone()
+            row = conn.execute(text("SELECT Title, BPM, Rating, ReleaseYear, Subtitle, Commnt, ColorID, Lyricist, DeliveryComment, ReleaseDate FROM djmdContent WHERE ID = 'track-01';")).fetchone()
             self.assertEqual(row[0], "Brand New Title")
             self.assertEqual(row[1], 13850)  # BPM 138.5 * 100
             self.assertEqual(row[2], 5)
@@ -276,18 +286,29 @@ class TestApplyResolvedMetadata(unittest.TestCase):
             self.assertEqual(row[4], "Extended Club Mix")
             self.assertEqual(row[5], "Upgraded Lossless")
             self.assertEqual(row[6], "3")
+            self.assertEqual(row[7], "John Poet")
+            self.assertEqual(row[8], "Special Club Edit")
+            self.assertEqual(row[9], "2024-05-15")
 
             # Verify Artist was created and linked
-            artist_id_row = conn.execute(text("SELECT ArtistID, RemixerID, AlbumID, GenreID, KeyID, LabelID FROM djmdContent WHERE ID = 'track-01';")).fetchone()
+            artist_id_row = conn.execute(text("SELECT ArtistID, RemixerID, AlbumID, GenreID, KeyID, LabelID, OrgArtistID FROM djmdContent WHERE ID = 'track-01';")).fetchone()
             self.assertIsNotNone(artist_id_row[0])
             self.assertIsNotNone(artist_id_row[1])
             self.assertIsNotNone(artist_id_row[2])
             self.assertIsNotNone(artist_id_row[3])
             self.assertEqual(artist_id_row[4], "k1")
             self.assertIsNotNone(artist_id_row[5])
+            self.assertIsNotNone(artist_id_row[6])
 
             artist_name = conn.execute(text("SELECT Name FROM djmdArtist WHERE ID = :id;"), {"id": artist_id_row[0]}).fetchone()[0]
             self.assertEqual(artist_name, "Armin van Buuren")
+
+            org_artist_name = conn.execute(text("SELECT Name FROM djmdArtist WHERE ID = :id;"), {"id": artist_id_row[6]}).fetchone()[0]
+            self.assertEqual(org_artist_name, "Armin van Buuren Classic")
+
+            # Verify Album has AlbumArtistID
+            album_artist_id = conn.execute(text("SELECT AlbumArtistID FROM djmdAlbum WHERE ID = :id;"), {"id": artist_id_row[2]}).fetchone()[0]
+            self.assertEqual(album_artist_id, artist_id_row[0])
 
 
 class TestTrackReplacementDiffDialog(unittest.TestCase):
@@ -445,7 +466,7 @@ class TestTrackReplacementDiffDialog(unittest.TestCase):
             options={"old_file_action": "keep", "move_new_file_to_track_folder": False},
         )
         self.assertIsNotNone(dialog)
-        self.assertEqual(len(dialog.diff_view.diffs), 27)
+        self.assertEqual(len(dialog.diff_view.diffs), 32)
 
         diffs = {d.key: d for d in dialog.diff_view.diffs}
         self.assertIn("artwork", diffs)
@@ -939,7 +960,159 @@ class TestTrackReplacementDiffDialog(unittest.TestCase):
             self.assertEqual(opts_old["artwork_choice"], "old")
 
 
+class TestRekordboxNumericEntityIds(unittest.TestCase):
+    """Test Rekordbox numeric entity ID creation and UUID repair migration."""
+
+    def setUp(self):
+        self.engine = create_engine("sqlite:///:memory:")
+        with self.engine.begin() as conn:
+            conn.exec_driver_sql("""
+                CREATE TABLE agentRegistry (
+                    registry_id VARCHAR(255) PRIMARY KEY,
+                    int_1 INTEGER
+                );
+            """)
+            conn.exec_driver_sql("INSERT INTO agentRegistry (registry_id, int_1) VALUES ('localUpdateCount', 1000);")
+            conn.exec_driver_sql("""
+                CREATE TABLE djmdArtist (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    Name VARCHAR(255),
+                    SearchStr VARCHAR(255),
+                    UUID VARCHAR(255),
+                    rb_data_status INTEGER DEFAULT 0,
+                    rb_local_data_status INTEGER DEFAULT 0,
+                    rb_local_deleted SMALLINT DEFAULT 0,
+                    rb_local_synced SMALLINT DEFAULT 1,
+                    rb_local_usn BIGINT,
+                    created_at DATETIME,
+                    updated_at DATETIME
+                );
+            """)
+            conn.exec_driver_sql("""
+                CREATE TABLE djmdAlbum (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    Name VARCHAR(255),
+                    AlbumArtistID VARCHAR(255),
+                    SearchStr VARCHAR(255),
+                    UUID VARCHAR(255),
+                    rb_data_status INTEGER DEFAULT 0,
+                    rb_local_data_status INTEGER DEFAULT 0,
+                    rb_local_deleted SMALLINT DEFAULT 0,
+                    rb_local_synced SMALLINT DEFAULT 1,
+                    rb_local_usn BIGINT,
+                    created_at DATETIME,
+                    updated_at DATETIME
+                );
+            """)
+            conn.exec_driver_sql("""
+                CREATE TABLE djmdGenre (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    Name VARCHAR(255),
+                    UUID VARCHAR(255),
+                    rb_data_status INTEGER DEFAULT 0,
+                    rb_local_data_status INTEGER DEFAULT 0,
+                    rb_local_deleted SMALLINT DEFAULT 0,
+                    rb_local_synced SMALLINT DEFAULT 1,
+                    rb_local_usn BIGINT,
+                    created_at DATETIME,
+                    updated_at DATETIME
+                );
+            """)
+            conn.exec_driver_sql("""
+                CREATE TABLE djmdLabel (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    Name VARCHAR(255),
+                    UUID VARCHAR(255),
+                    rb_data_status INTEGER DEFAULT 0,
+                    rb_local_data_status INTEGER DEFAULT 0,
+                    rb_local_deleted SMALLINT DEFAULT 0,
+                    rb_local_synced SMALLINT DEFAULT 0,
+                    rb_local_usn BIGINT,
+                    created_at DATETIME,
+                    updated_at DATETIME
+                );
+            """)
+            conn.exec_driver_sql("""
+                CREATE TABLE djmdContent (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    Title VARCHAR(255),
+                    ArtistID VARCHAR(255),
+                    AlbumID VARCHAR(255),
+                    GenreID VARCHAR(255),
+                    LabelID VARCHAR(255),
+                    RemixerID VARCHAR(255),
+                    ComposerID VARCHAR(255),
+                    OrgArtistID VARCHAR(255),
+                    TrackInfoUpdated VARCHAR(255) DEFAULT '1',
+                    rb_local_usn BIGINT,
+                    updated_at DATETIME
+                );
+            """)
+
+    def test_find_or_create_artist_numeric_id(self):
+        from rekordbox_collection_manager.replace_file import _find_or_create_artist
+
+        with self.engine.begin() as conn:
+            art_id = _find_or_create_artist(conn, "sentir, Guaved", "2026-10-26 12:00:00")
+            self.assertIsNotNone(art_id)
+            self.assertTrue(art_id.isdigit(), f"Artist ID '{art_id}' should be numeric digits")
+
+            # Subsequent call returns same numeric ID
+            art_id_2 = _find_or_create_artist(conn, "sentir, Guaved", "2026-10-26 12:00:00")
+            self.assertEqual(art_id, art_id_2)
+
+    def test_repair_uuid_entity_ids(self):
+        from rekordbox_collection_manager.replace_file import repair_uuid_entity_ids
+
+        # Seed database with legacy UUID entities
+        with self.engine.begin() as conn:
+            conn.exec_driver_sql("""
+                INSERT INTO djmdArtist (ID, Name, UUID) VALUES
+                ('uuid-art-1', 'Legacy Artist', 'uuid-art-1'),
+                ('214550221', 'Existing Numeric', 'num-uuid-1');
+            """)
+            conn.exec_driver_sql("""
+                INSERT INTO djmdAlbum (ID, Name, UUID) VALUES
+                ('uuid-alb-1', 'Legacy Album', 'uuid-alb-1');
+            """)
+            conn.exec_driver_sql("""
+                INSERT INTO djmdGenre (ID, Name, UUID) VALUES
+                ('uuid-gen-1', 'Legacy Genre', 'uuid-gen-1');
+            """)
+            conn.exec_driver_sql("""
+                INSERT INTO djmdLabel (ID, Name, UUID) VALUES
+                ('uuid-lbl-1', 'Legacy Label', 'uuid-lbl-1');
+            """)
+            conn.exec_driver_sql("""
+                INSERT INTO djmdContent (ID, Title, ArtistID, AlbumID, GenreID, LabelID) VALUES
+                ('100', 'Test Track', 'uuid-art-1', 'uuid-alb-1', 'uuid-gen-1', 'uuid-lbl-1');
+            """)
+
+        stats = repair_uuid_entity_ids(self.engine)
+        self.assertEqual(stats["artists_fixed"], 1)
+        self.assertEqual(stats["albums_fixed"], 1)
+        self.assertEqual(stats["genres_fixed"], 1)
+        self.assertEqual(stats["labels_fixed"], 1)
+
+        with self.engine.connect() as conn:
+            # Check djmdArtist has no UUID IDs
+            uuid_artists = conn.execute(text("SELECT ID, Name FROM djmdArtist WHERE ID LIKE '%-%';")).fetchall()
+            self.assertEqual(len(uuid_artists), 0)
+
+            # Check djmdContent has updated numeric IDs
+            row = conn.execute(text("SELECT ArtistID, AlbumID, GenreID, LabelID FROM djmdContent WHERE ID = '100';")).fetchone()
+            self.assertTrue(row[0].isdigit(), f"ArtistID '{row[0]}' should be numeric")
+            self.assertTrue(row[1].isdigit(), f"AlbumID '{row[1]}' should be numeric")
+            self.assertTrue(row[2].isdigit(), f"GenreID '{row[2]}' should be numeric")
+            self.assertTrue(row[3].isdigit(), f"LabelID '{row[3]}' should be numeric")
+
+            # Check artist name resolves correctly
+            art_name = conn.execute(text("SELECT Name FROM djmdArtist WHERE ID = :id;"), {"id": row[0]}).scalar()
+            self.assertEqual(art_name, "Legacy Artist")
+
+
 if __name__ == "__main__":
     unittest.main()
+
 
 

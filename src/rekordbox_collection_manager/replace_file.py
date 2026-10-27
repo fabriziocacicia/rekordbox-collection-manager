@@ -8,6 +8,7 @@ while preserving 100% of history session entries, play counts, original "Date Ad
 import argparse
 import math
 import os
+import secrets
 import shutil
 import struct
 import subprocess
@@ -45,6 +46,7 @@ __all__ = [
     "replace_track_audio_file",
     "merge_imported_tracks",
     "trash_file_macos",
+    "repair_uuid_entity_ids",
 ]
 
 
@@ -100,6 +102,11 @@ def inspect_audio_file(file_path: str) -> Dict[str, Any]:
         "label": "",
         "composer": "",
         "mix_name": "",
+        "album_artist": "",
+        "original_artist": "",
+        "lyricist": "",
+        "message": "",
+        "release_date": "",
         "track_no": 0,
         "disc_no": 0,
         "rating": 0,
@@ -162,6 +169,7 @@ def inspect_audio_file(file_path: str) -> Dict[str, Any]:
                 raw_year = get_tag_val(["TDRC", "TYER", "date", "\xa9day"])
                 if raw_year and len(raw_year) >= 4 and raw_year[:4].isdigit():
                     info["year"] = int(raw_year[:4])
+                info["release_date"] = raw_year
 
                 # Additional Rekordbox Info tags
                 info["key"] = get_tag_val(["TKEY", "initialkey", "key"])
@@ -169,6 +177,10 @@ def inspect_audio_file(file_path: str) -> Dict[str, Any]:
                 info["label"] = get_tag_val(["TPUB", "publisher", "label", "organization"])
                 info["composer"] = get_tag_val(["TCOM", "composer", "\xa9wrt"])
                 info["mix_name"] = get_tag_val(["TIT3", "subtitle"])
+                info["album_artist"] = get_tag_val(["TPE2", "albumartist", "album_artist", "aART"])
+                info["original_artist"] = get_tag_val(["TOPE", "originalartist", "original_artist"])
+                info["lyricist"] = get_tag_val(["TEXT", "lyricist"])
+                info["message"] = get_tag_val(["TXXX:message", "TXXX:Message", "TXXX:MESSAGE"])
 
                 raw_bpm = get_tag_val(["TBPM", "bpm", "tmpo"])
                 if raw_bpm:
@@ -314,9 +326,13 @@ def fetch_track_full_info(engine: Engine, content_id: str) -> Dict[str, Any]:
 
         album_fallback = "COALESCE(c.SrcAlbumName, '')" if has_src_album else "''"
         album_expr = album_fallback
+        album_artist_expr = "''"
         if "djmdAlbum" in tables and "AlbumID" in cols:
             joins.append("LEFT JOIN djmdAlbum al ON c.AlbumID = al.ID")
             album_expr = f"COALESCE(al.Name, {album_fallback}, '')"
+            if "djmdArtist" in tables:
+                joins.append("LEFT JOIN djmdArtist alb_art ON al.AlbumArtistID = alb_art.ID")
+                album_artist_expr = "COALESCE(alb_art.Name, '')"
 
         genre_expr = "''"
         if "djmdGenre" in tables and "GenreID" in cols:
@@ -343,6 +359,11 @@ def fetch_track_full_info(engine: Engine, content_id: str) -> Dict[str, Any]:
             joins.append("LEFT JOIN djmdArtist comp ON c.ComposerID = comp.ID")
             composer_expr = "COALESCE(comp.Name, '')"
 
+        org_artist_expr = "''"
+        if "djmdArtist" in tables and "OrgArtistID" in cols:
+            joins.append("LEFT JOIN djmdArtist org ON c.OrgArtistID = org.ID")
+            org_artist_expr = "COALESCE(org.Name, '')"
+
         bpm_col = "COALESCE(c.BPM, 0)" if "BPM" in cols else "0"
         length_col = "COALESCE(c.Length, 0)" if "Length" in cols else "0"
         br_col = "COALESCE(c.BitRate, 0)" if "BitRate" in cols else "0"
@@ -363,6 +384,9 @@ def fetch_track_full_info(engine: Engine, content_id: str) -> Dict[str, Any]:
         fp_col = "COALESCE(c.FolderPath, '')" if "FolderPath" in cols else "''"
         fn_col = "COALESCE(c.FileNameL, '')" if "FileNameL" in cols else "''"
         title_col = "COALESCE(c.Title, '')" if "Title" in cols else "''"
+        lyricist_col = "COALESCE(c.Lyricist, '')" if "Lyricist" in cols else "''"
+        msg_col = "COALESCE(c.DeliveryComment, '')" if "DeliveryComment" in cols else "''"
+        reldate_col = "COALESCE(c.ReleaseDate, '')" if "ReleaseDate" in cols else "''"
 
         uuid_col = "COALESCE(c.UUID, '')" if "UUID" in cols else "''"
 
@@ -373,6 +397,7 @@ def fetch_track_full_info(engine: Engine, content_id: str) -> Dict[str, Any]:
                 {title_col} AS Title,
                 {artist_expr} AS Artist,
                 {album_expr} AS Album,
+                {album_artist_expr} AS AlbumArtist,
                 {genre_expr} AS Genre,
                 {key_expr} AS KeyName,
                 {bpm_col} AS BPM,
@@ -385,12 +410,16 @@ def fetch_track_full_info(engine: Engine, content_id: str) -> Dict[str, Any]:
                 {com_col} AS Commnt,
                 {rat_col} AS Rating,
                 {yr_col} AS ReleaseYear,
+                {reldate_col} AS ReleaseDate,
                 {tno_col} AS TrackNo,
                 {dno_col} AS DiscNo,
                 {remixer_expr} AS Remixer,
                 {label_expr} AS Label,
                 {sub_col} AS MixName,
                 {composer_expr} AS Composer,
+                {org_artist_expr} AS OriginalArtist,
+                {lyricist_col} AS Lyricist,
+                {msg_col} AS Message,
                 {col_col} AS ColorID,
                 {stock_col} AS StockDate,
                 {play_col} AS DJPlayCount,
@@ -541,6 +570,11 @@ def fetch_track_full_info(engine: Engine, content_id: str) -> Dict[str, Any]:
             "title": r.get("Title") or "",
             "artist": r.get("Artist") or "",
             "album": r.get("Album") or "",
+            "album_artist": r.get("AlbumArtist") or "",
+            "original_artist": r.get("OriginalArtist") or "",
+            "lyricist": r.get("Lyricist") or "",
+            "message": r.get("Message") or "",
+            "release_date": str(r.get("ReleaseDate") or "")[:10],
             "genre": r.get("Genre") or "",
             "bpm": bpm_val,
             "key": r.get("KeyName") or "",
@@ -583,8 +617,51 @@ def fetch_track_full_info(engine: Engine, content_id: str) -> Dict[str, Any]:
         }
 
 
+def _generate_unused_numeric_id(conn: Any, table_name: str, id_col: str = "ID") -> str:
+    """Generate a random unused numeric ID (28-bit unsigned integer) matching Rekordbox convention."""
+    for _ in range(1000000):
+        buf = secrets.token_bytes(4)
+        num = ((buf[0] << 24) | (buf[1] << 16) | (buf[2] << 8) | buf[3]) >> 4
+        if num < 100:
+            continue
+        id_str = str(num)
+        exists = conn.execute(
+            text(f"SELECT 1 FROM {table_name} WHERE {id_col} = :id LIMIT 1;"),
+            {"id": id_str},
+        ).fetchone()
+        if not exists:
+            return id_str
+    raise RuntimeError(f"Could not generate unused numeric ID for {table_name}")
+
+
+def _get_next_local_usn(conn: Any) -> Optional[int]:
+    """Get and increment localUpdateCount from agentRegistry, or fallback to max rb_local_usn."""
+    try:
+        tables = {r[0] for r in conn.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table';").fetchall()}
+        if "agentRegistry" in tables:
+            row = conn.execute(
+                text("SELECT int_1 FROM agentRegistry WHERE registry_id = 'localUpdateCount' LIMIT 1;")
+            ).fetchone()
+            if row and row[0] is not None:
+                next_usn = int(row[0]) + 1
+                conn.execute(
+                    text("UPDATE agentRegistry SET int_1 = :usn, updated_at = CURRENT_TIMESTAMP WHERE registry_id = 'localUpdateCount';"),
+                    {"usn": next_usn},
+                )
+                return next_usn
+    except Exception:
+        pass
+    try:
+        row = conn.execute(text("SELECT COALESCE(MAX(rb_local_usn), 0) + 1 FROM djmdContent;")).fetchone()
+        if row and row[0]:
+            return int(row[0])
+    except Exception:
+        pass
+    return None
+
+
 def _find_or_create_artist(conn: Any, name: str, now_utc: str) -> Optional[str]:
-    """Find existing djmdArtist ID or insert a new artist."""
+    """Find existing djmdArtist ID or insert a new artist with a valid Rekordbox numeric ID."""
     if not name or not str(name).strip():
         return None
     name_clean = str(name).strip()
@@ -596,16 +673,19 @@ def _find_or_create_artist(conn: Any, name: str, now_utc: str) -> Optional[str]:
         if row and row[0]:
             return str(row[0])
         cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(djmdArtist);").fetchall()}
-        new_id = str(uuid.uuid4())
+        new_numeric_id = _generate_unused_numeric_id(conn, "djmdArtist")
+        new_uuid = str(uuid.uuid4())
+        usn = _get_next_local_usn(conn)
         data: Dict[str, Any] = {
-            "ID": new_id,
+            "ID": new_numeric_id,
             "Name": name_clean,
-            "SearchStr": name_clean.lower(),
-            "UUID": new_id,
+            "SearchStr": None,
+            "UUID": new_uuid,
             "rb_data_status": 0,
             "rb_local_data_status": 0,
             "rb_local_deleted": 0,
             "rb_local_synced": 1,
+            "rb_local_usn": usn,
             "created_at": now_utc,
             "updated_at": now_utc,
         }
@@ -614,35 +694,46 @@ def _find_or_create_artist(conn: Any, name: str, now_utc: str) -> Optional[str]:
             text(f"INSERT INTO djmdArtist ({', '.join(ins_cols)}) VALUES ({', '.join(f':{k}' for k in ins_cols)});"),
             {k: data[k] for k in ins_cols},
         )
-        return new_id
+        return new_numeric_id
     except Exception:
         return None
 
 
 def _find_or_create_album(conn: Any, name: str, now_utc: str, artist_id: Optional[str] = None) -> Optional[str]:
-    """Find existing djmdAlbum ID or insert a new album."""
+    """Find existing djmdAlbum ID or insert a new album with a valid Rekordbox numeric ID."""
     if not name or not str(name).strip():
         return None
     name_clean = str(name).strip()
     try:
+        cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(djmdAlbum);").fetchall()}
+        has_album_artist = "AlbumArtistID" in cols
+        sel_cols = "ID, AlbumArtistID" if has_album_artist else "ID"
         row = conn.execute(
-            text("SELECT ID FROM djmdAlbum WHERE lower(trim(Name)) = lower(trim(:n)) AND (rb_local_deleted = 0 OR rb_local_deleted IS NULL) LIMIT 1;"),
+            text(f"SELECT {sel_cols} FROM djmdAlbum WHERE lower(trim(Name)) = lower(trim(:n)) AND (rb_local_deleted = 0 OR rb_local_deleted IS NULL) LIMIT 1;"),
             {"n": name_clean},
         ).fetchone()
         if row and row[0]:
-            return str(row[0])
-        cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(djmdAlbum);").fetchall()}
-        new_id = str(uuid.uuid4())
+            existing_id = str(row[0])
+            if has_album_artist and artist_id and (len(row) > 1 and not row[1]):
+                conn.execute(
+                    text("UPDATE djmdAlbum SET AlbumArtistID = :aid, updated_at = :now WHERE ID = :id;"),
+                    {"aid": str(artist_id), "now": now_utc, "id": existing_id},
+                )
+            return existing_id
+        new_numeric_id = _generate_unused_numeric_id(conn, "djmdAlbum")
+        new_uuid = str(uuid.uuid4())
+        usn = _get_next_local_usn(conn)
         data: Dict[str, Any] = {
-            "ID": new_id,
+            "ID": new_numeric_id,
             "Name": name_clean,
             "AlbumArtistID": artist_id,
-            "SearchStr": name_clean.lower(),
-            "UUID": new_id,
+            "SearchStr": None,
+            "UUID": new_uuid,
             "rb_data_status": 0,
             "rb_local_data_status": 0,
             "rb_local_deleted": 0,
             "rb_local_synced": 1,
+            "rb_local_usn": usn,
             "created_at": now_utc,
             "updated_at": now_utc,
         }
@@ -651,13 +742,13 @@ def _find_or_create_album(conn: Any, name: str, now_utc: str, artist_id: Optiona
             text(f"INSERT INTO djmdAlbum ({', '.join(ins_cols)}) VALUES ({', '.join(f':{k}' for k in ins_cols)});"),
             {k: data[k] for k in ins_cols},
         )
-        return new_id
+        return new_numeric_id
     except Exception:
         return None
 
 
 def _find_or_create_genre(conn: Any, name: str, now_utc: str) -> Optional[str]:
-    """Find existing djmdGenre ID or insert a new genre."""
+    """Find existing djmdGenre ID or insert a new genre with a valid Rekordbox numeric ID."""
     if not name or not str(name).strip():
         return None
     name_clean = str(name).strip()
@@ -669,15 +760,18 @@ def _find_or_create_genre(conn: Any, name: str, now_utc: str) -> Optional[str]:
         if row and row[0]:
             return str(row[0])
         cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(djmdGenre);").fetchall()}
-        new_id = str(uuid.uuid4())
+        new_numeric_id = _generate_unused_numeric_id(conn, "djmdGenre")
+        new_uuid = str(uuid.uuid4())
+        usn = _get_next_local_usn(conn)
         data: Dict[str, Any] = {
-            "ID": new_id,
+            "ID": new_numeric_id,
             "Name": name_clean,
-            "UUID": new_id,
+            "UUID": new_uuid,
             "rb_data_status": 0,
             "rb_local_data_status": 0,
             "rb_local_deleted": 0,
             "rb_local_synced": 1,
+            "rb_local_usn": usn,
             "created_at": now_utc,
             "updated_at": now_utc,
         }
@@ -686,13 +780,13 @@ def _find_or_create_genre(conn: Any, name: str, now_utc: str) -> Optional[str]:
             text(f"INSERT INTO djmdGenre ({', '.join(ins_cols)}) VALUES ({', '.join(f':{k}' for k in ins_cols)});"),
             {k: data[k] for k in ins_cols},
         )
-        return new_id
+        return new_numeric_id
     except Exception:
         return None
 
 
 def _find_or_create_label(conn: Any, name: str, now_utc: str) -> Optional[str]:
-    """Find existing djmdLabel ID or insert a new record label."""
+    """Find existing djmdLabel ID or insert a new record label with a valid Rekordbox numeric ID."""
     if not name or not str(name).strip():
         return None
     name_clean = str(name).strip()
@@ -704,15 +798,18 @@ def _find_or_create_label(conn: Any, name: str, now_utc: str) -> Optional[str]:
         if row and row[0]:
             return str(row[0])
         cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(djmdLabel);").fetchall()}
-        new_id = str(uuid.uuid4())
+        new_numeric_id = _generate_unused_numeric_id(conn, "djmdLabel")
+        new_uuid = str(uuid.uuid4())
+        usn = _get_next_local_usn(conn)
         data: Dict[str, Any] = {
-            "ID": new_id,
+            "ID": new_numeric_id,
             "Name": name_clean,
-            "UUID": new_id,
+            "UUID": new_uuid,
             "rb_data_status": 0,
             "rb_local_data_status": 0,
             "rb_local_deleted": 0,
-            "rb_local_synced": 1,
+            "rb_local_synced": 0,
+            "rb_local_usn": usn,
             "created_at": now_utc,
             "updated_at": now_utc,
         }
@@ -721,9 +818,162 @@ def _find_or_create_label(conn: Any, name: str, now_utc: str) -> Optional[str]:
             text(f"INSERT INTO djmdLabel ({', '.join(ins_cols)}) VALUES ({', '.join(f':{k}' for k in ins_cols)});"),
             {k: data[k] for k in ins_cols},
         )
-        return new_id
+        return new_numeric_id
     except Exception:
         return None
+
+
+def repair_uuid_entity_ids(engine: Engine) -> Dict[str, int]:
+    """Repair entity tables where ID was incorrectly saved as a UUID instead of a numeric Rekordbox ID."""
+    stats = {
+        "artists_fixed": 0,
+        "albums_fixed": 0,
+        "genres_fixed": 0,
+        "labels_fixed": 0,
+    }
+    with engine.begin() as conn:
+        tables = {r[0] for r in conn.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table';").fetchall()}
+        c_cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(djmdContent);").fetchall()} if "djmdContent" in tables else set()
+        now_utc = get_rekordbox_timestamp()
+
+        # 1. djmdArtist
+        if "djmdArtist" in tables:
+            rows = conn.execute(text("SELECT ID, Name FROM djmdArtist WHERE ID LIKE '%-%';")).fetchall()
+            for old_id, name in rows:
+                clean_name = str(name).strip() if name else ""
+                existing_num = None
+                if clean_name:
+                    existing_row = conn.execute(
+                        text("SELECT ID FROM djmdArtist WHERE lower(trim(Name)) = lower(trim(:n)) AND ID NOT LIKE '%-%' AND (rb_local_deleted = 0 OR rb_local_deleted IS NULL) LIMIT 1;"),
+                        {"n": clean_name},
+                    ).fetchone()
+                    if existing_row and existing_row[0]:
+                        existing_num = str(existing_row[0])
+
+                if existing_num:
+                    new_id = existing_num
+                    conn.execute(text("DELETE FROM djmdArtist WHERE ID = :old_id;"), {"old_id": str(old_id)})
+                else:
+                    new_id = _generate_unused_numeric_id(conn, "djmdArtist")
+                    usn = _get_next_local_usn(conn)
+                    conn.execute(
+                        text("UPDATE djmdArtist SET ID = :new_id, SearchStr = NULL, rb_local_usn = :usn, updated_at = :now WHERE ID = :old_id;"),
+                        {"new_id": new_id, "usn": usn, "now": now_utc, "old_id": str(old_id)},
+                    )
+
+                if "djmdContent" in tables:
+                    for col in ["ArtistID", "RemixerID", "ComposerID", "OrgArtistID"]:
+                        if col in c_cols:
+                            conn.execute(
+                                text(f"UPDATE djmdContent SET {col} = :new_id, TrackInfoUpdated = COALESCE(CAST(CAST(TrackInfoUpdated AS INTEGER) + 1 AS TEXT), '1'), updated_at = :now WHERE {col} = :old_id;"),
+                                {"new_id": new_id, "now": now_utc, "old_id": str(old_id)},
+                            )
+                if "djmdAlbum" in tables:
+                    alb_cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(djmdAlbum);").fetchall()}
+                    if "AlbumArtistID" in alb_cols:
+                        conn.execute(
+                            text("UPDATE djmdAlbum SET AlbumArtistID = :new_id, updated_at = :now WHERE AlbumArtistID = :old_id;"),
+                            {"new_id": new_id, "now": now_utc, "old_id": str(old_id)},
+                        )
+                stats["artists_fixed"] += 1
+
+        # 2. djmdAlbum
+        if "djmdAlbum" in tables:
+            rows = conn.execute(text("SELECT ID, Name FROM djmdAlbum WHERE ID LIKE '%-%';")).fetchall()
+            for old_id, name in rows:
+                clean_name = str(name).strip() if name else ""
+                existing_num = None
+                if clean_name:
+                    existing_row = conn.execute(
+                        text("SELECT ID FROM djmdAlbum WHERE lower(trim(Name)) = lower(trim(:n)) AND ID NOT LIKE '%-%' AND (rb_local_deleted = 0 OR rb_local_deleted IS NULL) LIMIT 1;"),
+                        {"n": clean_name},
+                    ).fetchone()
+                    if existing_row and existing_row[0]:
+                        existing_num = str(existing_row[0])
+
+                if existing_num:
+                    new_id = existing_num
+                    conn.execute(text("DELETE FROM djmdAlbum WHERE ID = :old_id;"), {"old_id": str(old_id)})
+                else:
+                    new_id = _generate_unused_numeric_id(conn, "djmdAlbum")
+                    usn = _get_next_local_usn(conn)
+                    conn.execute(
+                        text("UPDATE djmdAlbum SET ID = :new_id, SearchStr = NULL, rb_local_usn = :usn, updated_at = :now WHERE ID = :old_id;"),
+                        {"new_id": new_id, "usn": usn, "now": now_utc, "old_id": str(old_id)},
+                    )
+
+                if "djmdContent" in tables and "AlbumID" in c_cols:
+                    conn.execute(
+                        text("UPDATE djmdContent SET AlbumID = :new_id, TrackInfoUpdated = COALESCE(CAST(CAST(TrackInfoUpdated AS INTEGER) + 1 AS TEXT), '1'), updated_at = :now WHERE AlbumID = :old_id;"),
+                        {"new_id": new_id, "now": now_utc, "old_id": str(old_id)},
+                    )
+                stats["albums_fixed"] += 1
+
+        # 3. djmdGenre
+        if "djmdGenre" in tables:
+            rows = conn.execute(text("SELECT ID, Name FROM djmdGenre WHERE ID LIKE '%-%';")).fetchall()
+            for old_id, name in rows:
+                clean_name = str(name).strip() if name else ""
+                existing_num = None
+                if clean_name:
+                    existing_row = conn.execute(
+                        text("SELECT ID FROM djmdGenre WHERE lower(trim(Name)) = lower(trim(:n)) AND ID NOT LIKE '%-%' AND (rb_local_deleted = 0 OR rb_local_deleted IS NULL) LIMIT 1;"),
+                        {"n": clean_name},
+                    ).fetchone()
+                    if existing_row and existing_row[0]:
+                        existing_num = str(existing_row[0])
+
+                if existing_num:
+                    new_id = existing_num
+                    conn.execute(text("DELETE FROM djmdGenre WHERE ID = :old_id;"), {"old_id": str(old_id)})
+                else:
+                    new_id = _generate_unused_numeric_id(conn, "djmdGenre")
+                    usn = _get_next_local_usn(conn)
+                    conn.execute(
+                        text("UPDATE djmdGenre SET ID = :new_id, rb_local_usn = :usn, updated_at = :now WHERE ID = :old_id;"),
+                        {"new_id": new_id, "usn": usn, "now": now_utc, "old_id": str(old_id)},
+                    )
+
+                if "djmdContent" in tables and "GenreID" in c_cols:
+                    conn.execute(
+                        text("UPDATE djmdContent SET GenreID = :new_id, TrackInfoUpdated = COALESCE(CAST(CAST(TrackInfoUpdated AS INTEGER) + 1 AS TEXT), '1'), updated_at = :now WHERE GenreID = :old_id;"),
+                        {"new_id": new_id, "now": now_utc, "old_id": str(old_id)},
+                    )
+                stats["genres_fixed"] += 1
+
+        # 4. djmdLabel
+        if "djmdLabel" in tables:
+            rows = conn.execute(text("SELECT ID, Name FROM djmdLabel WHERE ID LIKE '%-%';")).fetchall()
+            for old_id, name in rows:
+                clean_name = str(name).strip() if name else ""
+                existing_num = None
+                if clean_name:
+                    existing_row = conn.execute(
+                        text("SELECT ID FROM djmdLabel WHERE lower(trim(Name)) = lower(trim(:n)) AND ID NOT LIKE '%-%' AND (rb_local_deleted = 0 OR rb_local_deleted IS NULL) LIMIT 1;"),
+                        {"n": clean_name},
+                    ).fetchone()
+                    if existing_row and existing_row[0]:
+                        existing_num = str(existing_row[0])
+
+                if existing_num:
+                    new_id = existing_num
+                    conn.execute(text("DELETE FROM djmdLabel WHERE ID = :old_id;"), {"old_id": str(old_id)})
+                else:
+                    new_id = _generate_unused_numeric_id(conn, "djmdLabel")
+                    usn = _get_next_local_usn(conn)
+                    conn.execute(
+                        text("UPDATE djmdLabel SET ID = :new_id, rb_local_usn = :usn, updated_at = :now WHERE ID = :old_id;"),
+                        {"new_id": new_id, "usn": usn, "now": now_utc, "old_id": str(old_id)},
+                    )
+
+                if "djmdContent" in tables and "LabelID" in c_cols:
+                    conn.execute(
+                        text("UPDATE djmdContent SET LabelID = :new_id, TrackInfoUpdated = COALESCE(CAST(CAST(TrackInfoUpdated AS INTEGER) + 1 AS TEXT), '1'), updated_at = :now WHERE LabelID = :old_id;"),
+                        {"new_id": new_id, "now": now_utc, "old_id": str(old_id)},
+                    )
+                stats["labels_fixed"] += 1
+
+    return stats
 
 
 def _find_key_id(conn: Any, key_str: str) -> Optional[str]:
@@ -774,16 +1024,28 @@ def _apply_resolved_metadata(
             update_clauses.append("ArtistID = :res_artist_id")
             params["res_artist_id"] = art_id
 
-    # 3. Album
+    # 3. Album & Album Artist
+    alb_artist_id = None
+    if "album_artist" in resolved_meta and "djmdArtist" in tables:
+        alb_art_val = str(resolved_meta["album_artist"]).strip()
+        alb_artist_id = _find_or_create_artist(conn, alb_art_val, now_utc) if alb_art_val else None
+
     if "album" in resolved_meta:
         alb_val = str(resolved_meta["album"]).strip()
         if "SrcAlbumName" in cols:
             update_clauses.append("SrcAlbumName = :res_album")
             params["res_album"] = alb_val
         if "AlbumID" in cols and "djmdAlbum" in tables:
-            alb_id = _find_or_create_album(conn, alb_val, now_utc) if alb_val else None
+            alb_id = _find_or_create_album(conn, alb_val, now_utc, artist_id=alb_artist_id) if alb_val else None
             update_clauses.append("AlbumID = :res_album_id")
             params["res_album_id"] = alb_id
+    elif alb_artist_id and "AlbumID" in cols and "djmdAlbum" in tables:
+        curr_alb_id = conn.execute(text("SELECT AlbumID FROM djmdContent WHERE ID = :id;"), {"id": str(content_id)}).scalar()
+        if curr_alb_id:
+            conn.execute(
+                text("UPDATE djmdAlbum SET AlbumArtistID = :aid, updated_at = :now WHERE ID = :id;"),
+                {"aid": alb_artist_id, "now": now_utc, "id": str(curr_alb_id)},
+            )
 
     # 4. Genre
     if "genre" in resolved_meta and "GenreID" in cols and "djmdGenre" in tables:
@@ -829,6 +1091,11 @@ def _apply_resolved_metadata(
         except (ValueError, TypeError):
             pass
 
+    # Release Date
+    if "release_date" in resolved_meta and "ReleaseDate" in cols:
+        update_clauses.append("ReleaseDate = :res_release_date")
+        params["res_release_date"] = str(resolved_meta["release_date"]).strip()
+
     # 9. Comment
     if "comment" in resolved_meta and "Commnt" in cols:
         update_clauses.append("Commnt = :res_comment")
@@ -854,6 +1121,23 @@ def _apply_resolved_metadata(
         comp_id = _find_or_create_artist(conn, comp_val, now_utc) if comp_val else None
         update_clauses.append("ComposerID = :res_composer_id")
         params["res_composer_id"] = comp_id
+
+    # Original Artist
+    if "original_artist" in resolved_meta and "OrgArtistID" in cols and "djmdArtist" in tables:
+        org_val = str(resolved_meta["original_artist"]).strip()
+        org_id = _find_or_create_artist(conn, org_val, now_utc) if org_val else None
+        update_clauses.append("OrgArtistID = :res_org_artist_id")
+        params["res_org_artist_id"] = org_id
+
+    # Lyricist
+    if "lyricist" in resolved_meta and "Lyricist" in cols:
+        update_clauses.append("Lyricist = :res_lyricist")
+        params["res_lyricist"] = str(resolved_meta["lyricist"]).strip()
+
+    # Message (DeliveryComment)
+    if "message" in resolved_meta and "DeliveryComment" in cols:
+        update_clauses.append("DeliveryComment = :res_message")
+        params["res_message"] = str(resolved_meta["message"]).strip()
 
     # 13. Mix Name (Subtitle)
     if "mix_name" in resolved_meta and "Subtitle" in cols:
@@ -888,6 +1172,11 @@ def _apply_resolved_metadata(
             update_clauses.append("updated_at = :now_utc")
         if "TrackInfoUpdated" in cols:
             update_clauses.append("TrackInfoUpdated = COALESCE(CAST(CAST(TrackInfoUpdated AS INTEGER) + 1 AS TEXT), '1')")
+        if "rb_local_usn" in cols:
+            usn = _get_next_local_usn(conn)
+            if usn:
+                update_clauses.append("rb_local_usn = :meta_usn")
+                params["meta_usn"] = usn
         sql = f"UPDATE djmdContent SET {', '.join(update_clauses)} WHERE ID = :id;"
         conn.execute(text(sql), params)
 
@@ -1033,6 +1322,12 @@ def replace_track_audio_file(
                 next_val = "1"
             update_clauses.append("TrackInfoUpdated = :track_info_updated")
             params["track_info_updated"] = next_val
+
+        if "rb_local_usn" in cols:
+            usn = _get_next_local_usn(conn)
+            if usn:
+                update_clauses.append("rb_local_usn = :track_usn")
+                params["track_usn"] = usn
 
         # Reset analysis so Rekordbox cleanly calculates a fresh beatgrid and waveform for the new audio file
         if "AnalysisUpdated" in cols:
