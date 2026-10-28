@@ -48,6 +48,7 @@ from rekordbox_collection_manager.gui.replacement_diff_dialog import (
     calculate_metadata_diff,
 )
 from rekordbox_collection_manager.replace_file import fetch_track_full_info
+from rekordbox_collection_manager.utils import resolve_exact_disk_path
 from rekordbox_collection_manager.gui.theme import (
     COLOR_AMBER,
     COLOR_AMBER_BG,
@@ -1053,6 +1054,7 @@ class ReplaceFileView(QWidget):
             self._set_merge_source_track(track, search_target=True)
 
     def _on_new_file_selected(self, path: str) -> None:
+        path = resolve_exact_disk_path(path)
         ext = os.path.splitext(path)[1].lower()
         if ext not in (".aiff", ".aif"):
             QMessageBox.warning(

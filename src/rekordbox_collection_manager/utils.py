@@ -12,6 +12,7 @@ import re
 import shutil
 import subprocess
 import sys
+import unicodedata
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple, Union
 
@@ -286,6 +287,167 @@ def resolve_db_path(
         sys.exit(1)
 
     return resolved
+
+
+def resolve_exact_disk_path(path: str) -> str:
+    """Resolve a filesystem path to the exact case and Unicode normalization stored on disk.
+
+    On macOS external filesystems (e.g. ExFAT / FAT32 mounted via fskit), file lookup
+    (open, stat, exists) is normalization-insensitive, but POSIX unlink (remove) and
+    rename fail with ENOENT ([Errno 2]) if the Unicode normalization (NFC vs NFD) does
+    not match the exact directory entry on disk.
+
+    This function traverses each segment of the path and matches it against the actual
+    directory entries, returning the path with the exact byte representation stored in
+    the filesystem. If any segment cannot be matched or the parent directory does not
+    exist, that segment is kept as-is.
+    """
+    if not path:
+        return path
+
+    path = os.path.abspath(os.path.expanduser(path))
+
+    parts: List[str] = []
+    curr = path
+    while True:
+        parent, name = os.path.split(curr)
+        if not name:
+            if parent:
+                parts.append(parent)
+            break
+        parts.append(name)
+        if parent == curr:
+            break
+        curr = parent
+
+    parts.reverse()
+    if not parts:
+        return path
+
+    resolved = parts[0]
+    for seg in parts[1:]:
+        if not os.path.isdir(resolved):
+            resolved = os.path.join(resolved, seg)
+            continue
+        try:
+            target_nfc = unicodedata.normalize("NFC", seg).casefold()
+            match = None
+            for entry in os.listdir(resolved):
+                if unicodedata.normalize("NFC", entry).casefold() == target_nfc:
+                    match = entry
+                    break
+            if match is not None:
+                resolved = os.path.join(resolved, match)
+            else:
+                resolved = os.path.join(resolved, seg)
+        except Exception:
+            resolved = os.path.join(resolved, seg)
+
+    return resolved
+
+
+def safe_unlink_file(path: str) -> None:
+    """Safely unlink/delete a file, handling cross-filesystem Unicode normalization differences.
+
+    On ExFAT/FAT32 volumes under macOS, `os.unlink()` will fail with Errno 2 if the string
+    normalization (NFC vs NFD) does not match the filesystem directory entry. This function
+    resolves the exact on-disk representation and attempts deletion under both NFC and NFD
+    variants before giving up.
+    """
+    if not path or not os.path.exists(path):
+        return
+
+    try:
+        os.unlink(path)
+        return
+    except OSError as e:
+        if e.errno != 2:
+            raise
+
+    exact_path = resolve_exact_disk_path(path)
+    if exact_path != path:
+        try:
+            os.unlink(exact_path)
+            return
+        except OSError as e:
+            if e.errno != 2:
+                raise
+
+    dir_p, name = os.path.split(exact_path)
+    for norm in ("NFD", "NFC"):
+        alt_path = os.path.join(dir_p, unicodedata.normalize(norm, name))
+        if alt_path != exact_path:
+            try:
+                os.unlink(alt_path)
+                return
+            except OSError as e:
+                if e.errno != 2:
+                    raise
+
+    if os.path.exists(path):
+        os.unlink(path)
+
+
+def safe_rename_file(src: str, dst: str) -> None:
+    """Safely rename a file, resolving exact on-disk representation if needed."""
+    if not src:
+        raise FileNotFoundError(f"Source file path is empty: {src}")
+
+    exact_src = resolve_exact_disk_path(src)
+    try:
+        os.rename(exact_src, dst)
+        return
+    except OSError as e:
+        if e.errno != 2:
+            raise
+
+    if exact_src != src:
+        try:
+            os.rename(src, dst)
+            return
+        except OSError as e:
+            if e.errno != 2:
+                raise
+
+    dir_p, name = os.path.split(exact_src)
+    for norm in ("NFD", "NFC"):
+        alt_src = os.path.join(dir_p, unicodedata.normalize(norm, name))
+        if alt_src not in (exact_src, src):
+            try:
+                os.rename(alt_src, dst)
+                return
+            except OSError as e:
+                if e.errno != 2:
+                    raise
+
+    os.rename(src, dst)
+
+
+def safe_move_file(src: str, dst: str) -> str:
+    """Recursively move a file to another location, with ExFAT/Unicode-safe cross-volume handling.
+
+    First resolves `src` to its exact disk path representation so cross-device moves
+    (`shutil.move`) do not fail at the `os.unlink(src)` step on ExFAT/fskit volumes.
+    If `shutil.move` still encounters an ENOENT error during unlink, cleans up using `safe_unlink_file`.
+    """
+    if not src:
+        raise FileNotFoundError(f"Source file path is empty: {src}")
+
+    exact_src = resolve_exact_disk_path(src)
+    if not os.path.exists(exact_src):
+        raise FileNotFoundError(f"Source file does not exist: {src}")
+
+    target_path = os.path.join(dst, os.path.basename(exact_src)) if os.path.isdir(dst) else dst
+
+    try:
+        return shutil.move(exact_src, dst)
+    except OSError as e:
+        if e.errno == 2:
+            # Check if copy succeeded across filesystems but unlink of source failed
+            if os.path.exists(target_path) and os.path.getsize(target_path) == os.path.getsize(exact_src):
+                safe_unlink_file(exact_src)
+                return target_path
+        raise
 
 
 # ==============================================================================

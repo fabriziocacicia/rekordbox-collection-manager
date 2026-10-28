@@ -33,7 +33,11 @@ from rekordbox_collection_manager.utils import (
     open_database,
     resolve_artwork_path,
     resolve_db_path,
+    resolve_exact_disk_path,
     resolve_file_type,
+    safe_move_file,
+    safe_rename_file,
+    safe_unlink_file,
 )
 
 
@@ -47,6 +51,10 @@ __all__ = [
     "merge_imported_tracks",
     "trash_file_macos",
     "repair_uuid_entity_ids",
+    "resolve_exact_disk_path",
+    "safe_move_file",
+    "safe_rename_file",
+    "safe_unlink_file",
 ]
 
 
@@ -68,8 +76,10 @@ def inspect_audio_file(file_path: str) -> Dict[str, Any]:
       - channels (int)
       - title, artist, album, genre, year (extracted from ID3 / metadata tags)
     """
-    if not os.path.exists(file_path):
+    exact_path = resolve_exact_disk_path(file_path)
+    if not os.path.exists(exact_path):
         raise FileNotFoundError(f"Audio file not found: {file_path}")
+    file_path = exact_path
 
     ext = os.path.splitext(file_path)[1].lstrip(".").upper()
     file_size = os.path.getsize(file_path)
@@ -284,10 +294,12 @@ def trash_file_macos(file_path: str) -> bool:
     if not os.path.exists(file_path):
         return False
 
+    exact_p = resolve_exact_disk_path(file_path)
+
     # 1. Primary macOS: AppleScript via Finder (moves to Trash can safely)
     if sys.platform == "darwin":
         try:
-            abs_p = os.path.abspath(file_path).replace('"', '\\"')
+            abs_p = os.path.abspath(exact_p).replace('"', '\\"')
             cmd = f'tell application "Finder" to delete POSIX file "{abs_p}"'
             res = subprocess.run(["osascript", "-e", cmd], capture_output=True, text=True, check=False)
             if res.returncode == 0:
@@ -297,12 +309,12 @@ def trash_file_macos(file_path: str) -> bool:
 
     # 2. Cross-platform fallback: Rename to .bak to avoid permanent deletion
     try:
-        bak_path = f"{file_path}.bak"
+        bak_path = f"{exact_p}.bak"
         counter = 1
         while os.path.exists(bak_path):
-            bak_path = f"{file_path}.bak{counter}"
+            bak_path = f"{exact_p}.bak{counter}"
             counter += 1
-        os.rename(file_path, bak_path)
+        safe_rename_file(exact_p, bak_path)
         return True
     except Exception:
         return False
@@ -1222,7 +1234,7 @@ def replace_track_audio_file(
     update_id3_metadata = opts.get("update_id3_metadata", False)
     move_new_file_to_track_folder = opts.get("move_new_file_to_track_folder", False)
 
-    resolved_new_path = os.path.abspath(new_file_path)
+    resolved_new_path = resolve_exact_disk_path(os.path.abspath(new_file_path))
     if not os.path.exists(resolved_new_path):
         raise FileNotFoundError(f"Replacement audio file does not exist: {resolved_new_path}")
 
@@ -1256,7 +1268,7 @@ def replace_track_audio_file(
                 raise ValueError(f"Track with ID '{content_id}' not found in djmdContent.")
 
             old_track = dict(row)
-            old_file_path = old_track.get("FolderPath") or ""
+            old_file_path = resolve_exact_disk_path(old_track.get("FolderPath") or "")
             old_file_name = old_track.get("FileNameL") or ""
             old_file_type = old_track.get("FileType")
 
@@ -1301,7 +1313,7 @@ def replace_track_audio_file(
                                 base, ext = os.path.splitext(old_file_path)
                                 tmp_candidate = f"{base}.tmp_replace_{secrets.token_hex(4)}{ext}"
                                 try:
-                                    os.rename(old_file_path, tmp_candidate)
+                                    safe_rename_file(old_file_path, tmp_candidate)
                                     tmp_old_file_path = tmp_candidate
                                 except Exception:
                                     base_new, ext_new = os.path.splitext(new_info["file_name"])
@@ -1318,7 +1330,7 @@ def replace_track_audio_file(
                                 counter += 1
 
                     if dest_candidate != resolved_new_path:
-                        shutil.move(resolved_new_path, dest_candidate)
+                        safe_move_file(resolved_new_path, dest_candidate)
                         moved_new_file = True
                         target_dest_path = dest_candidate
                         new_info["file_path"] = target_dest_path
@@ -1450,14 +1462,26 @@ def replace_track_audio_file(
                 pass
     except Exception:
         # Rollback moved files on transaction failure
-        if moved_new_file and os.path.exists(target_dest_path) and not os.path.exists(original_new_path):
+        if moved_new_file and os.path.exists(target_dest_path):
+            if os.path.exists(original_new_path):
+                # Both target and original exist (e.g. cross-volume copy succeeded but failure occurred after)
+                try:
+                    safe_unlink_file(target_dest_path)
+                except Exception:
+                    pass
+            else:
+                try:
+                    safe_move_file(target_dest_path, original_new_path)
+                except Exception:
+                    pass
+        if tmp_old_file_path and os.path.exists(tmp_old_file_path) and old_file_path:
+            if os.path.exists(old_file_path):
+                try:
+                    safe_unlink_file(old_file_path)
+                except Exception:
+                    pass
             try:
-                shutil.move(target_dest_path, original_new_path)
-            except Exception:
-                pass
-        if tmp_old_file_path and os.path.exists(tmp_old_file_path) and old_file_path and not os.path.exists(old_file_path):
-            try:
-                os.rename(tmp_old_file_path, old_file_path)
+                safe_rename_file(tmp_old_file_path, old_file_path)
             except Exception:
                 pass
         raise
@@ -1475,7 +1499,7 @@ def replace_track_audio_file(
                 bak_path = f"{old_file_path}.{counter}.bak"
                 counter += 1
             try:
-                os.rename(old_target, bak_path)
+                safe_rename_file(old_target, bak_path)
                 old_file_handled = f"renamed_to_{os.path.basename(bak_path)}"
             except Exception:
                 old_file_handled = "failed_rename"
@@ -1850,7 +1874,7 @@ def merge_imported_tracks(
         elif old_file_action == "backup":
             bak_path = f"{old_file_path}.bak"
             try:
-                os.rename(old_file_path, bak_path)
+                safe_rename_file(old_file_path, bak_path)
                 old_file_handled = f"renamed_to_{os.path.basename(bak_path)}"
             except Exception:
                 old_file_handled = "failed_rename"

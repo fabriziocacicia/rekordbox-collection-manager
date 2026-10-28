@@ -3,6 +3,7 @@
 import os
 import shutil
 import tempfile
+import unicodedata
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -18,6 +19,10 @@ from rekordbox_collection_manager.replace_file import (
     inspect_audio_file,
     merge_imported_tracks,
     replace_track_audio_file,
+    resolve_exact_disk_path,
+    safe_move_file,
+    safe_rename_file,
+    safe_unlink_file,
     trash_file_macos,
 )
 
@@ -291,6 +296,117 @@ class TestReplaceFileBackend(unittest.TestCase):
         self.assertTrue(res["success"])
         self.assertFalse(os.path.exists(self.old_mp3_path))
         self.assertTrue(os.path.exists(f"{self.old_mp3_path}.bak"))
+
+    def test_resolve_exact_disk_path_unicode(self):
+        """Verify resolve_exact_disk_path finds the exact on-disk normalization (NFC vs NFD)."""
+        # Create a file with decomposed NFD filename
+        nfd_name = unicodedata.normalize("NFD", "Apéritif - TwoSlice.aiff")
+        nfd_path = os.path.join(self.temp_dir, nfd_name)
+        with open(nfd_path, "wb") as f:
+            f.write(b"FORM....AIFF")
+
+        # Query using composed NFC name
+        nfc_name = unicodedata.normalize("NFC", "Apéritif - TwoSlice.aiff")
+        nfc_path = os.path.join(self.temp_dir, nfc_name)
+
+        resolved = resolve_exact_disk_path(nfc_path)
+        self.assertEqual(resolved, nfd_path)
+        self.assertEqual(os.path.basename(resolved), nfd_name)
+
+    def test_safe_unlink_and_rename_file_unicode(self):
+        """Verify safe_unlink_file and safe_rename_file work across NFC/NFD variations."""
+        nfd_name = unicodedata.normalize("NFD", "Apéritif_delete_test.aiff")
+        nfd_path = os.path.join(self.temp_dir, nfd_name)
+        with open(nfd_path, "wb") as f:
+            f.write(b"FORM....AIFF")
+
+        # Rename using NFC path
+        nfc_path = os.path.join(self.temp_dir, unicodedata.normalize("NFC", "Apéritif_delete_test.aiff"))
+        target_renamed = os.path.join(self.temp_dir, "renamed_output.aiff")
+        safe_rename_file(nfc_path, target_renamed)
+        self.assertTrue(os.path.exists(target_renamed))
+        self.assertFalse(os.path.exists(nfd_path))
+
+        # Safe unlink
+        safe_unlink_file(target_renamed)
+        self.assertFalse(os.path.exists(target_renamed))
+
+    def test_safe_move_file_unicode(self):
+        """Verify safe_move_file moves files whose on-disk normalization differs from input."""
+        src_nfd = os.path.join(self.temp_dir, unicodedata.normalize("NFD", "Apéritif_src.aiff"))
+        with open(src_nfd, "wb") as f:
+            f.write(b"AIFF data test")
+
+        dest_dir = os.path.join(self.temp_dir, "dest_subfolder")
+        os.makedirs(dest_dir, exist_ok=True)
+        dest_file = os.path.join(dest_dir, "moved.aiff")
+
+        # Pass NFC path to safe_move_file
+        src_nfc = os.path.join(self.temp_dir, unicodedata.normalize("NFC", "Apéritif_src.aiff"))
+        result = safe_move_file(src_nfc, dest_file)
+        self.assertTrue(os.path.exists(dest_file))
+        self.assertFalse(os.path.exists(src_nfd))
+        self.assertEqual(result, dest_file)
+
+    def test_replace_track_with_unicode_accents_and_move_to_folder(self):
+        """Verify replace_track_audio_file handles files with accents and move_new_file_to_track_folder."""
+        # Create track folder and old track file
+        track_folder = os.path.join(self.temp_dir, "Velvet Deep")
+        os.makedirs(track_folder, exist_ok=True)
+        old_track_path = os.path.join(track_folder, "Apéritif - TwoSlice.aiff")
+        with open(old_track_path, "wb") as f:
+            f.write(b"FORM....AIFF old 3min audio")
+
+        # Create external replacement file in another directory with NFD name
+        ext_folder = os.path.join(self.temp_dir, "HardDiskExt", "Downloaded")
+        os.makedirs(ext_folder, exist_ok=True)
+        nfd_filename = unicodedata.normalize("NFD", "Apéritif - TwoSlice.aiff")
+        ext_replacement_path = os.path.join(ext_folder, nfd_filename)
+        # Create minimal valid AIFF
+        with open(ext_replacement_path, "wb") as f:
+            # We can copy self.new_aiff_path
+            shutil.copyfile(self.new_aiff_path, ext_replacement_path)
+
+        # Insert track into db
+        with self.engine.begin() as conn:
+            conn.execute(
+                text("""
+                    INSERT INTO djmdContent (
+                        ID, FolderPath, FileNameL, FileNameS, Title, Length, BitRate, BitDepth,
+                        SampleRate, FileSize, FileType, DJPlayCount, StockDate, rb_local_deleted,
+                        created_at, updated_at
+                    ) VALUES (
+                        'track-unicode-1', :fp, :fn, '', 'Apéritif',
+                        201, 1411, 16, 44100, 35707988, 12, 5, '2026-09-01', 0,
+                        '2026-09-01 10:00:00', '2026-09-01 10:00:00'
+                    );
+                """),
+                {"fp": old_track_path, "fn": "Apéritif - TwoSlice.aiff"},
+            )
+
+        # Execute replace with NFC path and move_new_file_to_track_folder=True, old_file_action='trash'
+        nfc_replacement_path = os.path.join(ext_folder, unicodedata.normalize("NFC", "Apéritif - TwoSlice.aiff"))
+        opts = {
+            "old_file_action": "trash",
+            "move_new_file_to_track_folder": True,
+        }
+        res = replace_track_audio_file(self.engine, "track-unicode-1", nfc_replacement_path, options=opts)
+        self.assertTrue(res["success"])
+
+        # Check DB was updated
+        with self.engine.connect() as conn:
+            row = conn.execute(text("SELECT * FROM djmdContent WHERE ID = 'track-unicode-1';")).mappings().fetchone()
+            self.assertEqual(row["Title"], "Apéritif")
+            self.assertEqual(row["DJPlayCount"], 5)
+            self.assertEqual(row["StockDate"], "2026-09-01")
+            self.assertEqual(row["FileType"], 12)
+            # FolderPath should now point to destination inside track_folder
+            self.assertTrue(row["FolderPath"].startswith(track_folder))
+            self.assertTrue(os.path.exists(row["FolderPath"]))
+
+        # Verify no orphan .tmp_replace_ files remain in track_folder
+        orphans = [f for f in os.listdir(track_folder) if "tmp_replace" in f]
+        self.assertEqual(orphans, [])
 
     def test_merge_imported_tracks(self):
         """Verify merging old track into a newly imported track transfers history, plays, and stock date."""
