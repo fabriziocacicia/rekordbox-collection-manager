@@ -1,6 +1,6 @@
 [project]
 name = "rekordbox-collection-manager"
-version = "0.18.1"
+version = "0.18.2"
 description = "Rekordbox Collection Manager - Native desktop application and utilities to manage, inspect, and fix Rekordbox collections"
 readme = "README.md"
 authors = [
