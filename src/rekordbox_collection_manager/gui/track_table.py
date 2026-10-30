@@ -2492,7 +2492,7 @@ class TracksTableWidget(QTableView):
 
         col_name = cols[logical_index]
         field_map = {
-            TrackColumn.INDEX: "title",
+            TrackColumn.INDEX: "track_no" if self.config.index_mode == "track_no" else "title",
             TrackColumn.TITLE: "title",
             TrackColumn.ARTIST: "artist",
             TrackColumn.ALBUM: "album",
@@ -2530,6 +2530,7 @@ class TracksTableWidget(QTableView):
             else:
                 self.current_sort_order = Qt.SortOrder.AscendingOrder
 
+        self.horizontalHeader().setSortIndicator(logical_index, self.current_sort_order)
         self.sort_requested.emit(sort_field, self.current_sort_order)
 
     def set_tracks(self, records: List[Dict[str, Any]]) -> None:

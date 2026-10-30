@@ -384,25 +384,71 @@ def fetch_tag_tracks(
         # Sorting
         order_dir = "DESC" if sort_order.lower() == "desc" else "ASC"
         default_order = f"lower(c.Title) {order_dir}"
+
+        play_col = (
+            "COALESCE(c.DJPlayCount, 0)"
+            if "DJPlayCount" in c_cols
+            else ("COALESCE(c.PlayCount, 0)" if "PlayCount" in c_cols else "0")
+        )
+        length_col = "COALESCE(c.Length, 0)" if "Length" in c_cols else "0"
+        bpm_col = "COALESCE(c.BPM, 0)" if "BPM" in c_cols else "0"
+        bitrate_col = "COALESCE(c.BitRate, 0)" if "BitRate" in c_cols else "0"
+        file_type_col = "COALESCE(c.FileType, 0)" if "FileType" in c_cols else "0"
+        rating_col = "COALESCE(c.Rating, 0)" if "Rating" in c_cols else "0"
+        year_col = "COALESCE(c.ReleaseYear, 0)" if "ReleaseYear" in c_cols else "0"
+
+        purchased_sql = """(
+            lower(c.FolderPath) LIKE '%/purchased%' 
+            OR lower(c.FolderPath) LIKE '%/purchased/%'
+            OR lower(c.FolderPath) LIKE '%purchased%'
+        )"""
+        store_expr = """CASE
+            WHEN lower(c.Commnt) LIKE '%bandcamp%' THEN 'Bandcamp'
+            WHEN lower(c.Commnt) LIKE '%beatport%' THEN 'Beatport'
+            WHEN lower(c.Commnt) LIKE '%qobuz%' AND lower(c.Commnt) LIKE '%purchased%' THEN 'Qobuz'
+            WHEN lower(c.Commnt) LIKE '%traxsource%' THEN 'Traxsource'
+            ELSE ''
+        END""" if "Commnt" in c_cols else "''"
+
         sort_map = {
             "track_no": default_order,
             "title": f"lower(c.Title) {order_dir}",
-            "artist": f"lower({artist_name_expr}) {order_dir}",
-            "album": f"lower(COALESCE(al.Name, '')) {order_dir}",
-            "key": f"COALESCE(k.ScaleName, '') {order_dir}",
-            "bpm": f"c.BPM {order_dir}",
-            "time": f"c.Length {order_dir}",
-            "plays": f"c.DJPlayCount {order_dir}",
-            "bitrate": f"c.BitRate {order_dir}",
-            "file_type": f"c.FileType {order_dir}",
-            "file_name": f"lower(c.FileNameL) {order_dir}",
-            "folder": f"lower(c.FolderPath) {order_dir}",
+            "artist": f"lower({artist_name_expr}) {order_dir}, lower(c.Title) ASC",
+            "album": f"lower(COALESCE(al.Name, '')) {order_dir}, lower(c.Title) ASC",
+            "key": f"COALESCE(k.ScaleName, '') {order_dir}, lower(c.Title) ASC",
+            "bpm": f"{bpm_col} {order_dir}, lower(c.Title) ASC",
+            "time": f"{length_col} {order_dir}, lower(c.Title) ASC",
+            "duration": f"{length_col} {order_dir}, lower(c.Title) ASC",
+            "plays": f"{play_col} {order_dir}, lower(c.Title) ASC",
+            "play_count": f"{play_col} {order_dir}, lower(c.Title) ASC",
+            "bitrate": f"{bitrate_col} {order_dir}, lower(c.Title) ASC",
+            "file_type": f"{file_type_col} {order_dir}, lower(c.Title) ASC",
+            "type": f"{file_type_col} {order_dir}, lower(c.Title) ASC",
+            "file_name": f"lower(COALESCE(c.FileNameL, '')) {order_dir}, lower(c.Title) ASC",
+            "filename": f"lower(COALESCE(c.FileNameL, '')) {order_dir}, lower(c.Title) ASC",
+            "folder": f"lower(COALESCE(c.FolderPath, '')) {order_dir}, lower(c.Title) ASC",
+            "folder_name": f"lower(COALESCE(c.FolderPath, '')) {order_dir}, lower(c.Title) ASC",
+            "purchased": f"{purchased_sql} {order_dir}, lower(c.Title) ASC",
+            "purchased_at": f"{store_expr} {order_dir}, lower(c.Title) ASC",
+            "store": f"{store_expr} {order_dir}, lower(c.Title) ASC",
+            "tags": f"TagNames {order_dir}, lower(c.Title) ASC" if has_my_tag else default_order,
+            "playlists": f"PlaylistNames {order_dir}, lower(c.Title) ASC" if has_playlist else default_order,
         }
         order_clause = sort_map.get(sort_by, default_order)
 
         limit_clause = ""
         if limit and limit > 0:
             limit_clause = f"LIMIT {int(limit)}"
+
+        play_select = f"{play_col} AS DJPlayCount"
+        length_select = f"{length_col} AS Length"
+        bpm_select = f"{bpm_col} AS BPM"
+        bitrate_select = f"{bitrate_col} AS BitRate"
+        rating_select = f"{rating_col} AS Rating"
+        year_select = f"{year_col} AS ReleaseYear"
+        commnt_select = "c.Commnt" if "Commnt" in c_cols else "NULL AS Commnt"
+        folder_select = "c.FolderPath" if "FolderPath" in c_cols else "NULL AS FolderPath"
+        file_select = "c.FileNameL" if "FileNameL" in c_cols else "NULL AS FileNameL"
 
         sql = f"""
             SELECT 
@@ -413,16 +459,16 @@ def fetch_tag_tracks(
                 {album_expr} AS AlbumName,
                 {genre_expr} AS GenreName,
                 {key_expr} AS KeyName,
-                c.BPM,
-                c.Length,
-                c.DJPlayCount,
-                c.Rating,
-                c.ReleaseYear,
-                c.BitRate,
+                {bpm_select},
+                {length_select},
+                {play_select},
+                {rating_select},
+                {year_select},
+                {bitrate_select},
                 {file_type_expr},
-                c.Commnt,
-                c.FolderPath,
-                c.FileNameL,
+                {commnt_select},
+                {folder_select},
+                {file_select},
                 {tag_expr},
                 {playlist_expr}
             FROM djmdSongMyTag smt

@@ -186,6 +186,40 @@ class TestTagsBackend(unittest.TestCase):
         self.assertEqual(len(tracks_local), 1)
         self.assertEqual(tracks_local[0]["title"], "Baianá")
 
+    def test_fetch_tag_tracks_sorting(self):
+        # t2: Age of Love, Length=240, DJPlayCount=12, BPM=12600, FileNameL='02 Age of Love.aiff'
+        # t3: Consciousness, Length=248, DJPlayCount=20, BPM=12500, FileNameL='03 Consciousness.aiff'
+        
+        # Sort by duration / time
+        tracks_dur_desc = fetch_tag_tracks(self.engine, "tag_melodic", sort_by="duration", sort_order="desc")
+        self.assertEqual([t["title"] for t in tracks_dur_desc], ["Consciousness", "Age of Love"])
+
+        tracks_dur_asc = fetch_tag_tracks(self.engine, "tag_melodic", sort_by="duration", sort_order="asc")
+        self.assertEqual([t["title"] for t in tracks_dur_asc], ["Age of Love", "Consciousness"])
+
+        tracks_time_desc = fetch_tag_tracks(self.engine, "tag_melodic", sort_by="time", sort_order="desc")
+        self.assertEqual([t["title"] for t in tracks_time_desc], ["Consciousness", "Age of Love"])
+
+        tracks_time_asc = fetch_tag_tracks(self.engine, "tag_melodic", sort_by="time", sort_order="asc")
+        self.assertEqual([t["title"] for t in tracks_time_asc], ["Age of Love", "Consciousness"])
+
+        # Sort by play_count / plays
+        tracks_plays_desc = fetch_tag_tracks(self.engine, "tag_melodic", sort_by="play_count", sort_order="desc")
+        self.assertEqual([t["title"] for t in tracks_plays_desc], ["Consciousness", "Age of Love"])
+
+        tracks_plays_asc = fetch_tag_tracks(self.engine, "tag_melodic", sort_by="play_count", sort_order="asc")
+        self.assertEqual([t["title"] for t in tracks_plays_asc], ["Age of Love", "Consciousness"])
+
+        tracks_plays_alias = fetch_tag_tracks(self.engine, "tag_melodic", sort_by="plays", sort_order="desc")
+        self.assertEqual([t["title"] for t in tracks_plays_alias], ["Consciousness", "Age of Love"])
+
+        # Sort by filename / file_name
+        tracks_fn_desc = fetch_tag_tracks(self.engine, "tag_melodic", sort_by="filename", sort_order="desc")
+        self.assertEqual([t["title"] for t in tracks_fn_desc], ["Consciousness", "Age of Love"])
+
+        tracks_fn_asc = fetch_tag_tracks(self.engine, "tag_melodic", sort_by="filename", sort_order="asc")
+        self.assertEqual([t["title"] for t in tracks_fn_asc], ["Age of Love", "Consciousness"])
+
     def test_sort_tags_in_folder_asc(self):
         # Under Genre ('1'): Initially 'Melodic Techno' (Seq 1), 'Afro House' (Seq 2)
         count = sort_tags_in_folder(self.engine, "1", descending=False)
@@ -484,6 +518,54 @@ class TestTagsGUI(unittest.TestCase):
         self.assertEqual(sort_calls[0][0], "1")
         self.assertEqual(sort_calls[0][1], "Genre")
         self.assertFalse(sort_calls[0][2])
+
+    def test_tags_view_table_sort_by_time_and_plays(self):
+        # Insert a second track to test relative sorting
+        with self.engine.begin() as conn:
+            conn.exec_driver_sql("""
+                INSERT INTO djmdContent (ID, Title, SrcArtistName, BPM, Length, DJPlayCount, FileType, FileNameL, FolderPath)
+                VALUES ('t2', 'Zanzibar', 'ARTBAT', 12600, 300, 15, 1, 'Zanzibar.mp3', '/Music/Techno');
+            """)
+            conn.exec_driver_sql("""
+                INSERT INTO djmdSongMyTag (ID, MyTagID, ContentID, TrackNo, rb_local_deleted)
+                VALUES ('st2', 'tag_melodic', 't2', 2, 0);
+            """)
+
+        self.view.current_tag = {"id": "tag_melodic", "name": "Melodic Techno"}
+
+        # Sort by duration DESC (Zanzibar 300s, Hypercolour 210s)
+        self.view._on_table_sort_requested("duration", Qt.SortOrder.DescendingOrder)
+        self.assertEqual(self.view.current_sort_field, "duration")
+        self.assertEqual(self.view.current_sort_order, Qt.SortOrder.DescendingOrder)
+        if self.view.active_tracks_worker:
+            self.view.active_tracks_worker.wait(2000)
+        QApplication.processEvents()
+        self.assertEqual([t["title"] for t in self.view.records], ["Zanzibar", "Hypercolour"])
+
+        # Sort by duration ASC (Hypercolour 210s, Zanzibar 300s)
+        self.view._on_table_sort_requested("duration", Qt.SortOrder.AscendingOrder)
+        if self.view.active_tracks_worker:
+            self.view.active_tracks_worker.wait(2000)
+        QApplication.processEvents()
+        self.assertEqual([t["title"] for t in self.view.records], ["Hypercolour", "Zanzibar"])
+
+        # Sort by play_count DESC (Zanzibar 15 plays, Hypercolour 8 plays)
+        self.view._on_table_sort_requested("play_count", Qt.SortOrder.DescendingOrder)
+        self.assertEqual(self.view.current_sort_field, "play_count")
+        self.assertEqual(self.view.current_sort_order, Qt.SortOrder.DescendingOrder)
+        if self.view.active_tracks_worker:
+            self.view.active_tracks_worker.wait(2000)
+        QApplication.processEvents()
+        self.assertEqual([t["title"] for t in self.view.records], ["Zanzibar", "Hypercolour"])
+
+        # Sort by play_count ASC (Hypercolour 8 plays, Zanzibar 15 plays)
+        self.view._on_table_sort_requested("play_count", Qt.SortOrder.AscendingOrder)
+        self.assertEqual(self.view.current_sort_field, "play_count")
+        self.assertEqual(self.view.current_sort_order, Qt.SortOrder.AscendingOrder)
+        if self.view.active_tracks_worker:
+            self.view.active_tracks_worker.wait(2000)
+        QApplication.processEvents()
+        self.assertEqual([t["title"] for t in self.view.records], ["Hypercolour", "Zanzibar"])
 
 
 class TestTagDeduplication(unittest.TestCase):

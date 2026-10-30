@@ -507,7 +507,7 @@ def search_tracks(
                 search_condition = "AND (" + " OR ".join(search_parts) + ")"
 
             # Order clause
-            if sort_by == "play_count":
+            if sort_by in ("play_count", "plays"):
                 order_clause = f"{play_col} {order_dir}, c.Title ASC"
             elif sort_by == "artist":
                 order_clause = f"{artist_col_expr} {order_dir}, c.Title ASC"
@@ -650,7 +650,7 @@ def search_tracks(
                     fallback_purchased_clause = f"AND NOT {fb_purchased_sql} AND ({count_expr} >= 3)"
                     play_filter = ""
 
-            if sort_by == "play_count":
+            if sort_by in ("play_count", "plays"):
                 fallback_order = f"{count_expr} {order_dir}, Title ASC"
             elif sort_by == "title" and is_desc:
                 fallback_order = "Title DESC"

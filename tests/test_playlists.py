@@ -143,6 +143,21 @@ class TestPlaylistsBackend(unittest.TestCase):
         self.assertEqual(len(tracks), 1)
         self.assertEqual(tracks[0]["artist"], "Cloonee")
 
+    def test_fetch_playlist_tracks_sorting(self):
+        # t1 (Baianá): Length=180, DJPlayCount=5
+        # t2 (Sun Goes Down): Length=240, DJPlayCount=12
+        tracks_dur_desc = fetch_playlist_tracks(self.engine, "pl_afro", sort_by="duration", sort_order="desc")
+        self.assertEqual([t["title"] for t in tracks_dur_desc], ["Sun Goes Down", "Baianá"])
+
+        tracks_dur_asc = fetch_playlist_tracks(self.engine, "pl_afro", sort_by="duration", sort_order="asc")
+        self.assertEqual([t["title"] for t in tracks_dur_asc], ["Baianá", "Sun Goes Down"])
+
+        tracks_plays_desc = fetch_playlist_tracks(self.engine, "pl_afro", sort_by="play_count", sort_order="desc")
+        self.assertEqual([t["title"] for t in tracks_plays_desc], ["Sun Goes Down", "Baianá"])
+
+        tracks_plays_asc = fetch_playlist_tracks(self.engine, "pl_afro", sort_by="play_count", sort_order="asc")
+        self.assertEqual([t["title"] for t in tracks_plays_asc], ["Baianá", "Sun Goes Down"])
+
     def test_fetch_playlist_tracks_limit(self):
         tracks = fetch_playlist_tracks(self.engine, "pl_afro", limit=1)
         self.assertEqual(len(tracks), 1)
