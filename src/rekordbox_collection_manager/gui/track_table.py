@@ -2538,6 +2538,8 @@ class TracksTableWidget(QTableView):
         self.records = records
         self.staged_edits.clear()
         self._update_staged_ui()
+        if self.selectionModel():
+            self.selectionModel().clear()
         self._model.set_records(records)
         self._update_index_column_width()
 

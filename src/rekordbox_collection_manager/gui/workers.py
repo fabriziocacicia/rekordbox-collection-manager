@@ -1087,3 +1087,47 @@ class ExternalHistoryMergeWorker(QThread):
             if not self.isInterruptionRequested():
                 self.error.emit(str(e))
 
+
+class AnalyticsLoaderWorker(QThread):
+    """Worker to calculate Rekordbox collection and set analytics in the background."""
+
+    success = Signal(object)  # AnalyticsSnapshot
+    error = Signal(str)
+
+    def __init__(
+        self,
+        engine: Engine,
+        min_session_duration_sec: int = 1200,
+        min_session_tracks: int = 5,
+        transition_min_frequency: int = 2,
+        burnout_percentile: float = 80.0,
+        parent: Optional[Any] = None,
+    ):
+        super().__init__(parent)
+        self.engine = engine
+        self.min_session_duration_sec = min_session_duration_sec
+        self.min_session_tracks = min_session_tracks
+        self.transition_min_frequency = transition_min_frequency
+        self.burnout_percentile = burnout_percentile
+
+    def run(self) -> None:
+        try:
+            if self.isInterruptionRequested():
+                return
+            from rekordbox_collection_manager.analytics import compute_analytics
+
+            snapshot = compute_analytics(
+                engine=self.engine,
+                min_session_duration_sec=self.min_session_duration_sec,
+                min_session_tracks=self.min_session_tracks,
+                transition_min_frequency=self.transition_min_frequency,
+                burnout_percentile=self.burnout_percentile,
+            )
+            if self.isInterruptionRequested():
+                return
+            self.success.emit(snapshot)
+        except Exception as e:
+            if not self.isInterruptionRequested():
+                self.error.emit(str(e))
+
+

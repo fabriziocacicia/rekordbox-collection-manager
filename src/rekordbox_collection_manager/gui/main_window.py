@@ -37,6 +37,7 @@ from rekordbox_collection_manager.gui.assets import (
     get_database_pixmap,
     get_refresh_icon,
 )
+from rekordbox_collection_manager.gui.analytics_view import AnalyticsView
 from rekordbox_collection_manager.gui.history_view import HistoryView
 from rekordbox_collection_manager.gui.play_count_view import PlayCountView
 from rekordbox_collection_manager.gui.playlists_view import PlaylistsView
@@ -180,6 +181,11 @@ class MainWindow(QMainWindow):
             },
             {
                 "id": 6,
+                "icon": "📊",
+                "title": "Analytics",
+            },
+            {
+                "id": 7,
                 "icon": "ℹ️",
                 "title": "Collection Info",
             },
@@ -332,7 +338,8 @@ class MainWindow(QMainWindow):
         self.btn_history = self.nav_buttons[3]
         self.btn_play_count = self.nav_buttons[4]
         self.btn_replace_file = self.nav_buttons[5]
-        self.btn_info = self.nav_buttons[6]
+        self.btn_analytics = self.nav_buttons[6]
+        self.btn_info = self.nav_buttons[7]
 
         sidebar_layout.addStretch(1)
 
@@ -398,6 +405,14 @@ class MainWindow(QMainWindow):
         self.replace_file_view.open_history_session_requested.connect(self.open_history_session)
         self.stacked_widget.addWidget(self.replace_file_view)
 
+        self.analytics_view = AnalyticsView(self)
+        self.analytics_view.notify_status.connect(self._show_status_message)
+        self.analytics_view.open_history_session_requested.connect(self.open_history_session)
+        self.analytics_view.open_playlist_requested.connect(self.open_playlist)
+        self.analytics_view.open_tag_requested.connect(self.open_tag)
+        self.analytics_view.replace_file_requested.connect(self.open_replace_file_for_track)
+        self.stacked_widget.addWidget(self.analytics_view)
+
         self.tracks_view.replace_file_requested.connect(self.open_replace_file_for_track)
         self.history_view.replace_file_requested.connect(self.open_replace_file_for_track)
         self.play_count_view.replace_file_requested.connect(self.open_replace_file_for_track)
@@ -409,6 +424,7 @@ class MainWindow(QMainWindow):
         self.history_view.db_saved.connect(self._on_db_saved)
         self.play_count_view.db_saved.connect(self._on_db_saved)
         self.replace_file_view.db_saved.connect(self._on_db_saved)
+        self.analytics_view.db_saved.connect(self._on_db_saved)
 
         self.info_view = InfoView(self)
         self.stacked_widget.addWidget(self.info_view)
@@ -470,6 +486,10 @@ class MainWindow(QMainWindow):
             if page_id in self._dirty_views:
                 self.play_count_view.refresh(preserve_scroll=True)
                 self._dirty_views.discard(4)
+        elif page_id == 6 and hasattr(self, "analytics_view"):
+            if page_id in self._dirty_views:
+                self.analytics_view.refresh()
+                self._dirty_views.discard(6)
 
         self.stacked_widget.setCurrentIndex(page_id)
 
@@ -688,6 +708,7 @@ class MainWindow(QMainWindow):
         self.tags_view.set_engine(engine, db_path=path)
         self.play_count_view.set_engine(engine, db_path=path)
         self.replace_file_view.set_engine(engine, db_path=path)
+        self.analytics_view.set_engine(engine, db_path=path)
 
         active_hist = sum(1 for r in history_records if not r.get("is_deleted"))
         del_hist = sum(1 for r in history_records if r.get("is_deleted"))
@@ -864,7 +885,7 @@ class MainWindow(QMainWindow):
     def _on_db_saved(self) -> None:
         """Trigger background cloud sync after database modifications and refresh data across views."""
         curr_page = self.stacked_widget.currentIndex()
-        all_data_views = {0, 1, 2, 4}  # 0: Tracks, 1: Playlists, 2: Tags, 4: Play Counts
+        all_data_views = {0, 1, 2, 4, 6}  # 0: Tracks, 1: Playlists, 2: Tags, 4: Play Counts, 6: Analytics
         self._dirty_views.update(all_data_views - {curr_page})
 
         # Eagerly pre-refresh tracks view in background if it has no unsaved edits
