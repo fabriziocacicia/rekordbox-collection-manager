@@ -4,19 +4,21 @@ A high-performance macOS desktop application, event-driven background sync daemo
 
 ---
 
-## Architecture Overview
+## System Overview
+
+Rekordbox Collection Manager bridges local Pioneer/AlphaTheta SQLite/SQLCipher databases (`master.db` and `exportLibrary.db`) on macOS with an offline-first SwiftUI iOS companion app via an event-sourced Turso (`libSQL`) cloud pipeline, alongside PySide6 desktop tooling, collection analytics, lossless audio replacement, backup/restore automation, and release scripts.
 
 ```mermaid
 flowchart TD
     subgraph Mobile ["📱 iOS Device (Offline-First)"]
         iOS["Rekordbox Companion App (SwiftUI)"]
-        LocalCache[("Local SQLite Cache\n(0ms Search & Edits)")]
+        LocalCache[("Local SQLite Cache\n(rekordbox_companion.db)")]
         iOS <--> LocalCache
     end
 
     subgraph Cloud ["☁️ Turso Cloud Database (libSQL)"]
-        TursoDB[("Turso Cloud DB\n(Tracks, Playlists, Tags)")]
-        ChangelogQueue[("changelog_events Queue\n(PENDING / PROCESSED)")]
+        TursoDB[("Turso Cloud DB\n(Tracks, Playlists, Tags, History)")]
+        ChangelogQueue[("changelog_events Queue\n(PENDING / PROCESSED / FAILED)")]
     end
 
     subgraph Mac ["💻 macOS System"]
@@ -24,19 +26,43 @@ flowchart TD
         RB["Rekordbox (macOS)"]
         MasterDB[("master.db\n~/Library/Pioneer/rekordbox/")]
         Backups["~/Music/rekordbox/Backups/\n(Timestamped Safety Snapshots)"]
-        DesktopGUI["Rekordbox Collection Manager\n(PySide6 Desktop App)"]
+        DesktopGUI["Rekordbox Collection Manager\n(PySide6 Desktop App & CLIs)"]
     end
 
-    iOS -- "HTTP Pipeline (Batch Events)" --> ChangelogQueue
-    TursoDB -- "Fetch Snapshots" --> iOS
+    iOS -- "HTTP /v2/pipeline (Batch Events)" --> ChangelogQueue
+    TursoDB -- "HTTP /v2/pipeline (Pull Snapshots)" --> iOS
 
-    RB -. "App Terminated Event\n(Zero Polling)" .-> Daemon
+    RB -. "NSWorkspace Lifecycle\n+ 30s Idle Poll" .-> Daemon
     Daemon -- "1. Auto-Backup" --> Backups
-    Daemon -- "2. Ingest Pending Events" --> MasterDB
-    Daemon -- "3. Upload Fresh Snapshot" --> TursoDB
+    Daemon -- "2. Apply Pending Events" --> MasterDB
+    Daemon -- "3. Export Fresh Snapshot" --> TursoDB
 
     DesktopGUI <--> MasterDB
 ```
+
+## Subdirectories & System Boundaries
+- `src`: [src](./src/README.md) - Source root (`module-root = "src"` in `pyproject.toml`) housing the core Python library, CLI entry points, macOS `launchd` sync daemon, analytics engine, backup/restore, Turso sync ([`rekordbox_collection_manager`](./src/rekordbox_collection_manager/README.md)), PySide6 desktop GUI ([`gui`](./src/rekordbox_collection_manager/gui/README.md)), and custom analytics chart widgets ([`analytics_widgets`](./src/rekordbox_collection_manager/gui/analytics_widgets/README.md)).
+- `ios`: [ios](./ios/README.md) - SwiftUI iOS companion subtree containing the Xcode project container ([`RekordboxCompanion`](./ios/RekordboxCompanion/README.md)) and single application target (`iOS 17.0`, `Swift 5.0`) with Turso config, domain models, SQLite/HTTP sync services, and SwiftUI views.
+- `scripts`: [scripts](./scripts/README.md) - Operational bash/Python/C utilities for macOS Rekordbox backup and restore (`backup_rekordbox_mac.sh`, `restore_rekordbox_mac.sh`), native `.app` bundle compilation (`build_app.sh`, `launcher.c`), and desktop/iOS SemVer release management (`desktop_version.py`, `ios_version.py`).
+- Non-contract directories: `tests/` (pytest test suite) and `assets/` (application icon assets: `icon.icns`, `icon.png`, `icon.svg`).
+
+## Global Invariants
+- **Rekordbox Process Mutual Exclusion**: Database mutations, backups, restores, and Turso syncs abort whenever Pioneer Rekordbox is running (`[src/rekordbox_collection_manager/utils.py:is_rekordbox_running]`, `[src/rekordbox_collection_manager/utils.py:ensure_rekordbox_not_running]`, `[src/rekordbox_collection_manager/backup_restore.py:create_database_backup]`, `[src/rekordbox_collection_manager/backup_restore.py:perform_restore]`, `[src/rekordbox_collection_manager/turso_sync.py:run_sync_cycle]`, `[src/rekordbox_collection_manager/daemon.py:RekordboxAppObserver]`, `[scripts/backup_rekordbox_mac.sh:pgrep]`, `[scripts/restore_rekordbox_mac.sh:SKIP_PROCESS_CHECK]`) unless explicitly bypassed (`force=True` / `--force` or `SKIP_PROCESS_CHECK=1`). The desktop GUI enforces this with a `3000ms` `safety_timer` across views (`[src/rekordbox_collection_manager/gui/main_window.py:MainWindow]`).
+- **SQLite Lock Separation & Serialized Cloud Sync**: `[src/rekordbox_collection_manager/turso_sync.py:export_collection_to_turso]` closes the local SQLite connection prior to sending HTTP `/v2/pipeline` batches (`100`–`300` statements), and `[src/rekordbox_collection_manager/turso_sync.py:apply_changelog_events]` updates remote `changelog_events` (`'PROCESSED'`/`'FAILED'`) only after releasing the SQLite write lock. On iOS, `[ios/RekordboxCompanion/RekordboxCompanion/Services/AppState.swift:AppState.sync()]` is `@MainActor`-isolated, guards `!isSyncing`, and runs `pushPendingEvents -> pullLatestCollection -> pullEventStatuses -> loadFromCache` sequentially against `[ios/RekordboxCompanion/RekordboxCompanion/Services/LocalDatabase.swift:LocalDatabase.shared]`.
+- **Streaming Track Exclusion & Play-Count Floor**: Streaming tracks (`[src/rekordbox_collection_manager/utils.py:STREAMING_FILE_TYPES]`, `[src/rekordbox_collection_manager/utils.py:build_exclude_streaming_clause]`, `[ios/RekordboxCompanion/RekordboxCompanion/Models/Track.swift:Track.isStreaming]`, `[ios/RekordboxCompanion/RekordboxCompanion/Services/LocalDatabase.swift:pruneStreamingTracks()]`) are excluded across desktop analytics/search/sync and iOS track/playlist/live-set views; play-count mutations on both platforms clamp `DJPlayCount >= 0` (`[src/rekordbox_collection_manager/edit_play_count.py:update_track_play_count]`, `[src/rekordbox_collection_manager/rename_history.py:soft_delete_history_session]`, `[ios/RekordboxCompanion/RekordboxCompanion/Services/AppState.swift:AppState.adjustPlayCount(track:delta:)]`, `[ios/RekordboxCompanion/RekordboxCompanion/Services/LocalDatabase.swift:updatePlayCountLocally(trackId:newCount:)]`).
+- **Destructive Action & Unsaved-Edit Safeguards**: Both Python (`[src/rekordbox_collection_manager/backup_restore.py:perform_restore]`) and shell (`[scripts/restore_rekordbox_mac.sh:SAFETY_BACKUP_DIR]`) restores create a pre-restore safety snapshot before overwriting live Rekordbox directories; `[src/rekordbox_collection_manager/replace_file.py:replace_track_audio_file]` requires an AIFF target and rolls back file moves on DB failure; GUI navigation invokes `confirm_unsaved_changes()` before discarding staged edits (`[src/rekordbox_collection_manager/gui/tracks_view.py:TracksView.confirm_unsaved_changes]`, `[src/rekordbox_collection_manager/gui/track_table.py:TracksTableWidget.confirm_unsaved_changes]`).
+- **Signed/Unsigned 32-bit MyTag & Smart Playlist Boundaries**: Desktop MyTag and smartlist queries resolve signed/unsigned 32-bit tag IDs via `[src/rekordbox_collection_manager/utils.py:resolve_tag_matching_ids]` and `[src/rekordbox_collection_manager/playlists.py:parse_smartlist_to_sql]`; iOS treats smart playlists (`[ios/RekordboxCompanion/RekordboxCompanion/Models/Playlist.swift:Playlist.isSmart]` where `attribute == 4`) as read-only (`[ios/RekordboxCompanion/RekordboxCompanion/Views/PlaylistDetailView.swift:PlaylistDetailView.body]`) and scopes MyTag category browsing/editing to root `Genre` and `Style` folders (`[ios/RekordboxCompanion/RekordboxCompanion/Views/TagsView.swift:TagsView.categoryFolders]`, `[ios/RekordboxCompanion/RekordboxCompanion/Views/TrackDetailSheet.swift:TrackDetailSheet.categoryFolders]`).
+- **Release Versioning Synchronization**: Desktop SemVer (`pyproject.toml` and `uv.lock`) is updated atomically by `[scripts/desktop_version.py:update_pyproject]`/`[scripts/desktop_version.py:update_uv_lock]` and read by `[src/rekordbox_collection_manager/__init__.py:_get_version]` and `[scripts/build_app.sh:APP_VERSION]`; iOS `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` in `project.pbxproj` are updated atomically by `[scripts/ios_version.py:update_pbxproj]`.
+
+## Global Side Effects
+- **Rekordbox Local Databases**: Reads and mutates SQLCipher/SQLite `master.db` (`~/Library/Pioneer/rekordbox/`) and DeviceSQL `exportLibrary.db` across `djmdContent`, `djmdPlaylist`, `djmdSongPlaylist`, `djmdMyTag`, `djmdSongMyTag`, `djmdHistory`, `djmdSongHistory`, `djmdCue`, `djmdArtist`/`djmdAlbum`/`djmdGenre`/`djmdLabel`, `agentRegistry`, and legacy `content`/`history`/`songHistory` tables (`[src/rekordbox_collection_manager/utils.py:open_database]`).
+- **Turso Cloud Database (`libSQL`)**: Executes HTTPS `POST` requests against `{url}/v2/pipeline` from macOS (`[src/rekordbox_collection_manager/turso_sync.py:TursoHttpClient]`, managing 7 tables and 9 indexes) and iOS (`[ios/RekordboxCompanion/RekordboxCompanion/Services/TursoSyncService.swift:TursoSyncService.executePipeline(requests:)]`), reading credentials from `.env`/environment on macOS and `[ios/RekordboxCompanion/RekordboxCompanion/Config/TursoConfig.swift:TursoConfig]`/`UserDefaults.standard` on iOS.
+- **iOS Local Persistence**: Creates and mutates SQLite `rekordbox_companion.db` across 9 tables and 3 indexes in `.documentDirectory` (`[ios/RekordboxCompanion/RekordboxCompanion/Services/LocalDatabase.swift:openDatabase()]`) alongside `UserDefaults.standard` keys `"turso_database_url"` and `"turso_auth_token"`.
+- **macOS Filesystem, Backups, Artwork & OS Integrations**: Creates/restores backup trees under `~/Music/rekordbox/Backups/`, removes stale `-wal`/`-shm` files on restore, moves/renames/Finder-trashes audio files (`osascript`), writes `PIONEER/Artwork` JPEGs and `~/.cache/rekordbox-collection-manager/artwork_cache`, persists `~/.config/rekordbox-collection-manager/sync_state.json`, writes `.m3u8`/XML exports, manages the `launchd` service (`~/Library/LaunchAgents/...` via `launchctl`), compiles/signs `dist/Rekordbox Collection Manager.app`, and mutates `pyproject.toml`/`uv.lock`/`project.pbxproj` plus git commits/tags when release scripts are run with `--commit`/`--tag`.
+
+## System Verification
+- Run: `uv run pytest`
+- Optional iOS build verification (no XCTest target exists in `RekordboxCompanion.xcodeproj`): `xcodebuild -project ios/RekordboxCompanion/RekordboxCompanion.xcodeproj -scheme RekordboxCompanion build`
 
 ---
 
