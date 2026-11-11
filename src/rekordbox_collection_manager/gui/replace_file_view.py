@@ -1632,6 +1632,14 @@ class ReplaceFileView(QWidget):
 
     def cleanup(self) -> None:
         """Stop background replacement workers and timers cleanly."""
+        for timer_attr in (
+            "mode1_search_timer",
+            "merge_src_search_timer",
+            "merge_tgt_search_timer",
+        ):
+            timer = getattr(self, timer_attr, None)
+            if timer:
+                timer.stop()
         for attr in (
             "search_worker",
             "inspect_worker",

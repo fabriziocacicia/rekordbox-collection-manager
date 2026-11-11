@@ -46,6 +46,32 @@ class TestRestoreDialog(unittest.TestCase):
             (b1 / "Pioneer_Library").mkdir(parents=True)
             (b1 / "Pioneer_Library" / "master.db").write_text("DB1")
 
+            with patch("rekordbox_collection_manager.gui.restore_dialog.get_default_backup_dir", return_value=root), \
+                 patch("rekordbox_collection_manager.gui.restore_dialog.is_rekordbox_running", return_value=True):
+                dlg = RestoreDialog()
+                self.assertFalse(dlg.btn_restore.isEnabled())
+                self.assertIn("running", dlg.safety_chip.text().lower())
+
+    def test_restore_clicked_aborts_if_rekordbox_running_at_click_time(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            b1 = root / "rekordbox_mac_backup_20260901_100000"
+            (b1 / "Pioneer_Library").mkdir(parents=True)
+            (b1 / "Pioneer_Library" / "master.db").write_text("DB1")
+
+            with patch("rekordbox_collection_manager.gui.restore_dialog.get_default_backup_dir", return_value=root), \
+                 patch("rekordbox_collection_manager.gui.restore_dialog.is_rekordbox_running", return_value=False):
+                dlg = RestoreDialog()
+                self.assertTrue(dlg.btn_restore.isEnabled())
+
+            with patch("rekordbox_collection_manager.gui.restore_dialog.is_rekordbox_running", return_value=True), \
+                 patch("PySide6.QtWidgets.QMessageBox.warning") as mock_warn, \
+                 patch("rekordbox_collection_manager.gui.restore_dialog.RestoreWorker") as mock_worker:
+                dlg._on_restore_clicked()
+                mock_warn.assert_called_once()
+                mock_worker.assert_not_called()
+                self.assertFalse(dlg.btn_restore.isEnabled())
+
     def test_main_window_menu_bar(self):
         from rekordbox_collection_manager.gui.main_window import MainWindow
 

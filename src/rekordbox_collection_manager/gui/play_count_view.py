@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 )
 from sqlalchemy.engine import Engine
 
+from rekordbox_collection_manager.edit_play_count import batch_update_track_play_counts
 from rekordbox_collection_manager.gui.theme import (
     COLOR_AMBER,
     COLOR_AMBER_BG,
@@ -574,6 +575,16 @@ class PlayCountView(QWidget):
                 if track_id:
                     self._apply_track_delta(track_id, delta)
 
+    def _discard_staged_edits(self) -> None:
+        """Clear all staged play count edits and refresh UI without prompting."""
+        self.staged_edits.clear()
+        if self.current_sort_col is not None:
+            reverse = (self.current_sort_order == Qt.SortOrder.DescendingOrder)
+            self.records.sort(key=self._record_sort_key, reverse=reverse)
+        self._populate_table()
+        self._update_status_bar()
+        self.notify_status.emit("Staged play count changes discarded.")
+
     def _on_discard_changes(self) -> None:
         """Discard all staged edits and restore original values."""
         staged_count = len(self.staged_edits)
@@ -589,13 +600,59 @@ class PlayCountView(QWidget):
         if res != QMessageBox.StandardButton.Yes:
             return
 
+        self._discard_staged_edits()
+
+    def _build_staged_updates(self) -> List[Dict[str, Any]]:
+        """Build update payloads from staged play count edits."""
+        return [
+            {"id": item["record"]["id"], "play_count": item["new_count"]}
+            for item in self.staged_edits.values()
+        ]
+
+    def _finalize_save_success(self, updated_count: int) -> None:
+        """Apply committed play counts to local records and clear staged state."""
+        for track_id, item in self.staged_edits.items():
+            new_count = item["new_count"]
+            item["record"]["play_count"] = new_count
+            for r in self.records:
+                if str(r["id"]) == track_id:
+                    r["play_count"] = new_count
+
         self.staged_edits.clear()
         if self.current_sort_col is not None:
             reverse = (self.current_sort_order == Qt.SortOrder.DescendingOrder)
             self.records.sort(key=self._record_sort_key, reverse=reverse)
         self._populate_table()
         self._update_status_bar()
-        self.notify_status.emit("Staged play count changes discarded.")
+        self.db_saved.emit()
+        self.notify_status.emit(f"✅ Successfully saved play count updates for {updated_count} tracks.")
+
+    def _save_staged_edits_sync(self) -> bool:
+        """Commit staged play count edits synchronously when leaving or closing."""
+        if not self.engine or not self.staged_edits:
+            return True
+        if is_rekordbox_running():
+            QMessageBox.warning(
+                self,
+                "Rekordbox is Running",
+                "⚠️ Rekordbox is currently running!\n\n"
+                "Saving changes now may cause database locking or corruption.\n"
+                "Please close Rekordbox (Cmd + Q) and try again.",
+                QMessageBox.StandardButton.Ok,
+            )
+            return False
+
+        updates = self._build_staged_updates()
+        try:
+            updated_count = batch_update_track_play_counts(self.engine, updates)
+        except Exception as e:
+            self._update_status_bar()
+            self.notify_status.emit(f"❌ Save failed: {e}")
+            QMessageBox.critical(self, "Save Failed", f"Database error while saving changes:\n{e}")
+            return False
+
+        self._finalize_save_success(updated_count)
+        return True
 
     def _on_save_all_changes(self) -> None:
         """Save all staged play count modifications in a single atomic transaction."""
@@ -624,10 +681,7 @@ class PlayCountView(QWidget):
         if res != QMessageBox.StandardButton.Save:
             return
 
-        updates = [
-            {"id": item["record"]["id"], "play_count": item["new_count"]}
-            for item in self.staged_edits.values()
-        ]
+        updates = self._build_staged_updates()
 
         self.save_btn.setEnabled(False)
         self.discard_btn.setEnabled(False)
@@ -641,21 +695,7 @@ class PlayCountView(QWidget):
         worker.start()
 
     def _on_save_success(self, updated_count: int) -> None:
-        for track_id, item in self.staged_edits.items():
-            new_count = item["new_count"]
-            item["record"]["play_count"] = new_count
-            for r in self.records:
-                if str(r["id"]) == track_id:
-                    r["play_count"] = new_count
-
-        self.staged_edits.clear()
-        if self.current_sort_col is not None:
-            reverse = (self.current_sort_order == Qt.SortOrder.DescendingOrder)
-            self.records.sort(key=self._record_sort_key, reverse=reverse)
-        self._populate_table()
-        self._update_status_bar()
-        self.db_saved.emit()
-        self.notify_status.emit(f"✅ Successfully saved play count updates for {updated_count} tracks.")
+        self._finalize_save_success(updated_count)
         QMessageBox.information(
             self,
             "Changes Saved",
@@ -775,10 +815,9 @@ class PlayCountView(QWidget):
                 | QMessageBox.StandardButton.Cancel,
             )
             if reply == QMessageBox.StandardButton.Save:
-                self._on_save_clicked()
-                return len(self.staged_edits) == 0
+                return self._save_staged_edits_sync()
             elif reply == QMessageBox.StandardButton.Discard:
-                self._on_discard_clicked()
+                self._discard_staged_edits()
                 return True
             else:
                 return False

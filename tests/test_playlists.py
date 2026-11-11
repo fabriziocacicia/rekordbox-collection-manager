@@ -424,6 +424,21 @@ class TestPlaylistsGUI(unittest.TestCase):
                 win.safety_timer.stop()
                 win.close()
 
+    def test_load_playlist_prompts_when_detail_view_has_unsaved_changes(self):
+        self.view.current_playlist = {"id": "pl_afro", "name": "Afro House", "attribute": 0}
+        self.view.stack.setCurrentIndex(1)
+        with patch.object(self.view.detail_view, "_confirm_unsaved_changes", return_value=False) as mock_confirm:
+            self.view.load_playlist({"id": "pl_melodic", "name": "Melodic House", "attribute": 0})
+            mock_confirm.assert_called_once()
+        self.assertEqual(self.view.current_playlist["id"], "pl_afro")
+        self.assertEqual(self.view.stack.currentIndex(), 1)
+
+    def test_playlists_view_cleanup_stops_search_timer(self):
+        self.view.search_debounce_timer.start(5000)
+        self.assertTrue(self.view.search_debounce_timer.isActive())
+        self.view.cleanup()
+        self.assertFalse(self.view.search_debounce_timer.isActive())
+
 
 class TestCreatePlaylist(unittest.TestCase):
     """Test suite for creating playlists and folders in Rekordbox database and via GUI."""

@@ -567,6 +567,21 @@ class TestTagsGUI(unittest.TestCase):
         QApplication.processEvents()
         self.assertEqual([t["title"] for t in self.view.records], ["Hypercolour", "Zanzibar"])
 
+    def test_load_tag_prompts_when_detail_view_has_unsaved_changes(self):
+        self.view.current_tag = {"id": "tag_melodic", "name": "Melodic Techno", "attribute": 0}
+        self.view.stack.setCurrentIndex(1)
+        with patch.object(self.view.detail_view, "_confirm_unsaved_changes", return_value=False) as mock_confirm:
+            self.view.load_tag({"id": "tag_peak", "name": "Peak Time", "attribute": 0})
+            mock_confirm.assert_called_once()
+        self.assertEqual(self.view.current_tag["id"], "tag_melodic")
+        self.assertEqual(self.view.stack.currentIndex(), 1)
+
+    def test_tags_view_cleanup_stops_search_timer(self):
+        self.view.search_debounce_timer.start(5000)
+        self.assertTrue(self.view.search_debounce_timer.isActive())
+        self.view.cleanup()
+        self.assertFalse(self.view.search_debounce_timer.isActive())
+
 
 class TestTagDeduplication(unittest.TestCase):
     """Test suite ensuring tags and playlists are never duplicated in display, queries, or database."""

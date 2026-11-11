@@ -380,6 +380,15 @@ class RestoreDialog(QDialog):
         if not self.selected_backup:
             return
 
+        if is_rekordbox_running():
+            self._check_rekordbox_safety()
+            QMessageBox.warning(
+                self,
+                "Rekordbox is Running",
+                "Please close Rekordbox (Cmd + Q) completely before restoring a collection backup.",
+            )
+            return
+
         b = self.selected_backup
 
         # Confirmation prompt

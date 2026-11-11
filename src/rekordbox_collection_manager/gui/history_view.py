@@ -68,6 +68,7 @@ from rekordbox_collection_manager.gui.workers import (
     HistoryRealignWorker,
     HistoryRestoreWorker,
 )
+from rekordbox_collection_manager.rename_history import batch_update_history_records
 from rekordbox_collection_manager.utils import (
     MONTH_INT_TO_NAME,
     compose_history_name,
@@ -998,11 +999,27 @@ class HistoryView(QWidget):
         self.detail_view.select_track_at_index(idx)
 
     def confirm_unsaved_changes(self) -> bool:
-        """Prompt user if there are unsaved changes in track detail view or session detail view."""
+        """Prompt user if there are unsaved changes in track detail view, session detail view, or table."""
         if self.stack.currentIndex() == 2:
             return self.track_detail_view._confirm_unsaved_changes()
         elif self.stack.currentIndex() == 1:
             return self.detail_view.confirm_unsaved_changes()
+        elif self.staged_edits:
+            reply = QMessageBox.question(
+                self,
+                "Unsaved Modifications",
+                f"You have {len(self.staged_edits)} unsaved history session modifications. Do you want to save them before leaving?",
+                QMessageBox.StandardButton.Save
+                | QMessageBox.StandardButton.Discard
+                | QMessageBox.StandardButton.Cancel,
+            )
+            if reply == QMessageBox.StandardButton.Save:
+                return self._save_staged_edits_sync()
+            elif reply == QMessageBox.StandardButton.Discard:
+                self._discard_staged_edits()
+                return True
+            else:
+                return False
         return True
 
     def reset_to_list(self) -> None:
@@ -1206,6 +1223,62 @@ class HistoryView(QWidget):
         self._update_status_bar()
         self._update_row_height(row_idx)
 
+    def _build_staged_updates(self) -> List[Dict[str, Any]]:
+        """Build update payloads from staged session edits."""
+        return [
+            {
+                "record": item["record"],
+                "new_name": item["name"],
+                "new_date": item["date"],
+            }
+            for item in self.staged_edits.values()
+        ]
+
+    def _discard_staged_edits(self) -> None:
+        """Clear all staged edits and refresh UI without confirmation."""
+        self.staged_edits.clear()
+        self._rebuild_all_available_djs()
+        self._rebuild_all_available_locations()
+        self._refresh_table()
+        self._update_status_bar()
+        self.notify_status.emit("Staged changes discarded.")
+
+    def _save_staged_edits_sync(self) -> bool:
+        """Commit staged history edits synchronously before navigating or closing."""
+        if not self.engine or not self.staged_edits:
+            return True
+        if is_rekordbox_running():
+            QMessageBox.warning(
+                self,
+                "Rekordbox is Running",
+                "⚠️ Rekordbox is currently running!\n\n"
+                "Saving changes now may cause database locking or corruption.\n"
+                "Please close Rekordbox (Cmd + Q) and try again.",
+                QMessageBox.StandardButton.Cancel,
+            )
+            return False
+
+        updates = self._build_staged_updates()
+        try:
+            batch_update_history_records(self.engine, updates, auto_realign=True)
+        except Exception as e:
+            self.notify_status.emit(f"❌ Save failed: {e}")
+            QMessageBox.critical(self, "Save Failed", f"Database error while saving changes:\n{e}")
+            return False
+
+        for item in updates:
+            item["record"]["name"] = item["new_name"]
+            if item.get("new_date") is not None:
+                item["record"]["date"] = item["new_date"]
+
+        self.staged_edits.clear()
+        self._refresh_table()
+        self._update_folder_tree()
+        self._update_status_bar()
+        self.request_reload.emit()
+        self.db_saved.emit()
+        return True
+
     def _on_discard_changes(self) -> None:
         """Discard all staged edits."""
         if not self.staged_edits:
@@ -1217,11 +1290,7 @@ class HistoryView(QWidget):
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if res == QMessageBox.StandardButton.Yes:
-            self.staged_edits.clear()
-            self._rebuild_all_available_djs()
-            self._rebuild_all_available_locations()
-            self._refresh_table()
-            self.notify_status.emit("Staged changes discarded.")
+            self._discard_staged_edits()
 
     def _on_realign_chronology(self) -> None:
         """Trigger database realignment."""
@@ -1312,13 +1381,7 @@ class HistoryView(QWidget):
         if res != QMessageBox.StandardButton.Save:
             return
 
-        updates = []
-        for item in self.staged_edits.values():
-            updates.append({
-                "record": item["record"],
-                "new_name": item["name"],
-                "new_date": item["date"],
-            })
+        updates = self._build_staged_updates()
 
         self.save_btn.setEnabled(False)
         self.discard_btn.setEnabled(False)
@@ -1732,4 +1795,6 @@ class HistoryView(QWidget):
                 setattr(self, attr, None)
         if hasattr(self, "detail_view") and hasattr(self.detail_view, "cleanup"):
             self.detail_view.cleanup()
+        if hasattr(self, "track_detail_view") and hasattr(self.track_detail_view, "cleanup"):
+            self.track_detail_view.cleanup()
 

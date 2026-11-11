@@ -1007,6 +1007,17 @@ class TestReplaceFileGUI(unittest.TestCase):
             mock_warn.assert_called_once()
             self.assertIsNone(self.view.replacement_file_path)
 
+    def test_replace_file_view_cleanup_stops_all_search_timers(self):
+        for attr in ("mode1_search_timer", "merge_src_search_timer", "merge_tgt_search_timer"):
+            timer = getattr(self.view, attr)
+            timer.start(5000)
+            self.assertTrue(timer.isActive())
+
+        self.view.cleanup()
+
+        for attr in ("mode1_search_timer", "merge_src_search_timer", "merge_tgt_search_timer"):
+            self.assertFalse(getattr(self.view, attr).isActive())
+
 
 if __name__ == "__main__":
     unittest.main()

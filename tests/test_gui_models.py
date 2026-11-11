@@ -238,6 +238,36 @@ class TestHistoryView(unittest.TestCase):
         self.assertEqual(self.view.table.rowCount(), 1)
         self.assertEqual(self.view.table.item(0, 1).text(), "2026-09-15")
 
+    def test_confirm_unsaved_changes_handles_table_staged_edits(self):
+        loc_item = self.view.table.item(0, 3)
+        rec_id = loc_item.data(Qt.ItemDataRole.UserRole)
+        loc_item.setText("Circoloco")
+        self.view._on_cell_changed(0, 3)
+        self.assertEqual(len(self.view.staged_edits), 1)
+
+        with patch("PySide6.QtWidgets.QMessageBox.question", return_value=QMessageBox.StandardButton.Cancel):
+            self.assertFalse(self.view.confirm_unsaved_changes())
+        self.assertEqual(len(self.view.staged_edits), 1)
+
+        with patch("PySide6.QtWidgets.QMessageBox.question", return_value=QMessageBox.StandardButton.Discard):
+            self.assertTrue(self.view.confirm_unsaved_changes())
+        self.assertEqual(len(self.view.staged_edits), 0)
+
+        loc_item = self.view.table.item(0, 3)
+        rec_id = loc_item.data(Qt.ItemDataRole.UserRole)
+        loc_item.setText("DC10")
+        self.view._on_cell_changed(0, 3)
+        with patch("rekordbox_collection_manager.gui.history_view.is_rekordbox_running", return_value=False), \
+             patch("PySide6.QtWidgets.QMessageBox.question", return_value=QMessageBox.StandardButton.Save):
+            self.assertTrue(self.view.confirm_unsaved_changes())
+        self.assertEqual(len(self.view.staged_edits), 0)
+        with self.engine.connect() as conn:
+            saved_name = conn.exec_driver_sql(
+                "SELECT Name FROM djmdHistory WHERE ID = :id",
+                {"id": rec_id},
+            ).fetchone()[0]
+        self.assertIn("DC10", saved_name)
+
 
 class TestPlayCountView(unittest.TestCase):
     def setUp(self):
@@ -399,6 +429,26 @@ class TestPlayCountView(unittest.TestCase):
         self.assertEqual(self.view.table.item(0, 1).text(), "One More Time")
         self.assertEqual(self.view.table.item(1, 0).text(), "Clean")
         self.assertEqual(self.view.table.item(1, 1).text(), "Titanium")
+
+    def test_confirm_unsaved_changes_save_discard_cancel(self):
+        self.view._apply_track_delta("1", 2)
+        with patch("PySide6.QtWidgets.QMessageBox.question", return_value=QMessageBox.StandardButton.Cancel):
+            self.assertFalse(self.view.confirm_unsaved_changes())
+        self.assertIn("1", self.view.staged_edits)
+
+        with patch("PySide6.QtWidgets.QMessageBox.question", return_value=QMessageBox.StandardButton.Discard):
+            self.assertTrue(self.view.confirm_unsaved_changes())
+        self.assertEqual(len(self.view.staged_edits), 0)
+        self.assertEqual(self.view.table.item(self._find_row_by_track_id("1"), 3).text(), "5")
+
+        self.view._apply_track_delta("1", 3)
+        with patch("rekordbox_collection_manager.gui.play_count_view.is_rekordbox_running", return_value=False), \
+             patch("PySide6.QtWidgets.QMessageBox.question", return_value=QMessageBox.StandardButton.Save):
+            self.assertTrue(self.view.confirm_unsaved_changes())
+        self.assertEqual(len(self.view.staged_edits), 0)
+        with self.engine.connect() as conn:
+            val = conn.exec_driver_sql("SELECT DJPlayCount FROM djmdContent WHERE ID = '1'").fetchone()[0]
+        self.assertEqual(val, 8)
 
 
 

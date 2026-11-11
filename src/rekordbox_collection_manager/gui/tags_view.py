@@ -495,16 +495,12 @@ class TagsView(QWidget):
             return
         if node.get("attribute") == 1:
             # Clicked a category folder: toggle expand/collapse
-            if self.table.has_staged_changes():
-                if not self.table.confirm_unsaved_changes():
-                    return
+            if not self.confirm_unsaved_changes():
+                return
             item.setExpanded(not item.isExpanded())
             self._show_folder_summary(node)
         else:
             if not self.current_tag or self.current_tag.get("id") != node.get("id"):
-                if self.table.has_staged_changes():
-                    if not self.table.confirm_unsaved_changes():
-                        return
                 self.load_tag(node)
 
     def _on_tree_current_item_changed(
@@ -514,13 +510,12 @@ class TagsView(QWidget):
             return
         node = current.data(0, Qt.ItemDataRole.UserRole)
         if node and node.get("attribute") != 1:
-            if self.table.has_staged_changes():
-                if not self.table.confirm_unsaved_changes():
-                    if previous:
-                        self.tree.blockSignals(True)
-                        self.tree.setCurrentItem(previous)
-                        self.tree.blockSignals(False)
-                    return
+            if not self.confirm_unsaved_changes():
+                if previous:
+                    self.tree.blockSignals(True)
+                    self.tree.setCurrentItem(previous)
+                    self.tree.blockSignals(False)
+                return
             self.load_tag(node)
 
     def _show_folder_summary(self, folder_node: Dict[str, Any]) -> None:
@@ -765,9 +760,8 @@ class TagsView(QWidget):
         """Switch to and load the specified tag's tracks."""
         if not force_reload and self.current_tag and self.current_tag.get("id") == tag_dict.get("id"):
             return
-        if self.table.has_staged_changes():
-            if not self.table.confirm_unsaved_changes():
-                return
+        if not self.confirm_unsaved_changes():
+            return
         self.current_tag = tag_dict
         name = tag_dict.get("name", "Untitled")
 
@@ -1044,13 +1038,23 @@ class TagsView(QWidget):
                     break
 
         if target_item and target_node:
+            same_target = bool(
+                not force_reload
+                and self.current_tag
+                and str(self.current_tag.get("id")) == str(target_node.get("id"))
+            )
+            if not same_target and not self.confirm_unsaved_changes():
+                return False
+
             # Expand all parent categories
             p = target_item.parent()
             while p:
                 p.setExpanded(True)
                 p = p.parent()
 
+            self.tree.blockSignals(True)
             self.tree.setCurrentItem(target_item)
+            self.tree.blockSignals(False)
             self.load_tag(target_node, force_reload=force_reload)
             return True
 
@@ -1068,8 +1072,8 @@ class TagsView(QWidget):
 
     def cleanup(self) -> None:
         """Stop background tag workers and timers cleanly."""
-        if hasattr(self, "track_search_debounce_timer"):
-            self.track_search_debounce_timer.stop()
+        if hasattr(self, "search_debounce_timer"):
+            self.search_debounce_timer.stop()
         for attr in ("active_loader_worker", "active_tracks_worker", "active_sort_worker", "active_worker"):
             w = getattr(self, attr, None)
             if w:
