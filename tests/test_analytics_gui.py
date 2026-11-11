@@ -1,9 +1,13 @@
 """Tests for Analytics GUI, AnalyticsView, and customized visualization widgets."""
 
+import os
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
 from PySide6.QtCore import QPointF, Qt
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
@@ -222,6 +226,28 @@ class TestAnalyticsGUI(unittest.TestCase):
         self.assertEqual(len(view.table.records), 1)
         view._apply_table_search("")
         self.assertEqual(len(view.table.records), 2)
+
+    def test_analytics_view_error_modal_only_on_interactive_refresh(self):
+        """Passive DB-load analytics errors emit status without modal QMessageBox popups."""
+        view = AnalyticsView()
+        with patch.object(QMessageBox, "warning") as mock_warn:
+            view._interactive_refresh = False
+            view._on_analytics_error("no such table: djmdContent")
+            mock_warn.assert_not_called()
+
+            view._interactive_refresh = True
+            view._on_analytics_error("no such table: djmdContent")
+            mock_warn.assert_called_once()
+
+    def test_analytics_view_cleanup_stops_worker(self):
+        """AnalyticsView.cleanup() stops and clears any active background worker."""
+        view = AnalyticsView()
+        mock_worker = MagicMock()
+        view._worker = mock_worker
+        with patch("rekordbox_collection_manager.gui.analytics_view.stop_worker") as mock_stop:
+            view.cleanup()
+            mock_stop.assert_called_once_with(mock_worker, wait_ms=1000)
+            self.assertIsNone(view._worker)
 
 
 if __name__ == "__main__":

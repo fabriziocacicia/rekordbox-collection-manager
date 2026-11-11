@@ -442,8 +442,8 @@ class TestTagsGUI(unittest.TestCase):
         with patch.object(MainWindow, "load_database"), patch.object(MainWindow, "_check_rekordbox_status"):
             win = MainWindow(initial_db_path=None)
             try:
-                # Nav setup has 7 tabs and index 2 is Tags
-                self.assertEqual(len(win.nav_items), 7)
+                # Nav setup has 8 tabs and index 2 is Tags
+                self.assertEqual(len(win.nav_items), 8)
                 self.assertEqual(win.nav_items[2]["title"], "Tags")
                 self.assertEqual(win.btn_tags.toolTip(), "Tags")
 

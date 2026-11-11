@@ -145,6 +145,7 @@ class AnalyticsView(QWidget):
         self.db_path: str = ""
         self.snapshot: Optional[AnalyticsSnapshot] = None
         self._worker: Optional[AnalyticsLoaderWorker] = None
+        self._interactive_refresh: bool = False
 
         self.current_filtered_tracks: List[Dict[str, Any]] = []
         self._active_filter_label: str = "Tutte le tracce"
@@ -191,7 +192,7 @@ class AnalyticsView(QWidget):
                 border-color: {COLOR_BLUE};
             }}
         """)
-        self.btn_refresh.clicked.connect(self.refresh)
+        self.btn_refresh.clicked.connect(lambda: self.refresh(interactive=True))
         header_row.addWidget(self.btn_refresh)
 
         main_layout.addLayout(header_row)
@@ -649,13 +650,14 @@ class AnalyticsView(QWidget):
         """Assign active database engine and compute analytics."""
         self.engine = engine
         self.db_path = db_path
-        self.refresh()
+        self.refresh(interactive=False)
 
-    def refresh(self) -> None:
+    def refresh(self, interactive: bool = False) -> None:
         """Trigger background worker to compute analytics."""
         if not self.engine:
             return
 
+        self._interactive_refresh = interactive
         self.btn_refresh.setEnabled(False)
         self.btn_refresh.setText("⏳ Calcolo in corso...")
         self.notify_status.emit("Calcolo analytics e metriche avanzate...")
@@ -663,11 +665,22 @@ class AnalyticsView(QWidget):
         if self._worker:
             stop_worker(self._worker)
 
-        self._worker = AnalyticsLoaderWorker(engine=self.engine)
-        self._worker.success.connect(self._on_analytics_loaded)
-        self._worker.error.connect(self._on_analytics_error)
-        self._worker.finished.connect(lambda: setattr(self, "_worker", None))
-        self._worker.start()
+        worker = AnalyticsLoaderWorker(engine=self.engine)
+        self._worker = worker
+        worker.success.connect(self._on_analytics_loaded)
+        worker.error.connect(self._on_analytics_error)
+        worker.finished.connect(lambda: self._on_worker_finished(worker))
+        worker.start()
+
+    def _on_worker_finished(self, worker: AnalyticsLoaderWorker) -> None:
+        if self._worker is worker:
+            self._worker = None
+
+    def cleanup(self) -> None:
+        """Stop active analytics loader worker cleanly."""
+        if getattr(self, "_worker", None):
+            stop_worker(self._worker, wait_ms=1000)
+            self._worker = None
 
     def _on_analytics_loaded(self, snapshot: AnalyticsSnapshot) -> None:
         self.snapshot = snapshot
@@ -705,7 +718,8 @@ class AnalyticsView(QWidget):
         self.btn_refresh.setEnabled(True)
         self.btn_refresh.setText("🔄 Ricalcola Metriche")
         self.notify_status.emit(f"Errore calcolo analytics: {err_msg}")
-        QMessageBox.warning(self, "Errore Analytics", f"Impossibile calcolare le analytics:\n{err_msg}")
+        if self._interactive_refresh:
+            QMessageBox.warning(self, "Errore Analytics", f"Impossibile calcolare le analytics:\n{err_msg}")
 
     def _on_tab_switched(self, tab_id: int) -> None:
         self.chart_stack.setCurrentIndex(tab_id)

@@ -1,5 +1,10 @@
 """Pytest configuration and global fixtures."""
 
+import os
+
+# Force headless Qt platform before any test module instantiates QApplication
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
 import pytest
 from rekordbox_collection_manager.gui.workers import wait_for_retired_workers
 

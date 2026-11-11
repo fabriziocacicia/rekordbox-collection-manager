@@ -999,6 +999,7 @@ class MainWindow(QMainWindow):
             getattr(self, "history_view", None),
             getattr(self, "play_count_view", None),
             getattr(self, "replace_file_view", None),
+            getattr(self, "analytics_view", None),
         ]
         for v in views:
             if v is not None:
@@ -1019,6 +1020,7 @@ class MainWindow(QMainWindow):
                     "inspect_worker",
                     "replace_worker",
                     "merge_worker",
+                    "_worker",
                 ):
                     w = getattr(v, attr, None)
                     if w is not None:

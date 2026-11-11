@@ -448,6 +448,7 @@ class TestMainWindowSidebar(unittest.TestCase):
         self.assertEqual(self.window.btn_history.text(), "🕒  History Sessions")
         self.assertEqual(self.window.btn_play_count.text(), "🔢  Play Counts")
         self.assertEqual(self.window.btn_replace_file.text(), "🔄  Replace File")
+        self.assertEqual(self.window.btn_analytics.text(), "📊  Analytics")
         self.assertEqual(self.window.btn_info.text(), "ℹ️  Collection Info")
         self.assertFalse(self.window.sidebar_section_label.isHidden())
         self.assertFalse(self.window.app_ver.isHidden())
@@ -463,6 +464,7 @@ class TestMainWindowSidebar(unittest.TestCase):
         self.assertEqual(self.window.btn_history.text(), "🕒")
         self.assertEqual(self.window.btn_play_count.text(), "🔢")
         self.assertEqual(self.window.btn_replace_file.text(), "🔄")
+        self.assertEqual(self.window.btn_analytics.text(), "📊")
         self.assertEqual(self.window.btn_info.text(), "ℹ️")
         self.assertTrue(self.window.sidebar_section_label.isHidden())
         self.assertTrue(self.window.app_ver.isHidden())
@@ -473,6 +475,7 @@ class TestMainWindowSidebar(unittest.TestCase):
         self.assertEqual(self.window.btn_history.toolTip(), "History Sessions")
         self.assertEqual(self.window.btn_play_count.toolTip(), "Play Counts")
         self.assertEqual(self.window.btn_replace_file.toolTip(), "Replace File")
+        self.assertEqual(self.window.btn_analytics.toolTip(), "Analytics")
         self.assertEqual(self.window.btn_info.toolTip(), "Collection Info")
 
     def test_sidebar_expand(self):
@@ -507,14 +510,16 @@ class TestMainWindowSidebar(unittest.TestCase):
         self.assertEqual(self.window.stacked_widget.currentIndex(), 4)
         self.window.btn_replace_file.click()
         self.assertEqual(self.window.stacked_widget.currentIndex(), 5)
-        self.window.btn_info.click()
+        self.window.btn_analytics.click()
         self.assertEqual(self.window.stacked_widget.currentIndex(), 6)
+        self.window.btn_info.click()
+        self.assertEqual(self.window.stacked_widget.currentIndex(), 7)
         self.window.btn_tracks.click()
         self.assertEqual(self.window.stacked_widget.currentIndex(), 0)
 
     def test_main_window_open_history_session_navigation(self):
-        # Nav setup has 7 tabs and index 3 is History Sessions
-        self.assertEqual(len(self.window.nav_items), 7)
+        # Nav setup has 8 tabs and index 3 is History Sessions
+        self.assertEqual(len(self.window.nav_items), 8)
         self.assertEqual(self.window.nav_items[3]["title"], "History Sessions")
         self.assertEqual(self.window.btn_history.toolTip(), "History Sessions")
 
@@ -1440,13 +1445,21 @@ class TestMainWindowDbBadge(unittest.TestCase):
 
     def test_db_badge_loaded_state(self):
         engine = create_engine("sqlite:///:memory:")
-        self.window._on_db_loaded(
-            engine=engine,
-            path="/path/to/rekordbox/master.db",
-            history_records=[],
-            total_tracks=0,
-            table_format="djmdHistory",
-        )
+        with patch.object(self.window.history_view, "set_data"), \
+             patch.object(self.window.tracks_view, "set_engine"), \
+             patch.object(self.window.playlists_view, "set_engine"), \
+             patch.object(self.window.tags_view, "set_engine"), \
+             patch.object(self.window.play_count_view, "set_engine"), \
+             patch.object(self.window.replace_file_view, "set_engine"), \
+             patch.object(self.window.analytics_view, "set_engine"), \
+             patch.object(self.window, "trigger_sync"):
+            self.window._on_db_loaded(
+                engine=engine,
+                path="/path/to/rekordbox/master.db",
+                history_records=[],
+                total_tracks=0,
+                table_format="djmdHistory",
+            )
         self.assertIn("master.db", self.window.db_label.text())
         self.assertIn("rekordbox/", self.window.db_label.text())
         self.assertIn("/path/to/rekordbox/master.db", self.window.db_badge.toolTip())
