@@ -46,11 +46,11 @@ flowchart TD
   - [Launching the Desktop App](#launching-the-desktop-app)
   - [Desktop App Versioning & SemVer CLI](#desktop-app-versioning--semver-cli)
 - [2. Rekordbox Companion iOS App](#2-rekordbox-companion-ios-app)
-  - [Key Features](#key-features)
+  - [Key Features & Desktop Parity](#key-features--desktop-parity)
   - [Building & Installing on iPhone](#building--installing-on-iphone)
   - [App Versioning & SemVer CLI](#app-versioning--semver-cli)
 - [3. Rekordbox Sync Daemon (`rekordbox-daemon`)](#3-rekordbox-sync-daemon-rekordbox-daemon)
-  - [Zero-Polling Cocoa Observer](#zero-polling-cocoa-observer)
+  - [Event-Driven Cocoa Observer & Mobile Poll](#event-driven-cocoa-observer--mobile-poll)
   - [Configuration (`.env`)](#configuration-env)
   - [CLI Commands](#cli-commands)
 - [4. Replace / Upgrade Audio File (`replace-file`)](#4-replace--upgrade-audio-file-replace-file)
@@ -71,24 +71,22 @@ flowchart TD
 - Continuously inspects whether the official Rekordbox desktop process is running.
 - Safely disables write transactions when Rekordbox is open to protect SQLite journals (`master.db-wal` / `master.db-shm`) from corruption or concurrent lock errors.
 
-#### 🎵 Tracks View & Track Detail Inspector
-- **Instant Search**: As-you-type search across Title, Artist, Album, Key, Genre, and Filename.
-- **Multi-Column Sorting**: Sort by BPM, Key, Star Rating, Play Count, Date Added, or Bitrate.
-- **Track Detail Sheet**:
-  - Full audio tech specs inspection (sample rate, bit depth, bitrate, format, file path).
-  - Edit track metadata, star ratings, and comments.
-  - Direct MyTag chip assignment.
-  - History log listing every DJ session and venue where the track was played.
+#### 🎵 Tracks View & Track Detail View
+- **Instant Search & Multi-Filtering**: Search across Title, Artist, Key, Tags, Playlists, or Filename, plus filter by purchase status (`Downloaded`, `Purchased Only`, `Purchasable >=3 plays`), store, play count, audio format, musical key, BPM range, MyTags (`ANY`/`ALL`), and playlists (`ANY`/`ALL`).
+- **Multi-Column Sorting**: Sort by Title, Artist, Key, BPM, Duration, Play Count, Bitrate, Audio Format, Purchase Store, Folder, or File Name.
+- **Track Detail View**:
+  - Inspect full audio tech specs (sample rate, bit depth, bitrate, format, file size, file path), artwork, star rating, BPM, key, and play count.
+  - Manage MyTag chips, playlist memberships, and purchase store attribution (`Purchased At`, stored in Rekordbox track comments).
+  - View the history log listing every DJ session and venue where the track was played, with click-through jump-to-session navigation.
 
 #### 📁 Playlists View
-- Full hierarchical tree navigation of playlist folders and playlists.
-- View tracklist contents, total duration, and track counts.
-- In-playlist track reordering and playlist management.
+- Full hierarchical tree navigation of playlist folders, standard playlists, and smart playlists (`attribute = 4`).
+- Search tracks within a playlist, view track counts and total duration, create or delete empty playlists/folders, stage inline playlist/tag chip edits, and copy tracklists to clipboard.
 
 #### 🏷️ Tags View
 - Visual manager for Pioneer Rekordbox **MyTags**.
-- Organized by user categories (Genre, Components, Situation, Custom).
-- Click any tag to immediately inspect all collection tracks assigned to it.
+- Organized by **Genre** and **Style** category folders, with tag creation, deletion of empty tags, and alphabetical sorting (`A to Z` / `Z to A`) per folder.
+- Click any tag to inspect all collection tracks assigned to it.
 
 #### 🕒 History Sessions View
 - **Full Hierarchy Loading**: Browses years, months, and individual DJ history playlists without sluggish pagination.
@@ -107,10 +105,14 @@ flowchart TD
 - Floor-at-zero safeguard: Play counts can never become negative.
 
 #### 🔄 Replace / Upgrade Audio File View
-- Safely upgrade audio files (e.g., replace an MP3 with a lossless AIFF or FLAC release).
-- **100% Data Preservation**: Preserves all Rekordbox cue points, hot cues, beatgrids, play counts, original "Date Added" (`StockDate`), playlist memberships, and history session entries.
-- Automated ID3 metadata inspection and side-by-side technical comparison (sample rate, bit depth, bitrate, channels, duration).
-- Configurable action for old audio files: keep, trash, or move to backup folder.
+- Safely upgrade MP3 tracks to AIFF or replace existing AIFF files with another AIFF release (plus a Merge Mode for imported duplicate tracks).
+- **100% Data Preservation**: Preserves Rekordbox cue points, hot cues, beatgrids, play counts, original "Date Added" (`StockDate`), playlist memberships, and history session entries.
+- Automated audio metadata inspection and side-by-side technical comparison (sample rate, bit depth, bitrate, channels, duration).
+- Configurable action for the old audio file: keep, move to macOS Trash, or rename in place to `.bak`.
+
+#### 📊 Analytics View
+- Interactive library and live-set analytics dashboard powered by five custom charts: **Crate Health Matrix**, **Camelot Wheel**, **Set Turnover & DNA**, **Survival Decay**, and **Transitions & Combos**.
+- Click chart regions or KPI cards to drill down into matching tracks and export purge crates to `.m3u8`, Rekordbox XML, or a new Rekordbox playlist.
 
 #### ℹ️ Collection Info View
 - Summary statistics of your Rekordbox library: total track count, total playlists, history sessions, MyTags, active database path, and file size.
@@ -187,6 +189,7 @@ ios/RekordboxCompanion/
     │   ├── Track.swift              # Track model & rating helpers
     │   ├── Playlist.swift           # Playlist & folder models
     │   ├── Tag.swift                # MyTag models
+    │   ├── LiveSession.swift        # Live DJ set session & track models
     │   └── ChangelogEvent.swift     # Mutation events
     ├── Services/
     │   ├── LocalDatabase.swift      # 0ms SQLite3 local storage & mutation queue
@@ -195,28 +198,28 @@ ios/RekordboxCompanion/
     └── Views/
         ├── MainTabView.swift        # 5-Tab root navigation
         ├── TracksView.swift         # Search, filter, swipe actions, track details
-        ├── TrackDetailSheet.swift   # Title, artist, rating, comments, MyTags editor
+        ├── TrackDetailSheet.swift   # Playlist & MyTag chip assignment editor + track specs
         ├── PlaylistsView.swift      # Folder & playlist browser, playlist creation
         ├── PlaylistDetailView.swift # Track reordering & removal
         ├── LiveSetView.swift        # Mobile DJ live set tracker, venue tagging & history logging
         ├── TagsView.swift           # MyTag categories & tagged tracks
-        └── SyncQueueView.swift      # Real-time sync status, queue monitor, manual sync & version
+        └── SyncQueueView.swift      # Real-time sync status, queue monitor, manual sync & settings
 ```
 
 ### Key Features & Desktop Parity
 
 - **Excludes Streaming Tracks**: Exactly like the desktop app, tracks from streaming providers (Spotify, Apple Music, Beatport, Beatsource, SoundCloud, Tidal) are completely filtered out from collection queries, playlists, and cloud sync.
-- **Offline-First Architecture (0ms Latency)**: Uses an embedded SQLite3 engine on the device (`LocalDatabase.swift`). Searching across thousands of tracks, filtering by key/BPM/rating, and editing metadata responds instantly with zero network delay.
-- **In-Playlist Drag & Drop Reordering**: Reorder tracks directly within playlists using iOS native drag-and-drop (`.onMove`). New track positions are queued and synced back to `djmdSongPlaylist.TrackNo` in `master.db`.
-- **Play Count Adjustment**: Quick stepper buttons (`[-]` and `[+]`) in track details and leading swipe gestures (`+1 Play`, `-1 Play` with a floor at 0) sync directly to `djmdContent.DJPlayCount`.
+- **Offline-First Architecture (0ms Latency)**: Uses an embedded SQLite3 engine on the device (`LocalDatabase.swift`). Searching across tracks, filtering by play status/BPM/key/MyTags, and queuing playlist/MyTag edits responds locally with zero network delay.
+- **In-Playlist Drag & Drop Reordering**: Reorder tracks directly within standard playlists using iOS native drag-and-drop (`.onMove`) and remove tracks via trailing swipe actions. New track positions are queued and synced back to `djmdSongPlaylist.TrackNo` in `master.db`.
+- **Quick Track Actions & Live Set Logging**: Swipe trailing on tracks in `TracksView` to jump straight to `TrackDetailSheet` or assign a playlist, or track played songs in real time in `LiveSetView` (`LiveSession`).
 - **Genre & Style Tag Categorization**: MyTags are strictly categorized into **Genre** and **Style** sections (matching desktop behavior, hiding Components and Situation) with live track counts per tag.
-- **Event-Sourced Cloud Sync**: Edits made on your iPhone (renaming tracks, star ratings, comments, tag assignments, play counts, playlist reordering) are logged into a local mutation queue and synced to Turso cloud via an HTTP pipeline (`TursoSyncService.swift`).
+- **Event-Sourced Cloud Sync**: Mobile edits (playlist track additions/removals/reordering, playlist creation, `MyTag` assignments, and completed `Live Set` sessions) are logged into a local mutation queue (`changelog_events`) and synced to Turso cloud via an HTTP pipeline (`TursoSyncService.swift`).
 - **5 Tabbed Interface**:
-  1. **Tracks**: Full collection browser with multi-criteria sorting (Artist, Title, BPM, Rating, Play Count, Date Added), as-you-type search, star rating filters, key badges, swipe actions, and the `TrackDetailSheet` for editing.
+  1. **Tracks**: Collection browser with 6 sort options (Title A–Z, Artist A–Z, BPM ascending/descending, Play Count, Date Added), live search, play-status/BPM/key/MyTag filters, trailing swipe actions (`Details`, `Playlist`), and `TrackDetailSheet` for viewing track specs and editing playlist/MyTag chips.
   2. **Playlists**: Complete folder and playlist hierarchy navigation with live track count badges, drag-and-drop track reordering, and creation of new mobile playlists.
   3. **Live Set**: Real-time mobile DJ set tracker. Log played tracks during a gig, track transitions, tag venues/dates, and sync completed sessions into Rekordbox history.
   4. **MyTags**: Browse your collection grouped strictly by Genre and Style categories with track count badges.
-  5. **Sync & Queue**: Cloud connection health check, pending change counter, processed event audit history, dynamic version display, and manual cloud sync trigger.
+  5. **Sync & Queue**: Cloud connection health check, pending change counter, processed event audit history, dynamic version display, Turso settings sheet, and manual cloud sync trigger.
 
 ### Building & Installing on iPhone
 
@@ -232,8 +235,8 @@ ios/RekordboxCompanion/
    - Connect your iPhone via USB or select an iOS 17+ Simulator from the scheme dropdown.
    - Press **Cmd + R** (or click the Play button) to build and install.
 4. **Cloud Credentials**:
-   - The app comes pre-configured with your Turso database URL and auth token in `TursoConfig.swift`.
-   - Credentials can also be viewed or overridden directly inside the app under **Sync & Queue > Settings**.
+   - The app comes pre-configured with your default Turso database URL and auth token compiled into `TursoConfig.swift`.
+   - Inside **Sync & Queue > Settings** (gear icon), you can view or override the Database URL, replace the masked Auth Token (`SecureField`), or tap **Reset to .env Defaults** to restore the `TursoConfig.swift` defaults.
 
 ### App Versioning & SemVer CLI
 
@@ -281,9 +284,9 @@ A dedicated CLI script at [`scripts/ios_version.py`](scripts/ios_version.py) man
 
 The sync daemon is an event-driven macOS background service that bridges your desktop `master.db` with the **Turso (libSQL)** cloud database. It guarantees that on-the-go mobile edits are safely applied to your collection **without risking SQLite file corruption or file-locking conflicts**.
 
-### Zero-Polling Cocoa Observer
+### Event-Driven Cocoa Observer & Mobile Poll
 - Integrates directly with macOS `NSWorkspace` notifications (`NSWorkspaceDidTerminateApplicationNotification` and `NSWorkspaceDidLaunchApplicationNotification`) via `pyobjc-framework-cocoa`.
-- **0.0% Idle CPU**: The daemon sleeps in the native Cocoa `NSRunLoop` until macOS notifies it that Rekordbox has launched or quit.
+- **Responsive Cocoa Run Loop**: Dispatches launch/quit notifications natively via `NSRunLoop` in 1-second signal-aware slices and polls Turso for `PENDING` mobile changelog events every `30` seconds while Rekordbox is closed (falling back to polling via `poll_interval` if PyObjC is unavailable).
 - **Automated Lifecycle**:
   1. Detects when you quit Rekordbox.
   2. Immediately creates a timestamped safety backup in `~/Music/rekordbox/Backups/`.
@@ -320,7 +323,7 @@ uv run rekordbox-daemon uninstall
 
 ## 4. Replace / Upgrade Audio File (`replace-file`)
 
-A specialized utility to replace or upgrade collection tracks (e.g., upgrading an MP3 file to AIFF, WAV, or FLAC) without losing any Rekordbox metadata.
+A specialized utility to replace or upgrade collection tracks (upgrading an MP3 file to AIFF, or replacing an existing AIFF track with another AIFF file) without losing any Rekordbox metadata.
 
 ### Highlights
 - Transfers and preserves:
@@ -340,7 +343,7 @@ uv run replace-file --track-id 12345 --new-file "/path/to/track.aiff" --action k
 # Actions for the old audio file:
 #   --action keep     (leave old file intact)
 #   --action trash    (move old file to macOS Trash)
-#   --action backup   (move old file to backup folder)
+#   --action backup   (rename old file in place with a .bak suffix)
 ```
 
 ---
@@ -435,7 +438,7 @@ Backups are organized in `~/Music/rekordbox/Backups/` (alongside Rekordbox's `Re
 
 ### Running Tests
 ```bash
-# Run full pytest test suite (256+ tests)
+# Run full pytest test suite (420+ tests)
 uv run pytest
 ```
 
