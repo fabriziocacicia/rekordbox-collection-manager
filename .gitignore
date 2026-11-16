@@ -23,3 +23,6 @@ DerivedData/
 # Secrets / Config
 .env
 turso_secrets.json
+
+# Agents Local planning scratchpad & tasks
+/tasks
