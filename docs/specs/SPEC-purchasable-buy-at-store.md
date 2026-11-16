@@ -42,7 +42,7 @@ Enable DJs and music collectors to track which digital download store (Beatport,
 - `src/rekordbox_collection_manager/gui/track_table.py`
   - Add column constant: `TrackColumn.BUY_AT = "Buy At"`.
   - Add to default collection columns.
-  - Implement data rendering in `TracksTableModel.data()` for DisplayRole (`Buy at: <Store>` / `—`), ToolTipRole, ForegroundRole.
+  - Implement data rendering in `TracksTableModel.data()` for DisplayRole (`🛒 <Store>` / `—`), ToolTipRole, ForegroundRole (omits redundant "Buy at:" prefix since column header already states "Buy At").
   - Handle cell click / interaction on `TrackColumn.BUY_AT` to launch store picker.
   - Add right-click context menu action: `"🛒 Set Buy At Store..."` (for unpurchased tracks).
 - `src/rekordbox_collection_manager/gui/tracks_view.py`
@@ -111,7 +111,7 @@ def get_buy_store_comment(store_name: str) -> str:
    - Verify `build_track_record` populates `buy_at_store`.
 2. **GUI Tests (Medium / Headless Qt):**
    - Verify `TracksView` displays `TrackColumn.BUY_AT` when `"purchasable"` filter is selected, and hides it for `"all"` and `"purchased"`.
-   - Verify `TracksTableWidget` displays `Buy at: Beatport` or `—`.
+   - Verify `TracksTableWidget` displays `🛒 Beatport` or `—`.
    - Verify `TrackDetailView` displays `+ Buy at` for unpurchased tracks without store, and `Buy at: Beatport` when set.
    - Verify clicking the badge or table cell launches the store selector and records staged edits.
 

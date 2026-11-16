@@ -25,38 +25,38 @@ Enable tracking of the target digital download store (Beatport, Bandcamp, Qobuz,
 ## Task List
 
 ### Phase 1: Foundation (Data & Comment Helpers)
-- [ ] Task 1: Store comment templates, parsing, and record building in `utils.py`
+- [x] Task 1: Store comment templates, parsing, and record building in `utils.py`
   - Define `BUY_STORE_COMMENT_TEMPLATES`.
   - Implement `parse_buy_store_from_comment(comment)` and `get_buy_store_comment(store_name)`.
   - Update `build_track_record` to include `"buy_at_store"`.
   - Unit tests in `tests/test_utils.py`.
 
 ### Checkpoint: Foundation
-- [ ] `uv run pytest tests/test_utils.py -k "buy_store"` passes.
+- [x] `uv run pytest tests/test_utils.py -k "buy_store"` passes.
 
 ### Phase 2: Track Details View
-- [ ] Task 2: "Buy at" badge chip and store selector in `TrackDetailView`
+- [x] Task 2: "Buy at" badge chip and store selector in `TrackDetailView`
   - In `_refresh_store_badge_ui()`, display `[+ Buy at]` (empty) or `[Buy at: <Store>]` (set) for unpurchased tracks.
   - Connect badge click to `SelectStoreDialog(title="Select Store to Buy")`.
   - Handle staging, bottom bar alert, comment updating on save, and `db_saved` signal emission.
   - Tests in `tests/test_track_details.py`.
 
 ### Checkpoint: Track Details
-- [ ] `uv run pytest tests/test_track_details.py -k "test_buy_at"` passes.
+- [x] `uv run pytest tests/test_track_details.py -k "test_buy_at"` passes.
 
 ### Phase 3: Collection Table & Tracks View
-- [ ] Task 3: "Buy At" column in `TracksTableWidget` and dynamic visibility in `TracksView`
+- [x] Task 3: "Buy At" column in `TracksTableWidget` and dynamic visibility in `TracksView`
   - Add `TrackColumn.BUY_AT = "Buy At"` to `TrackColumn` and `DEFAULT_COLLECTION_COLUMNS`.
-  - Implement `TracksTableModel.data()` for DisplayRole (`Buy at: <Store>` / `—`), ToolTipRole, ForegroundRole.
+  - Implement `TracksTableModel.data()` for DisplayRole (`🛒 <Store>` / `—`), ToolTipRole, ForegroundRole.
   - Add cell click and context menu action (`🛒 Set Buy At Store...`) in `TracksTableWidget`.
   - Toggle `TrackColumn.BUY_AT` visibility in `TracksView` when `purchase_combo` selection changes.
   - Tests in `tests/test_gui_models.py`.
 
 ### Checkpoint: Collection View & Table
-- [ ] `uv run pytest tests/test_gui_models.py -k "TestBuyAtStore"` passes.
+- [x] `uv run pytest tests/test_gui_models.py -k "TestBuyAtStore"` passes.
 
 ### Phase 4: Full Suite Verification & Documentation
-- [ ] Task 4: Run full test suite and update documentation
+- [x] Task 4: Run full test suite and update documentation
   - Verify full test suite passes with `uv run pytest`.
   - Update `src/rekordbox_collection_manager/gui/README.md`.
 

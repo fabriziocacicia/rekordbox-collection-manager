@@ -1222,7 +1222,7 @@ class TestTracksView(unittest.TestCase):
 
     def test_tracks_view_initial_ui(self):
         self.assertEqual(self.view.tracks_header_label.text(), "TRACKS")
-        self.assertEqual(self.view.table.columnCount(), 14)
+        self.assertEqual(self.view.table.columnCount(), 15)
         expected_headers = [
             "#",
             "Title",
@@ -1234,6 +1234,7 @@ class TestTracksView(unittest.TestCase):
             "Bitrate",
             "Type",
             "Purchased At",
+            "Buy At",
             "Tags",
             "Playlists",
             "Folder",
@@ -1248,6 +1249,7 @@ class TestTracksView(unittest.TestCase):
         self.assertIsNotNone(self.view.table.itemDelegateForColumn(11))
         self.assertIsNotNone(self.view.table.itemDelegateForColumn(12))
         self.assertIsNotNone(self.view.table.itemDelegateForColumn(13))
+        self.assertIsNotNone(self.view.table.itemDelegateForColumn(14))
 
         self.assertEqual(self.view.filter_combo.count(), 3)
         self.assertEqual(self.view.filter_combo.itemText(0), "All Tracks")
@@ -1309,17 +1311,18 @@ class TestTracksView(unittest.TestCase):
         self.assertEqual(self.view.table.item(0, 7).text(), "320 kbps")
         self.assertEqual(self.view.table.item(0, 8).text(), "MP3")
         self.assertEqual(self.view.table.item(0, 9).text(), "—")
-        self.assertEqual(self.view.table.item(0, 10).text(), "Electro, Club")
-        self.assertEqual(self.view.table.item(0, 10).data(Qt.ItemDataRole.UserRole), ["Electro", "Club"])
-        self.assertEqual(self.view.table.item(0, 11).text(), "Mainstage - BP, Festival")
-        self.assertEqual(self.view.table.item(0, 11).data(Qt.ItemDataRole.UserRole), ["Mainstage - BP", "Festival"])
-        self.assertEqual(self.view.table.item(0, 12).text(), "Music")
-        self.assertEqual(self.view.table.item(0, 12).data(Qt.ItemDataRole.UserRole), "/Music")
-        self.assertEqual(self.view.table.item(0, 13).text(), "Titanium.mp3")
-        self.assertEqual(self.view.table.item(0, 13).data(Qt.ItemDataRole.UserRole), "/Music/Titanium.mp3")
+        self.assertEqual(self.view.table.item(0, 10).text(), "—")
+        self.assertEqual(self.view.table.item(0, 11).text(), "Electro, Club")
+        self.assertEqual(self.view.table.item(0, 11).data(Qt.ItemDataRole.UserRole), ["Electro", "Club"])
+        self.assertEqual(self.view.table.item(0, 12).text(), "Mainstage - BP, Festival")
+        self.assertEqual(self.view.table.item(0, 12).data(Qt.ItemDataRole.UserRole), ["Mainstage - BP", "Festival"])
+        self.assertEqual(self.view.table.item(0, 13).text(), "Music")
+        self.assertEqual(self.view.table.item(0, 13).data(Qt.ItemDataRole.UserRole), "/Music")
+        self.assertEqual(self.view.table.item(0, 14).text(), "Titanium.mp3")
+        self.assertEqual(self.view.table.item(0, 14).data(Qt.ItemDataRole.UserRole), "/Music/Titanium.mp3")
 
         # Verify all items in Row 0 are read-only (not editable)
-        for col in range(14):
+        for col in range(15):
             item = self.view.table.item(0, col)
             self.assertIsNotNone(item)
             self.assertFalse(item.flags() & Qt.ItemFlag.ItemIsEditable)
@@ -1332,10 +1335,11 @@ class TestTracksView(unittest.TestCase):
         self.assertEqual(self.view.table.item(1, 6).text(), "0")
         self.assertEqual(self.view.table.item(1, 8).text(), "AIFF")
         self.assertEqual(self.view.table.item(1, 9).text(), "—")
-        self.assertEqual(self.view.table.item(1, 10).text(), "French Touch")
-        self.assertEqual(self.view.table.item(1, 11).text(), "—")
-        self.assertEqual(self.view.table.item(1, 12).text(), "Music")
-        self.assertEqual(self.view.table.item(1, 13).text(), "OneMoreTime.aiff")
+        self.assertEqual(self.view.table.item(1, 10).text(), "—")
+        self.assertEqual(self.view.table.item(1, 11).text(), "French Touch")
+        self.assertEqual(self.view.table.item(1, 12).text(), "—")
+        self.assertEqual(self.view.table.item(1, 13).text(), "Music")
+        self.assertEqual(self.view.table.item(1, 14).text(), "OneMoreTime.aiff")
 
     def test_tracks_view_search_success_updates_header_and_table(self):
         self.view._on_search_success("test", self.mock_records)
@@ -1599,7 +1603,7 @@ class TestTracksTableWidget(unittest.TestCase):
             sorting_mode="server",
         )
         table = TracksTableWidget(config=cfg)
-        self.assertEqual(table.columnCount(), 14)
+        self.assertEqual(table.columnCount(), len(DEFAULT_COLLECTION_COLUMNS))
         self.assertFalse(table.isSortingEnabled())
 
         table.set_tracks(self.mock_tracks)
@@ -2393,6 +2397,125 @@ class TestTableChipInteractions(unittest.TestCase):
 
         widget.popup.close()
         widget.close()
+
+
+class TestBuyAtStore(unittest.TestCase):
+    """Unit tests for the 'Buy At' column in TracksTableWidget and TracksView."""
+
+    def setUp(self):
+        self.view = TracksView()
+
+    def tearDown(self):
+        self.view.cleanup()
+        self.view.close()
+
+    def test_buy_at_column_exists(self):
+        from rekordbox_collection_manager.gui.track_table import TrackColumn, DEFAULT_COLLECTION_COLUMNS
+        self.assertTrue(hasattr(TrackColumn, "BUY_AT"))
+        self.assertEqual(TrackColumn.BUY_AT, "Buy At")
+        self.assertIn(TrackColumn.BUY_AT, DEFAULT_COLLECTION_COLUMNS)
+
+    def test_buy_at_column_visibility_toggle(self):
+        from rekordbox_collection_manager.gui.track_table import TrackColumn
+        # Initially, Buy At column should be hidden
+        self.assertFalse(self.view.table.is_column_visible(TrackColumn.BUY_AT))
+        self.assertFalse(self.view.table.is_column_visible(TrackColumn.PURCHASED_AT))
+
+        # Switch purchase combo to 'purchasable'
+        idx_purchasable = self.view.purchase_combo.findData("purchasable")
+        self.assertGreater(idx_purchasable, -1)
+        self.view.purchase_combo.setCurrentIndex(idx_purchasable)
+
+        # Now Buy At should be visible, Purchased At should be hidden
+        self.assertTrue(self.view.table.is_column_visible(TrackColumn.BUY_AT))
+        self.assertFalse(self.view.table.is_column_visible(TrackColumn.PURCHASED_AT))
+
+        # Switch to 'purchased'
+        idx_purchased = self.view.purchase_combo.findData("purchased")
+        self.view.purchase_combo.setCurrentIndex(idx_purchased)
+        self.assertFalse(self.view.table.is_column_visible(TrackColumn.BUY_AT))
+        self.assertTrue(self.view.table.is_column_visible(TrackColumn.PURCHASED_AT))
+
+        # Reset filters -> Buy At should be hidden again
+        self.view.purchase_combo.setCurrentIndex(idx_purchasable)
+        self.assertTrue(self.view.table.is_column_visible(TrackColumn.BUY_AT))
+        self.view._on_reset_filters()
+        self.assertFalse(self.view.table.is_column_visible(TrackColumn.BUY_AT))
+        self.assertFalse(self.view.table.is_column_visible(TrackColumn.PURCHASED_AT))
+
+    def test_buy_at_table_rendering(self):
+        from rekordbox_collection_manager.gui.track_table import TrackColumn
+        records = [
+            {
+                "id": "1",
+                "content_id": "1",
+                "title": "Track 1",
+                "artist": "Artist 1",
+                "buy_at_store": "Bandcamp",
+            },
+            {
+                "id": "2",
+                "content_id": "2",
+                "title": "Track 2",
+                "artist": "Artist 2",
+                "buy_at_store": None,
+            },
+        ]
+        self.view.table.set_tracks(records)
+        buy_at_col = list(self.view.table.config.columns).index(TrackColumn.BUY_AT)
+
+        item_0 = self.view.table.item(0, buy_at_col)
+        self.assertIsNotNone(item_0)
+        self.assertEqual(item_0.text(), "🛒 Bandcamp")
+
+        item_1 = self.view.table.item(1, buy_at_col)
+        self.assertIsNotNone(item_1)
+        self.assertEqual(item_1.text(), "—")
+
+    def test_buy_at_cell_click_opens_dialog_and_updates_store(self):
+        from unittest.mock import MagicMock
+        from rekordbox_collection_manager.gui.track_table import TrackColumn
+
+        engine = create_engine("sqlite:///:memory:")
+        with engine.begin() as conn:
+            conn.exec_driver_sql(
+                "CREATE TABLE djmdContent (ID VARCHAR(255) PRIMARY KEY, Commnt TEXT, updated_at DATETIME)"
+            )
+            conn.exec_driver_sql(
+                "INSERT INTO djmdContent (ID, Commnt) VALUES ('42', '')"
+            )
+
+        self.view.table.set_engine(engine)
+        records = [
+            {
+                "id": "42",
+                "content_id": "42",
+                "title": "Track 42",
+                "artist": "Artist 42",
+                "buy_at_store": None,
+                "comment": "",
+            }
+        ]
+        self.view.table.set_tracks(records)
+        buy_at_col = list(self.view.table.config.columns).index(TrackColumn.BUY_AT)
+
+        # Mock SelectStoreDialog
+        mock_dlg = MagicMock()
+        mock_dlg.exec.return_value = 1
+        mock_dlg.selected_store = "Qobuz"
+
+        with patch("rekordbox_collection_manager.gui.track_detail_view.SelectStoreDialog", return_value=mock_dlg):
+            self.view.table._open_buy_at_store_dialog(0)
+
+        # Record in table updated
+        self.assertEqual(self.view.table.records[0]["buy_at_store"], "Qobuz")
+        self.assertEqual(self.view.table.records[0]["comment"], "Buy at qobuz.com")
+        self.assertEqual(self.view.table.item(0, buy_at_col).text(), "🛒 Qobuz")
+
+        # Database updated
+        with engine.connect() as conn:
+            row = conn.exec_driver_sql("SELECT Commnt FROM djmdContent WHERE ID = '42'").mappings().first()
+            self.assertEqual(row["Commnt"], "Buy at qobuz.com")
 
 
 if __name__ == "__main__":

@@ -1158,6 +1158,13 @@ STORE_COMMENT_TEMPLATES: Dict[str, str] = {
     STORE_TRAXSOURCE: "Purchased at Traxsource.com",
 }
 
+BUY_STORE_COMMENT_TEMPLATES: Dict[str, str] = {
+    STORE_BEATPORT: "Buy at Beatport.com",
+    STORE_BANDCAMP: "Buy at Bandcamp.com",
+    STORE_QOBUZ: "Buy at qobuz.com",
+    STORE_TRAXSOURCE: "Buy at Traxsource.com",
+}
+
 
 def parse_store_from_comment(comment: Optional[str]) -> Optional[str]:
     """Parse store name from track comment metadata.
@@ -1188,9 +1195,41 @@ def parse_store_from_comment(comment: Optional[str]) -> Optional[str]:
     return None
 
 
+def parse_buy_store_from_comment(comment: Optional[str]) -> Optional[str]:
+    """Parse planned purchase store from track comment metadata.
+
+    Supported stores:
+    - Beatport: 'Buy at Beatport.com'
+    - Traxsource: 'Buy at Traxsource.com'
+    - Qobuz: 'Buy at qobuz.com'
+    - Bandcamp: 'Buy at Bandcamp.com'
+    """
+    if not comment:
+        return None
+    c = str(comment).strip()
+    if not c:
+        return None
+
+    if re.search(r"buy\s+at\s+beatport\.com", c, re.IGNORECASE):
+        return STORE_BEATPORT
+    if re.search(r"buy\s+at\s+traxsource\.com", c, re.IGNORECASE):
+        return STORE_TRAXSOURCE
+    if re.search(r"buy\s+at\s+qobuz\.com", c, re.IGNORECASE):
+        return STORE_QOBUZ
+    if re.search(r"buy\s+at\s+bandcamp\.com", c, re.IGNORECASE):
+        return STORE_BANDCAMP
+
+    return None
+
+
 def get_store_comment(store_name: str) -> str:
     """Return standard comment string for a store."""
     return STORE_COMMENT_TEMPLATES.get(store_name, "")
+
+
+def get_buy_store_comment(store_name: str) -> str:
+    """Return standard planned purchase comment string for a store."""
+    return BUY_STORE_COMMENT_TEMPLATES.get(store_name, "")
 
 
 def update_track_comment(
@@ -1312,6 +1351,7 @@ def build_track_record(
         "comment": str(row.get("Commnt") or ""),
         "comments": str(row.get("Commnt") or ""),
         "store": parse_store_from_comment(str(row.get("Commnt") or "")),
+        "buy_at_store": parse_buy_store_from_comment(str(row.get("Commnt") or "")),
         "image_path": row.get("ImagePath") or "",
         "date_added": str(row.get("StockDate") or "")[:10],
         "created_at": str(row.get("created_at") or "") if row.get("created_at") is not None else "",

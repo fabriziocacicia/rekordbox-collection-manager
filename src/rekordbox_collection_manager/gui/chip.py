@@ -378,10 +378,16 @@ class StoreChip(BadgeChip):
     def __init__(
         self,
         store: Optional[str] = None,
+        mode: str = "purchased",
         parent: Optional[QWidget] = None,
     ):
-        text = store if store else "+ Store"
-        scheme = "indigo" if store else "slate"
+        self.mode = mode
+        if mode == "buy":
+            text = f"Buy at: {store}" if store else "+ Buy at"
+            scheme = "amber" if store else "slate"
+        else:
+            text = store if store else "+ Store"
+            scheme = "indigo" if store else "slate"
         super().__init__(
             text=text,
             scheme=scheme,
@@ -392,20 +398,36 @@ class StoreChip(BadgeChip):
         )
         self._update_tooltip(store)
 
-    def set_store(self, store: Optional[str]) -> None:
-        if store:
-            self.set_text(store)
-            self.set_scheme("indigo")
+    def set_store(self, store: Optional[str], mode: Optional[str] = None) -> None:
+        if mode is not None:
+            self.mode = mode
+        if self.mode == "buy":
+            if store:
+                self.set_text(f"Buy at: {store}")
+                self.set_scheme("amber")
+            else:
+                self.set_text("+ Buy at")
+                self.set_scheme("slate")
         else:
-            self.set_text("+ Store")
-            self.set_scheme("slate")
+            if store:
+                self.set_text(store)
+                self.set_scheme("indigo")
+            else:
+                self.set_text("+ Store")
+                self.set_scheme("slate")
         self._update_tooltip(store)
 
     def _update_tooltip(self, store: Optional[str]) -> None:
-        if store:
-            self.setToolTip(f"Purchased at {store} (Click to clear store metadata)")
+        if self.mode == "buy":
+            if store:
+                self.setToolTip(f"Planned store: {store} (Click to change or clear)")
+            else:
+                self.setToolTip("Click to set planned purchase store (Beatport, Bandcamp, Qobuz, Traxsource)")
         else:
-            self.setToolTip("Click to set purchase store (Beatport, Traxsource, Qobuz, Bandcamp)")
+            if store:
+                self.setToolTip(f"Purchased at {store} (Click to clear store metadata)")
+            else:
+                self.setToolTip("Click to set purchase store (Beatport, Traxsource, Qobuz, Bandcamp)")
 
 
 class FlowLayout(QLayout):

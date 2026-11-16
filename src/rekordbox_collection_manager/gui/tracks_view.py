@@ -389,6 +389,7 @@ class TracksView(QWidget):
 
         if hasattr(self, "table"):
             self.table.set_column_visible(TrackColumn.PURCHASED_AT, is_purchased_only)
+            self.table.set_column_visible(TrackColumn.BUY_AT, is_purchasable)
 
         self._update_all_filter_styles()
         self._execute_search()
@@ -449,6 +450,7 @@ class TracksView(QWidget):
             self.store_filter_widget.setVisible(False)
         if hasattr(self, "table"):
             self.table.set_column_visible(TrackColumn.PURCHASED_AT, False)
+            self.table.set_column_visible(TrackColumn.BUY_AT, False)
 
         self.format_filter_widget.clear_selection()
         self.key_filter_widget.clear_selection()

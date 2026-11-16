@@ -35,5 +35,5 @@
 
 4. **Table View (`track_table.py`):**
    - Add column identifier (e.g. `TrackColumn.BUY_AT = "Buy At"`).
-   - Render `Buy at: <Store>` or `—`.
+   - Render `🛒 <Store>` or `—` (store name with cart icon; omits "Buy at:" as column header already says "Buy At").
    - Connect cell click / interaction to launch store selection.

@@ -1344,6 +1344,73 @@ class TestPlaylistChipsUI(unittest.TestCase):
         self.assertEqual(s_chip.text(), "+ Store")
         self.assertEqual(s_chip.scheme_name, "slate")
 
+        # StoreChip in buy mode
+        b_chip = StoreChip(store=None, mode="buy")
+        self.assertEqual(b_chip.text(), "+ Buy at")
+        self.assertEqual(b_chip.scheme_name, "slate")
+
+        b_chip.set_store("Bandcamp", mode="buy")
+        self.assertEqual(b_chip.text(), "Buy at: Bandcamp")
+        self.assertEqual(b_chip.scheme_name, "amber")
+
+    def test_buy_at_store_buttons_staging_and_saving(self):
+        """Verify planned purchase store badge on unpurchased tracks, staging, discard, and save."""
+        track = dict(
+            self.track_data,
+            id="track_buy_1",
+            comments="",
+            folder_path="/Music/Downloaded/House/test.mp3",
+            file_path="/Music/Downloaded/House/test.mp3",
+        )
+        with self.engine.begin() as conn:
+            conn.exec_driver_sql(
+                "INSERT INTO djmdContent (ID, Title, Commnt) VALUES ('track_buy_1', 'Buy Test', '')"
+            )
+
+        view = TrackDetailView(
+            engine=self.engine,
+            track_data=track,
+            tracks_list=[track],
+            current_index=0,
+        )
+        self._views.append(view)
+        view.show()
+
+        # Unpurchased track: purchased badge is 'Downloaded'
+        self.assertEqual(view.purchased_badge.text(), "Downloaded")
+        # Store badge should be visible and show '+ Buy at'
+        self.assertTrue(view.store_badge.isVisible())
+        self.assertEqual(view.store_badge.text(), "+ Buy at")
+        self.assertFalse(view.bottom_bar.isVisible())
+
+        # Select Bandcamp -> stages 'Buy at Bandcamp.com'
+        view._on_store_selected("Bandcamp")
+        self.assertEqual(view.current_buy_store, "Bandcamp")
+        self.assertEqual(view.current_comment, "Buy at Bandcamp.com")
+        self.assertEqual(view.store_badge.text(), "Buy at: Bandcamp")
+        self.assertTrue(view.bottom_bar.isVisible())
+        self.assertIn("Buy at: Bandcamp", view.staged_status_label.text())
+
+        # Discard changes -> reverts to unset '+ Buy at'
+        view.discard_btn.click()
+        self.assertIsNone(view.current_buy_store)
+        self.assertEqual(view.current_comment, "")
+        self.assertEqual(view.store_badge.text(), "+ Buy at")
+        self.assertFalse(view.bottom_bar.isVisible())
+
+        # Set Beatport -> click Save Changes -> commits to database
+        view._on_store_selected("Beatport")
+        self.assertEqual(view.store_badge.text(), "Buy at: Beatport")
+        with patch("rekordbox_collection_manager.gui.track_detail_view.is_rekordbox_running", return_value=False):
+            view.save_btn.click()
+
+        self.assertFalse(view.bottom_bar.isVisible())
+        with self.engine.connect() as conn:
+            row = conn.exec_driver_sql(
+                "SELECT Commnt FROM djmdContent WHERE ID = 'track_buy_1'"
+            ).mappings().first()
+            self.assertEqual(row["Commnt"], "Buy at Beatport.com")
+
 
 if __name__ == "__main__":
     unittest.main()
