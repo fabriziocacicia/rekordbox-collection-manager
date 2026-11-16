@@ -2517,6 +2517,122 @@ class TestBuyAtStore(unittest.TestCase):
             row = conn.exec_driver_sql("SELECT Commnt FROM djmdContent WHERE ID = '42'").mappings().first()
             self.assertEqual(row["Commnt"], "Buy at qobuz.com")
 
+    def test_buy_at_cell_click_clears_store(self):
+        from unittest.mock import MagicMock
+        from rekordbox_collection_manager.gui.track_table import TrackColumn
+
+        engine = create_engine("sqlite:///:memory:")
+        with engine.begin() as conn:
+            conn.exec_driver_sql(
+                "CREATE TABLE djmdContent (ID VARCHAR(255) PRIMARY KEY, Commnt TEXT, updated_at DATETIME)"
+            )
+            conn.exec_driver_sql(
+                "INSERT INTO djmdContent (ID, Commnt) VALUES ('42', 'Buy at Beatport.com')"
+            )
+
+        self.view.table.set_engine(engine)
+        records = [
+            {
+                "id": "42",
+                "content_id": "42",
+                "title": "Track 42",
+                "artist": "Artist 42",
+                "buy_at_store": "Beatport",
+                "comment": "Buy at Beatport.com",
+            }
+        ]
+        self.view.table.set_tracks(records)
+        buy_at_col = list(self.view.table.config.columns).index(TrackColumn.BUY_AT)
+
+        mock_dlg = MagicMock()
+        mock_dlg.exec.return_value = 1
+        mock_dlg.selected_store = None
+        mock_dlg.cleared = True
+
+        with patch("rekordbox_collection_manager.gui.track_detail_view.SelectStoreDialog", return_value=mock_dlg):
+            self.view.table._open_buy_at_store_dialog(0)
+
+        self.assertIsNone(self.view.table.records[0]["buy_at_store"])
+        self.assertEqual(self.view.table.records[0]["comment"], "")
+        self.assertEqual(self.view.table.item(0, buy_at_col).text(), "—")
+
+        with engine.connect() as conn:
+            row = conn.exec_driver_sql("SELECT Commnt FROM djmdContent WHERE ID = '42'").mappings().first()
+            self.assertEqual(row["Commnt"], "")
+
+    def test_buy_at_blocked_when_rekordbox_running(self):
+        from unittest.mock import MagicMock
+        engine = create_engine("sqlite:///:memory:")
+        with engine.begin() as conn:
+            conn.exec_driver_sql(
+                "CREATE TABLE djmdContent (ID VARCHAR(255) PRIMARY KEY, Commnt TEXT, updated_at DATETIME)"
+            )
+            conn.exec_driver_sql(
+                "INSERT INTO djmdContent (ID, Commnt) VALUES ('42', '')"
+            )
+
+        self.view.table.set_engine(engine)
+        records = [
+            {
+                "id": "42",
+                "content_id": "42",
+                "title": "Track 42",
+                "artist": "Artist 42",
+                "buy_at_store": None,
+                "comment": "",
+            }
+        ]
+        self.view.table.set_tracks(records)
+
+        with patch("rekordbox_collection_manager.gui.track_table.is_rekordbox_running", return_value=True), \
+             patch("PySide6.QtWidgets.QMessageBox.warning") as mock_warn:
+            self.view.table._set_track_buy_store(0, "Beatport")
+            mock_warn.assert_called_once()
+
+        # Database unchanged
+        with engine.connect() as conn:
+            row = conn.exec_driver_sql("SELECT Commnt FROM djmdContent WHERE ID = '42'").mappings().first()
+            self.assertEqual(row["Commnt"], "")
+
+    def test_buy_at_sorting(self):
+        from rekordbox_collection_manager.gui.track_table import TrackColumn, TracksTableWidget, TrackTableConfig
+        from rekordbox_collection_manager.edit_play_count import search_tracks
+
+        records = [
+            {"id": "1", "title": "Track A", "buy_at_store": "Traxsource", "comment": "Buy at Traxsource.com"},
+            {"id": "2", "title": "Track B", "buy_at_store": "Bandcamp", "comment": "Buy at Bandcamp.com"},
+            {"id": "3", "title": "Track C", "buy_at_store": None, "comment": ""},
+        ]
+        cfg = TrackTableConfig(
+            columns=[TrackColumn.TITLE, TrackColumn.BUY_AT],
+            index_mode="row_number",
+            sorting_mode="client",
+        )
+        table = TracksTableWidget(config=cfg)
+        table.set_tracks(records)
+
+        # Sort client-side by BUY_AT ascending
+        buy_at_col = cfg.columns.index(TrackColumn.BUY_AT)
+        table._model.sort(buy_at_col, Qt.SortOrder.AscendingOrder)
+        sorted_stores = [r.get("buy_at_store") for r in table.records]
+        # None sorts first as "", then Bandcamp, then Traxsource
+        self.assertEqual(sorted_stores, [None, "Bandcamp", "Traxsource"])
+
+        # Test server-side search_tracks sorting
+        engine = create_engine("sqlite:///:memory:")
+        with engine.begin() as conn:
+            conn.exec_driver_sql(
+                "CREATE TABLE djmdContent (ID VARCHAR(255) PRIMARY KEY, Title TEXT, Commnt TEXT, DJPlayCount INT DEFAULT 0)"
+            )
+            conn.exec_driver_sql(
+                "INSERT INTO djmdContent (ID, Title, Commnt, DJPlayCount) VALUES "
+                "('1', 'Alpha', 'Buy at Traxsource.com', 5), "
+                "('2', 'Beta', 'Buy at Bandcamp.com', 5)"
+            )
+        res = search_tracks(engine, sort_by="buy_at_store", sort_order="asc", limit=10)
+        self.assertEqual(res[0]["title"], "Beta")
+        self.assertEqual(res[1]["title"], "Alpha")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1237,17 +1237,18 @@ def update_track_comment(
     content_id: str,
     comment: str,
 ) -> bool:
-    """Update Commnt field of a track in djmdContent."""
+    """Update Commnt field of a track in djmdContent or content table."""
     from sqlalchemy import text
 
+    tbl = detect_content_table(engine)
     now_utc = get_rekordbox_timestamp()
     with engine.begin() as conn:
         cols = {
             r[1]
-            for r in conn.exec_driver_sql("PRAGMA table_info(djmdContent);").fetchall()
+            for r in conn.exec_driver_sql(f"PRAGMA table_info({tbl});").fetchall()
         }
         if not cols or "Commnt" not in cols:
-            raise ValueError("Table djmdContent or column Commnt not found.")
+            raise ValueError(f"Table {tbl} or column Commnt not found.")
 
         updates = ["Commnt = :comment"]
         params: Dict[str, Any] = {
@@ -1258,7 +1259,7 @@ def update_track_comment(
             updates.append("updated_at = :updated_at")
             params["updated_at"] = now_utc
 
-        sql = f"UPDATE djmdContent SET {', '.join(updates)} WHERE ID = :id;"
+        sql = f"UPDATE {tbl} SET {', '.join(updates)} WHERE ID = :id;"
         conn.execute(text(sql), params)
     return True
 

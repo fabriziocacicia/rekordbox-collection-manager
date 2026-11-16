@@ -1411,6 +1411,41 @@ class TestPlaylistChipsUI(unittest.TestCase):
             ).mappings().first()
             self.assertEqual(row["Commnt"], "Buy at Beatport.com")
 
+    def test_buy_at_store_updated_on_async_details_loaded(self):
+        from rekordbox_collection_manager.gui.track_detail_view import TrackDetailView, SelectStoreDialog
+
+        track = {
+            "id": "async_track_1",
+            "title": "Async Track",
+            "artist": "Artist",
+            "comment": "",
+            "comments": "",
+            "file_path": "/Music/Downloaded/Track.aiff",
+            "is_purchased": False,
+        }
+        view = TrackDetailView(engine=self.engine, track_data=track)
+        self._views.append(view)
+        self.assertEqual(view.store_badge.text(), "+ Buy at")
+
+        # Simulate async details loaded delivering a buy store
+        full_details = {
+            "playlists": [],
+            "tags": [],
+            "comments": "Buy at Qobuz.com",
+            "history_plays": [],
+        }
+        view._on_details_loaded(full_details)
+        self.assertEqual(view.current_buy_store, "Qobuz")
+        self.assertEqual(view.store_badge.text(), "Buy at: Qobuz")
+
+        # Verify SelectStoreDialog has clear button when store is set
+        dlg = SelectStoreDialog(parent=view, current_store="Qobuz")
+        self.assertIsNotNone(dlg)
+        self.assertFalse(dlg.cleared)
+        dlg._on_clear()
+        self.assertTrue(dlg.cleared)
+        self.assertIsNone(dlg.selected_store)
+
 
 if __name__ == "__main__":
     unittest.main()

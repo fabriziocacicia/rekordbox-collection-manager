@@ -1562,6 +1562,9 @@ class TracksTableModel(QAbstractTableModel):
             elif col_name == TrackColumn.PURCHASED_AT:
                 store = t.get("store") or parse_store_from_comment(t.get("comment") or t.get("comments"))
                 return (store or "").lower()
+            elif col_name == TrackColumn.BUY_AT:
+                store = t.get("buy_at_store") or parse_buy_store_from_comment(t.get("comment") or t.get("comments"))
+                return (store or "").lower()
             elif col_name == TrackColumn.TAGS:
                 tags = t.get("tags") or []
                 return ", ".join(tags).lower()
@@ -2045,7 +2048,6 @@ class TracksTableWidget(QTableView):
             pos = event.position().toPoint()
             idx = self.indexAt(pos)
             if idx.isValid() and idx.column() == getattr(self, "_buy_at_col_idx", -1):
-                self._open_buy_at_store_dialog(idx.row())
                 event.accept()
                 return
             if idx.isValid() and idx.column() in (self._playlist_col_idx, self._tags_col_idx):
@@ -2811,6 +2813,16 @@ class TracksTableWidget(QTableView):
         if not (0 <= row < len(self.records)):
             return
         track = self.records[row]
+        if is_purchased_track(track):
+            return
+        if is_rekordbox_running():
+            QMessageBox.warning(
+                self,
+                "Rekordbox is Running",
+                "Please close Rekordbox before updating store information in the database.",
+            )
+            return
+
         cur_store = track.get("buy_at_store") or parse_buy_store_from_comment(
             track.get("comment") or track.get("comments")
         )
@@ -2822,13 +2834,23 @@ class TracksTableWidget(QTableView):
             description="Choose the store where you plan to buy this track:",
         )
         if dlg.exec():
-            new_store = dlg.selected_store if dlg.selected_store else None
-            self._set_track_buy_store(row, new_store)
+            if getattr(dlg, "cleared", False) is True:
+                self._set_track_buy_store(row, None)
+            elif dlg.selected_store:
+                self._set_track_buy_store(row, dlg.selected_store)
 
     def _set_track_buy_store(self, row: int, new_store: Optional[str]) -> None:
         """Apply and persist planned purchase store for track at row."""
         if not (0 <= row < len(self.records)):
             return
+        if is_rekordbox_running():
+            QMessageBox.warning(
+                self,
+                "Rekordbox is Running",
+                "Please close Rekordbox before updating store information in the database.",
+            )
+            return
+
         track = self.records[row]
         content_id = track.get("id") or track.get("content_id")
         new_comment = get_buy_store_comment(new_store) if new_store else ""
