@@ -99,12 +99,14 @@ from rekordbox_collection_manager.utils import (
     KNOWN_STORES,
     format_file_size,
     format_rating_stars,
+    get_buy_store_comment,
     get_store_comment,
     is_aiff_track,
     is_mp3_track,
     is_purchased_track,
     is_rekordbox_running,
     open_in_folder,
+    parse_buy_store_from_comment,
     parse_history_name,
     parse_store_from_comment,
     reveal_in_file_manager,
@@ -123,12 +125,19 @@ def format_created_at_tooltip(created_at: Any, date_added: str = "") -> str:
 
 
 class SelectStoreDialog(QDialog):
-    """Clean modal dialog to select a purchase store."""
+    """Clean modal dialog to select a purchase or planned buy store."""
 
-    def __init__(self, parent: Optional[QWidget] = None, current_store: Optional[str] = None):
+    def __init__(
+        self,
+        parent: Optional[QWidget] = None,
+        current_store: Optional[str] = None,
+        title: Optional[str] = None,
+        description: Optional[str] = None,
+    ):
         super().__init__(parent)
         self.selected_store: Optional[str] = None
-        self.setWindowTitle("Set Purchase Store")
+        self.cleared: bool = False
+        self.setWindowTitle(title or "Set Purchase Store")
         self.setFixedWidth(300)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowType.WindowContextHelpButtonHint)
         self.setStyleSheet(
@@ -139,14 +148,14 @@ class SelectStoreDialog(QDialog):
         layout.setContentsMargins(18, 16, 18, 16)
         layout.setSpacing(12)
 
-        title = QLabel("Select Purchase Store")
-        title.setStyleSheet("color: #ffffff; font-size: 13px; font-weight: 700;")
-        layout.addWidget(title)
+        title_lbl = QLabel(title or "Select Purchase Store")
+        title_lbl.setStyleSheet("color: #ffffff; font-size: 13px; font-weight: 700;")
+        layout.addWidget(title_lbl)
 
-        desc = QLabel("Choose the store where this track was purchased:")
-        desc.setStyleSheet(f"color: {COLOR_TEXT_MUTED}; font-size: 11px;")
-        desc.setWordWrap(True)
-        layout.addWidget(desc)
+        desc_lbl = QLabel(description or "Choose the store where this track was purchased:")
+        desc_lbl.setStyleSheet(f"color: {COLOR_TEXT_MUTED}; font-size: 11px;")
+        desc_lbl.setWordWrap(True)
+        layout.addWidget(desc_lbl)
 
         buttons_layout = QVBoxLayout()
         buttons_layout.setSpacing(8)
@@ -179,6 +188,28 @@ class SelectStoreDialog(QDialog):
             btn.clicked.connect(lambda checked=False, s=store: self._on_select(s))
             buttons_layout.addWidget(btn)
 
+        if current_store:
+            clear_btn = QPushButton("Clear Store")
+            clear_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            clear_btn.setFixedHeight(30)
+            clear_btn.setStyleSheet(
+                f"QPushButton {{ "
+                f"  background-color: rgba(239, 68, 68, 0.15); "
+                f"  color: #f87171; "
+                f"  border: 1px solid rgba(239, 68, 68, 0.4); "
+                f"  border-radius: 6px; "
+                f"  font-size: 11px; "
+                f"  font-weight: 600; "
+                f"}} "
+                f"QPushButton:hover {{ "
+                f"  background-color: rgba(239, 68, 68, 0.25); "
+                f"  border-color: #ef4444; "
+                f"  color: #ffffff; "
+                f"}}"
+            )
+            clear_btn.clicked.connect(self._on_clear)
+            buttons_layout.addWidget(clear_btn)
+
         layout.addLayout(buttons_layout)
 
         cancel_btn = QPushButton("Cancel")
@@ -202,6 +233,12 @@ class SelectStoreDialog(QDialog):
 
     def _on_select(self, store_name: str) -> None:
         self.selected_store = store_name
+        self.cleared = False
+        self.accept()
+
+    def _on_clear(self) -> None:
+        self.selected_store = None
+        self.cleared = True
         self.accept()
 
 
@@ -887,6 +924,8 @@ class TrackDetailView(QWidget):
         self.current_comment = raw_comment
         self.original_store = parse_store_from_comment(raw_comment)
         self.current_store = self.original_store
+        self.original_buy_store = parse_buy_store_from_comment(raw_comment)
+        self.current_buy_store = self.original_buy_store
 
         self._refresh_store_badge_ui()
 
@@ -1140,6 +1179,8 @@ class TrackDetailView(QWidget):
                 self.current_comment = db_comment
                 self.original_store = parse_store_from_comment(db_comment)
                 self.current_store = self.original_store
+                self.original_buy_store = parse_buy_store_from_comment(db_comment)
+                self.current_buy_store = self.original_buy_store
                 self._refresh_store_badge_ui()
 
         self._update_staged_changes_ui()
@@ -1365,26 +1406,37 @@ class TrackDetailView(QWidget):
                 self.db_saved.emit()
 
     def _refresh_store_badge_ui(self) -> None:
-        """Update store badge chip label, scheme, and visibility based on self.current_store."""
+        """Update store badge chip label, scheme, and visibility based on self.current_store / current_buy_store."""
         is_purchased = is_purchased_track(self.track)
-        if self.current_store:
-            self.store_badge.set_store(self.current_store)
-            self.store_badge.setVisible(True)
-        elif is_purchased:
-            self.store_badge.set_store(None)
-            self.store_badge.setVisible(True)
+        if is_purchased:
+            if self.current_store:
+                self.store_badge.set_store(self.current_store, mode="purchased")
+                self.store_badge.setVisible(True)
+            else:
+                self.store_badge.set_store(None, mode="purchased")
+                self.store_badge.setVisible(True)
         else:
-            self.store_badge.setVisible(False)
+            buy_store = getattr(self, "current_buy_store", None)
+            self.store_badge.set_store(buy_store, mode="buy")
+            self.store_badge.setVisible(True)
 
     _refresh_store_buttons_ui = _refresh_store_badge_ui
 
     def _on_store_badge_clicked(self, *args: Any) -> None:
         """Handle clicking the store badge: prompts confirmation to clear if set, or opens picker if empty."""
-        if self.current_store:
+        is_purchased = is_purchased_track(self.track)
+        active_store = self.current_store if is_purchased else getattr(self, "current_buy_store", None)
+        if active_store:
+            title_text = "Clear Purchase Store" if is_purchased else "Clear Store to Buy"
+            msg_text = (
+                f"Are you sure you want to clear the purchase store ({active_store}) for this track?"
+                if is_purchased
+                else f"Are you sure you want to clear the planned store ({active_store}) for this track?"
+            )
             reply = QMessageBox.question(
                 self,
-                "Clear Purchase Store",
-                f"Are you sure you want to clear the purchase store ({self.current_store}) for this track?",
+                title_text,
+                msg_text,
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             )
             if reply == QMessageBox.StandardButton.Yes:
@@ -1393,28 +1445,53 @@ class TrackDetailView(QWidget):
             self._open_store_selection_dialog()
 
     def _open_store_selection_dialog(self) -> None:
-        """Open modal dialog to pick a purchase store."""
-        dlg = SelectStoreDialog(parent=self, current_store=self.current_store)
-        if dlg.exec() and dlg.selected_store:
-            self._on_store_selected(dlg.selected_store)
+        """Open modal dialog to pick a purchase or planned buy store."""
+        is_purchased = is_purchased_track(self.track)
+        cur = self.current_store if is_purchased else getattr(self, "current_buy_store", None)
+        title = "Select Purchase Store" if is_purchased else "Select Store to Buy"
+        desc = (
+            "Choose the store where this track was purchased:"
+            if is_purchased
+            else "Choose the store where you plan to buy this track:"
+        )
+        dlg = SelectStoreDialog(parent=self, current_store=cur, title=title, description=desc)
+        if dlg.exec():
+            if getattr(dlg, "cleared", False) is True:
+                self._on_clear_store_selected()
+            elif dlg.selected_store:
+                self._on_store_selected(dlg.selected_store)
 
     def _on_store_selected(self, store_name: str) -> None:
-        """Handle selection of a purchase store."""
-        if self.current_store == store_name:
-            return
-        self.current_store = store_name
-        self.current_comment = get_store_comment(store_name)
+        """Handle selection of a purchase or planned buy store."""
+        is_purchased = is_purchased_track(self.track)
+        if is_purchased:
+            if self.current_store == store_name:
+                return
+            self.current_store = store_name
+            self.current_comment = get_store_comment(store_name)
+        else:
+            if getattr(self, "current_buy_store", None) == store_name:
+                return
+            self.current_buy_store = store_name
+            self.current_comment = get_buy_store_comment(store_name)
         self._refresh_store_badge_ui()
         self._update_staged_changes_ui()
 
     _on_store_button_clicked = _on_store_selected
 
     def _on_clear_store_selected(self) -> None:
-        """Handle clearing the purchase store."""
-        if not self.current_store and not self.current_comment:
-            return
-        self.current_store = None
-        self.current_comment = ""
+        """Handle clearing the purchase or planned buy store."""
+        is_purchased = is_purchased_track(self.track)
+        if is_purchased:
+            if not self.current_store and not self.current_comment:
+                return
+            self.current_store = None
+            self.current_comment = ""
+        else:
+            if not getattr(self, "current_buy_store", None) and not self.current_comment:
+                return
+            self.current_buy_store = None
+            self.current_comment = ""
         self._refresh_store_badge_ui()
         self._update_staged_changes_ui()
 
@@ -1452,6 +1529,10 @@ class TrackDetailView(QWidget):
                     sections.append(f"Store: {self.current_store}")
                 elif self.original_store:
                     sections.append("Store: Cleared")
+                elif getattr(self, "current_buy_store", None):
+                    sections.append(f"Buy at: {self.current_buy_store}")
+                elif getattr(self, "original_buy_store", None):
+                    sections.append("Buy at: Cleared")
                 else:
                     sections.append("Comment: Modified")
             summary = "; ".join(sections)
@@ -1467,6 +1548,7 @@ class TrackDetailView(QWidget):
         self.tags_container.set_tags(self.current_tags)
         self.current_comment = self.original_comment
         self.current_store = self.original_store
+        self.current_buy_store = getattr(self, "original_buy_store", None)
         self._refresh_store_badge_ui()
         self._update_staged_changes_ui()
         self.status_message.emit("Modifications discarded.")
@@ -1521,9 +1603,11 @@ class TrackDetailView(QWidget):
         if comment_changed:
             self.original_comment = self.current_comment
             self.original_store = self.current_store
+            self.original_buy_store = getattr(self, "current_buy_store", None)
             self.track["comments"] = self.current_comment
             self.track["comment"] = self.current_comment
             self.track["store"] = self.current_store
+            self.track["buy_at_store"] = getattr(self, "current_buy_store", None)
 
         if self.tracks_list and 0 <= self.current_index < len(self.tracks_list):
             self.tracks_list[self.current_index]["playlists"] = list(self.current_playlists)
@@ -1532,6 +1616,7 @@ class TrackDetailView(QWidget):
                 self.tracks_list[self.current_index]["comments"] = self.current_comment
                 self.tracks_list[self.current_index]["comment"] = self.current_comment
                 self.tracks_list[self.current_index]["store"] = self.current_store
+                self.tracks_list[self.current_index]["buy_at_store"] = getattr(self, "current_buy_store", None)
 
         self._refresh_store_badge_ui()
         self._update_staged_changes_ui()
@@ -1549,7 +1634,8 @@ class TrackDetailView(QWidget):
         tag_dirty = set(getattr(self, "current_tags", [])) != set(getattr(self, "original_tags", []))
         comment_dirty = getattr(self, "current_comment", "") != getattr(self, "original_comment", "")
         store_dirty = getattr(self, "current_store", "") != getattr(self, "original_store", "")
-        return bool(pl_dirty or tag_dirty or comment_dirty or store_dirty)
+        buy_store_dirty = getattr(self, "current_buy_store", "") != getattr(self, "original_buy_store", "")
+        return bool(pl_dirty or tag_dirty or comment_dirty or store_dirty or buy_store_dirty)
 
     def confirm_unsaved_changes(self) -> bool:
         """Public alias for _confirm_unsaved_changes."""

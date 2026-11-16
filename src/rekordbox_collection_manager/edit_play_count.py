@@ -537,6 +537,18 @@ def search_tracks(
                     order_clause = f"{store_expr} {order_dir}, c.Title ASC"
                 else:
                     order_clause = "c.Title ASC"
+            elif sort_by in ("buy_at_store", "buy_at"):
+                if "Commnt" in cols:
+                    buy_store_expr = """CASE
+                        WHEN lower(c.Commnt) LIKE '%buy at bandcamp%' THEN 'Bandcamp'
+                        WHEN lower(c.Commnt) LIKE '%buy at beatport%' THEN 'Beatport'
+                        WHEN lower(c.Commnt) LIKE '%buy at qobuz%' THEN 'Qobuz'
+                        WHEN lower(c.Commnt) LIKE '%buy at traxsource%' THEN 'Traxsource'
+                        ELSE ''
+                    END"""
+                    order_clause = f"{buy_store_expr} {order_dir}, c.Title ASC"
+                else:
+                    order_clause = "c.Title ASC"
             elif sort_by == "tags" and has_my_tag:
                 order_clause = f"TagNames {order_dir}, c.Title ASC"
             elif sort_by in ("playlists", "playlist") and has_playlist:

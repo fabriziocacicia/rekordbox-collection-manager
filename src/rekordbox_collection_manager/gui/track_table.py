@@ -88,14 +88,17 @@ from rekordbox_collection_manager.gui.theme import (
     COLOR_TEXT_SECONDARY,
 )
 from rekordbox_collection_manager.utils import (
+    get_buy_store_comment,
     is_aiff_track,
     is_mp3_track,
+    is_purchased_track,
     is_rekordbox_running,
     open_in_folder,
+    parse_buy_store_from_comment,
     parse_store_from_comment,
     reveal_in_file_manager,
+    update_track_comment,
 )
-
 
 
 class TrackColumn:
@@ -113,6 +116,7 @@ class TrackColumn:
     FILE_TYPE = "Type"
     PURCHASED = "Purchased"
     PURCHASED_AT = "Purchased At"
+    BUY_AT = "Buy At"
     TAGS = "Tags"
     PLAYLISTS = "Playlists"
     FOLDER = "Folder"
@@ -130,6 +134,7 @@ DEFAULT_COLLECTION_COLUMNS: List[str] = [
     TrackColumn.BITRATE,
     TrackColumn.FILE_TYPE,
     TrackColumn.PURCHASED_AT,
+    TrackColumn.BUY_AT,
     TrackColumn.TAGS,
     TrackColumn.PLAYLISTS,
     TrackColumn.FOLDER,
@@ -967,10 +972,11 @@ class FileTypeBadgeDelegate(QStyledItemDelegate):
 
 
 class PurchasedBadgeDelegate(QStyledItemDelegate):
-    """Renders purchased track status as a green badge or muted indicator."""
+    """Renders purchased track status as a green badge or buy-at store as an amber badge."""
 
-    def __init__(self, parent: Optional[QWidget] = None):
+    def __init__(self, is_buy: bool = False, parent: Optional[QWidget] = None):
         super().__init__(parent)
+        self.is_buy = is_buy
         self.badge_font = QFont()
         self.badge_font.setPointSize(9)
         self.badge_font.setBold(True)
@@ -1002,9 +1008,21 @@ class PurchasedBadgeDelegate(QStyledItemDelegate):
             return
 
         text_str = disp_text if disp_text.startswith("🛒") else (f"🛒 {user_val}" if isinstance(user_val, str) else "🛒 Purchased")
-        bg_color = QColor(16, 185, 129, 35)
-        border_color = QColor(52, 211, 153, 120)
-        text_color = QColor("#34d399")
+        model = index.model()
+        header_title = (
+            str(model.headerData(index.column(), Qt.Orientation.Horizontal, Qt.ItemDataRole.DisplayRole) or "")
+            if model
+            else ""
+        )
+        is_buy = self.is_buy or (header_title == TrackColumn.BUY_AT) or ("Buy at" in disp_text)
+        if is_buy:
+            bg_color = QColor(245, 158, 11, 35)
+            border_color = QColor(245, 158, 11, 120)
+            text_color = QColor("#fbbf24")
+        else:
+            bg_color = QColor(16, 185, 129, 35)
+            border_color = QColor(52, 211, 153, 120)
+            text_color = QColor("#34d399")
 
         painter.setFont(self.badge_font)
         fm = self.fm
@@ -1220,6 +1238,7 @@ class TracksTableModel(QAbstractTableModel):
                     TrackColumn.FILE_TYPE,
                     TrackColumn.PURCHASED,
                     TrackColumn.PURCHASED_AT,
+                    TrackColumn.BUY_AT,
                 ):
                     return Qt.AlignmentFlag.AlignCenter
                 return int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
@@ -1242,6 +1261,7 @@ class TracksTableModel(QAbstractTableModel):
             TrackColumn.FILE_TYPE: "Sort by File Type (MP3, AIFF, FLAC, etc.)",
             TrackColumn.PURCHASED: "Sort by Purchased status (inside Purchased folder vs Downloaded)",
             TrackColumn.PURCHASED_AT: "Sort by Purchased Store (Beatport, Bandcamp, Qobuz, Traxsource)",
+            TrackColumn.BUY_AT: "Sort by Planned Store to Buy (Beatport, Bandcamp, Qobuz, Traxsource)",
             TrackColumn.TAGS: "Sort by Tags",
             TrackColumn.PLAYLISTS: "Sort by Real Playlists",
             TrackColumn.FOLDER: "Sort by Folder (Ctrl+Click or Cmd+Click cell to open in Finder)",
@@ -1426,6 +1446,23 @@ class TracksTableModel(QAbstractTableModel):
             elif role == Qt.ItemDataRole.ForegroundRole:
                 return QColor("#34d399") if store else self._color_muted
 
+        # BUY AT (Planned Store)
+        elif col_name == TrackColumn.BUY_AT:
+            store = t.get("buy_at_store") or parse_buy_store_from_comment(t.get("comment") or t.get("comments"))
+            if role == Qt.ItemDataRole.DisplayRole:
+                return f"🛒 {store}" if store else "—"
+            elif role == Qt.ItemDataRole.ToolTipRole:
+                if store:
+                    raw_comment = (t.get("comment") or t.get("comments") or "").strip()
+                    return f"Planned store to buy: {store}\nComment: {raw_comment}" if raw_comment else f"Planned store to buy: {store}"
+                return "Planned store to buy (click cell to set store)"
+            elif role == Qt.ItemDataRole.UserRole:
+                return store or ""
+            elif role == Qt.ItemDataRole.TextAlignmentRole:
+                return Qt.AlignmentFlag.AlignCenter
+            elif role == Qt.ItemDataRole.ForegroundRole:
+                return QColor("#f59e0b") if store else self._color_muted
+
         # 11. TAGS
         elif col_name == TrackColumn.TAGS:
             tags = list(dict.fromkeys(t.get("tags") or []))
@@ -1524,6 +1561,9 @@ class TracksTableModel(QAbstractTableModel):
                 return 1 if t.get("is_purchased") else 0
             elif col_name == TrackColumn.PURCHASED_AT:
                 store = t.get("store") or parse_store_from_comment(t.get("comment") or t.get("comments"))
+                return (store or "").lower()
+            elif col_name == TrackColumn.BUY_AT:
+                store = t.get("buy_at_store") or parse_buy_store_from_comment(t.get("comment") or t.get("comments"))
                 return (store or "").lower()
             elif col_name == TrackColumn.TAGS:
                 tags = t.get("tags") or []
@@ -1725,6 +1765,7 @@ class TracksTableWidget(QTableView):
         # Delegate singletons
         file_type_delegate = FileTypeBadgeDelegate(parent=self)
         purchased_delegate = PurchasedBadgeDelegate(parent=self)
+        buy_at_delegate = PurchasedBadgeDelegate(is_buy=True, parent=self)
         self._tags_delegate = ChipBadgeDelegate(
             bg_color=QColor(139, 92, 246, 38),
             border_color=QColor(167, 139, 250, 95),
@@ -1782,6 +1823,9 @@ class TracksTableWidget(QTableView):
             elif col_name == TrackColumn.PURCHASED_AT:
                 header.setSectionResizeMode(col_idx, QHeaderView.ResizeMode.Interactive)
                 self.setColumnWidth(col_idx, 125)
+            elif col_name == TrackColumn.BUY_AT:
+                header.setSectionResizeMode(col_idx, QHeaderView.ResizeMode.Interactive)
+                self.setColumnWidth(col_idx, 135)
             elif col_name == TrackColumn.TAGS:
                 header.setSectionResizeMode(col_idx, QHeaderView.ResizeMode.Interactive)
                 self.setColumnWidth(col_idx, 220)
@@ -1800,6 +1844,9 @@ class TracksTableWidget(QTableView):
                 self.setItemDelegateForColumn(col_idx, file_type_delegate)
             elif col_name in (TrackColumn.PURCHASED, TrackColumn.PURCHASED_AT):
                 self.setItemDelegateForColumn(col_idx, purchased_delegate)
+            elif col_name == TrackColumn.BUY_AT:
+                self.setItemDelegateForColumn(col_idx, buy_at_delegate)
+                self._buy_at_col_idx = col_idx
             elif col_name == TrackColumn.TAGS:
                 self.setItemDelegateForColumn(col_idx, self._tags_delegate)
                 self._tags_col_idx = col_idx
@@ -1813,9 +1860,12 @@ class TracksTableWidget(QTableView):
                 self.setItemDelegateForColumn(col_idx, path_link_delegate)
                 self._file_col_idx = col_idx
 
-        # Hide PURCHASED_AT by default until filtered by Purchased
+        # Hide PURCHASED_AT and BUY_AT by default until filtered
         if TrackColumn.PURCHASED_AT in cols:
             col_idx = cols.index(TrackColumn.PURCHASED_AT)
+            self.setColumnHidden(col_idx, True)
+        if TrackColumn.BUY_AT in cols:
+            col_idx = cols.index(TrackColumn.BUY_AT)
             self.setColumnHidden(col_idx, True)
 
     def _on_modifier_changed(self) -> None:
@@ -1931,6 +1981,10 @@ class TracksTableWidget(QTableView):
         if event.button() == Qt.MouseButton.LeftButton:
             pos = event.position().toPoint()
             idx = self.indexAt(pos)
+            if idx.isValid() and idx.column() == getattr(self, "_buy_at_col_idx", -1):
+                self._open_buy_at_store_dialog(idx.row())
+                event.accept()
+                return
             if idx.isValid() and idx.column() in (self._playlist_col_idx, self._tags_col_idx):
                 items = idx.data(Qt.ItemDataRole.UserRole)
                 if items:
@@ -1993,6 +2047,9 @@ class TracksTableWidget(QTableView):
         if event.button() == Qt.MouseButton.LeftButton:
             pos = event.position().toPoint()
             idx = self.indexAt(pos)
+            if idx.isValid() and idx.column() == getattr(self, "_buy_at_col_idx", -1):
+                event.accept()
+                return
             if idx.isValid() and idx.column() in (self._playlist_col_idx, self._tags_col_idx):
                 items = idx.data(Qt.ItemDataRole.UserRole) or []
                 if isinstance(items, str):
@@ -2504,6 +2561,7 @@ class TracksTableWidget(QTableView):
             TrackColumn.FILE_TYPE: "file_type",
             TrackColumn.PURCHASED: "purchased",
             TrackColumn.PURCHASED_AT: "purchased_at",
+            TrackColumn.BUY_AT: "buy_at_store",
             TrackColumn.TAGS: "tags",
             TrackColumn.PLAYLISTS: "playlists",
             TrackColumn.FOLDER: "folder",
@@ -2525,6 +2583,7 @@ class TracksTableWidget(QTableView):
                 TrackColumn.BITRATE,
                 TrackColumn.PURCHASED,
                 TrackColumn.PURCHASED_AT,
+                TrackColumn.BUY_AT,
             ):
                 self.current_sort_order = Qt.SortOrder.DescendingOrder
             else:
@@ -2732,13 +2791,14 @@ class TracksTableWidget(QTableView):
 
     def _on_cell_double_clicked(self, index_or_row: Any, column: Optional[int] = None) -> None:
         """Double clicking a track row emits track_detail_requested with track record."""
+        buy_at_idx = getattr(self, "_buy_at_col_idx", -1)
         if isinstance(index_or_row, QModelIndex):
-            if index_or_row.column() in (self._tags_col_idx, self._playlist_col_idx):
+            if index_or_row.column() in (self._tags_col_idx, self._playlist_col_idx, buy_at_idx):
                 return
             row = index_or_row.row()
         elif isinstance(index_or_row, int):
             row = index_or_row
-            if column is not None and column in (self._tags_col_idx, self._playlist_col_idx):
+            if column is not None and column in (self._tags_col_idx, self._playlist_col_idx, buy_at_idx):
                 return
         else:
             return
@@ -2747,6 +2807,68 @@ class TracksTableWidget(QTableView):
                 if not self.confirm_unsaved_changes():
                     return
             self.track_detail_requested.emit(self.records[row])
+
+    def _open_buy_at_store_dialog(self, row: int) -> None:
+        """Open store selection dialog to assign or clear planned purchase store for track at row."""
+        if not (0 <= row < len(self.records)):
+            return
+        track = self.records[row]
+        if is_purchased_track(track):
+            return
+        if is_rekordbox_running():
+            QMessageBox.warning(
+                self,
+                "Rekordbox is Running",
+                "Please close Rekordbox before updating store information in the database.",
+            )
+            return
+
+        cur_store = track.get("buy_at_store") or parse_buy_store_from_comment(
+            track.get("comment") or track.get("comments")
+        )
+        from rekordbox_collection_manager.gui.track_detail_view import SelectStoreDialog
+        dlg = SelectStoreDialog(
+            parent=self,
+            current_store=cur_store,
+            title="Select Store to Buy",
+            description="Choose the store where you plan to buy this track:",
+        )
+        if dlg.exec():
+            if getattr(dlg, "cleared", False) is True:
+                self._set_track_buy_store(row, None)
+            elif dlg.selected_store:
+                self._set_track_buy_store(row, dlg.selected_store)
+
+    def _set_track_buy_store(self, row: int, new_store: Optional[str]) -> None:
+        """Apply and persist planned purchase store for track at row."""
+        if not (0 <= row < len(self.records)):
+            return
+        if is_rekordbox_running():
+            QMessageBox.warning(
+                self,
+                "Rekordbox is Running",
+                "Please close Rekordbox before updating store information in the database.",
+            )
+            return
+
+        track = self.records[row]
+        content_id = track.get("id") or track.get("content_id")
+        new_comment = get_buy_store_comment(new_store) if new_store else ""
+
+        if self.engine and content_id:
+            try:
+                update_track_comment(self.engine, str(content_id), new_comment)
+                self.db_saved.emit()
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Could not update store: {e}")
+                return
+
+        track["buy_at_store"] = new_store
+        track["comment"] = new_comment
+        track["comments"] = new_comment
+        self.update_track_record(row, track)
+        msg = f"🛒 Set planned store to '{new_store}'." if new_store else "🛒 Cleared planned store."
+        self.status_message.emit(msg)
 
     def _on_table_context_menu(self, pos: QPoint) -> None:
         """Right-click menu on track rows."""
@@ -2765,6 +2887,10 @@ class TracksTableWidget(QTableView):
 
         menu = QMenu(self)
         act_details = menu.addAction("ℹ️ View Track Details...")
+
+        act_buy_store = None
+        if not is_purchased_track(track):
+            act_buy_store = menu.addAction("🛒 Set Store to Buy...")
 
         if is_mp3_track(track) or str(file_path).lower().endswith(".mp3"):
             act_replace = menu.addAction("🔄 Upgrade MP3 to AIFF...")
@@ -2816,7 +2942,9 @@ class TracksTableWidget(QTableView):
         act_copy_track = menu.addAction("📋 Copy Track (Artist - Title)")
 
         action = menu.exec(self.viewport().mapToGlobal(pos))
-        if action == act_details:
+        if act_buy_store and action == act_buy_store:
+            self._open_buy_at_store_dialog(row)
+        elif action == act_details:
             if self.has_staged_changes():
                 if not self.confirm_unsaved_changes():
                     return

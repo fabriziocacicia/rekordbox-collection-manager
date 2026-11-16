@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 from sqlalchemy import create_engine
 
 from rekordbox_collection_manager.utils import (
+    BUY_STORE_COMMENT_TEMPLATES,
     KNOWN_STORES,
     MONTH_NAME_TO_INT,
     build_exclude_streaming_clause,
@@ -23,6 +24,7 @@ from rekordbox_collection_manager.utils import (
     extract_year_month_from_name_or_date,
     format_duration,
     format_rating_stars,
+    get_buy_store_comment,
     get_rekordbox_timestamp,
     get_store_comment,
     install_rekordbox_artwork,
@@ -35,6 +37,7 @@ from rekordbox_collection_manager.utils import (
     is_streaming_track,
     natural_sort_key,
     normalize_date_input,
+    parse_buy_store_from_comment,
     parse_history_name,
     parse_month_number,
     parse_played_with,
@@ -574,6 +577,64 @@ class TestUtils(unittest.TestCase):
         self.assertEqual(record["comment"], "Purchased at Traxsource.com")
         self.assertEqual(record["comments"], "Purchased at Traxsource.com")
         self.assertTrue(record["is_purchased"])
+
+    def test_parse_buy_store_from_comment(self):
+        # Beatport
+        self.assertEqual(parse_buy_store_from_comment("Buy at Beatport.com"), "Beatport")
+        self.assertEqual(parse_buy_store_from_comment("buy at beatport.com"), "Beatport")
+        self.assertEqual(parse_buy_store_from_comment("Track note: Buy at Beatport.com!"), "Beatport")
+
+        # Traxsource
+        self.assertEqual(parse_buy_store_from_comment("Buy at Traxsource.com"), "Traxsource")
+        self.assertEqual(parse_buy_store_from_comment("buy at traxsource.com"), "Traxsource")
+
+        # Qobuz
+        self.assertEqual(parse_buy_store_from_comment("Buy at qobuz.com"), "Qobuz")
+        self.assertEqual(parse_buy_store_from_comment("Buy at Qobuz.com"), "Qobuz")
+
+        # Bandcamp
+        self.assertEqual(parse_buy_store_from_comment("Buy at Bandcamp.com"), "Bandcamp")
+        self.assertEqual(parse_buy_store_from_comment("buy at bandcamp.com"), "Bandcamp")
+
+        # Non-buy-at comments or empty
+        self.assertIsNone(parse_buy_store_from_comment(None))
+        self.assertIsNone(parse_buy_store_from_comment(""))
+        self.assertIsNone(parse_buy_store_from_comment("Purchased at Beatport.com"))
+        self.assertIsNone(parse_buy_store_from_comment("Visit https://bandcamp.com"))
+        self.assertIsNone(parse_buy_store_from_comment("A regular DJ note about this track"))
+
+    def test_get_buy_store_comment(self):
+        self.assertEqual(get_buy_store_comment("Beatport"), "Buy at Beatport.com")
+        self.assertEqual(get_buy_store_comment("Traxsource"), "Buy at Traxsource.com")
+        self.assertEqual(get_buy_store_comment("Qobuz"), "Buy at qobuz.com")
+        self.assertEqual(get_buy_store_comment("Bandcamp"), "Buy at Bandcamp.com")
+        self.assertEqual(get_buy_store_comment("UnknownStore"), "")
+
+    def test_build_track_record_with_buy_at_store(self):
+        row = {
+            "ID": "789",
+            "Title": "Unpurchased Track",
+            "Artist": "Artist 2",
+            "Commnt": "Buy at Bandcamp.com",
+            "FolderPath": "/Users/dj/Music/Downloaded/Track2.aiff",
+        }
+        record = build_track_record(row)
+        self.assertEqual(record["buy_at_store"], "Bandcamp")
+        self.assertIsNone(record["store"])
+        self.assertFalse(record["is_purchased"])
+
+    def test_no_cross_contamination_between_purchased_and_buy_comments(self):
+        # A buy-at comment should not be recognized by parse_store_from_comment
+        self.assertIsNone(parse_store_from_comment("Buy at Beatport.com"))
+        self.assertIsNone(parse_store_from_comment("Buy at Bandcamp.com"))
+        self.assertIsNone(parse_store_from_comment("Buy at qobuz.com"))
+        self.assertIsNone(parse_store_from_comment("Buy at Traxsource.com"))
+
+        # A purchased comment should not be recognized by parse_buy_store_from_comment
+        self.assertIsNone(parse_buy_store_from_comment("Purchased at Beatport.com"))
+        self.assertIsNone(parse_buy_store_from_comment("Purchased at Traxsource.com"))
+        self.assertIsNone(parse_buy_store_from_comment("Purchased at qobuz.com"))
+        self.assertIsNone(parse_buy_store_from_comment("Visit https://bandcamp.com"))
 
     def test_install_rekordbox_artwork_generates_three_sizes(self):
         """Verify install_rekordbox_artwork creates full, medium (240x240), and small (80x80) JPEG files."""
