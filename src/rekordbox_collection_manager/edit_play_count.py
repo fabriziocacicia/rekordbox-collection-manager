@@ -99,8 +99,8 @@ def search_tracks(
     artist, album, genre, key, tags, and real playlists when present.
     Supports text searching, purchased filtering ('all', 'purchased', 'downloaded', 'purchasable'),
     play count filtering ('all', 'played', 'unplayed'), musical key, tempo/BPM range,
-    file format, multi-tag filtering with match mode ('any'/'all'), multi-playlist
-    filtering with match mode ('any'/'all'), streaming exclusion, and column sorting.
+    file format, multi-tag filtering with match mode ('any'/'all'/'none'), multi-playlist
+    filtering with match mode ('any'/'all'/'none'), streaming exclusion, and column sorting.
     """
     if table_name is None:
         table_name = detect_content_table(engine)
@@ -404,7 +404,16 @@ def search_tracks(
                 for i, name in enumerate(tag_names):
                     tag_params[f"tag_f_{i}"] = name
 
-                if str(tag_match_mode).strip().lower() == "all" and len(tag_names) > 1:
+                tag_mode_lower = str(tag_match_mode).strip().lower()
+                if tag_mode_lower in ("none", "not"):
+                    tag_clause = f"""AND c.ID NOT IN (
+                        SELECT smt.ContentID FROM djmdSongMyTag smt
+                        JOIN djmdMyTag t ON smt.MyTagID = t.ID
+                        WHERE t.Name IN ({", ".join(tag_placeholders)})
+                          AND (smt.rb_local_deleted = 0 OR smt.rb_local_deleted IS NULL)
+                          AND (t.rb_local_deleted = 0 OR t.rb_local_deleted IS NULL)
+                    )"""
+                elif tag_mode_lower == "all" and len(tag_names) > 1:
                     tag_clause = f"""AND c.ID IN (
                         SELECT smt.ContentID FROM djmdSongMyTag smt
                         JOIN djmdMyTag t ON smt.MyTagID = t.ID
@@ -444,7 +453,16 @@ def search_tracks(
                 for i, name in enumerate(playlist_names):
                     playlist_params[f"pl_f_{i}"] = name
 
-                if str(playlist_match_mode).strip().lower() == "all" and len(playlist_names) > 1:
+                pl_mode_lower = str(playlist_match_mode).strip().lower()
+                if pl_mode_lower in ("none", "not"):
+                    playlist_clause = f"""AND c.ID NOT IN (
+                        SELECT sp.ContentID FROM djmdSongPlaylist sp
+                        JOIN djmdPlaylist p ON sp.PlaylistID = p.ID
+                        WHERE p.Attribute = 0 AND p.Name IN ({", ".join(pl_placeholders)})
+                          AND (p.rb_local_deleted = 0 OR p.rb_local_deleted IS NULL)
+                          AND (sp.rb_local_deleted = 0 OR sp.rb_local_deleted IS NULL)
+                    )"""
+                elif pl_mode_lower == "all" and len(playlist_names) > 1:
                     playlist_clause = f"""AND c.ID IN (
                         SELECT sp.ContentID FROM djmdSongPlaylist sp
                         JOIN djmdPlaylist p ON sp.PlaylistID = p.ID
