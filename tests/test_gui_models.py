@@ -2362,10 +2362,28 @@ class TestTableChipInteractions(unittest.TestCase):
         self.assertEqual(widget.get_match_mode(), "all")
         self.assertEqual(widget.button.text(), "🏷️ Tags (2 [ALL]) ▾")
 
-        # Clear selection
+        # Test None (NOT) match mode
+        self.assertTrue(hasattr(widget.popup, "btn_match_none"))
+        self.assertEqual(widget.popup.btn_match_none.text(), "None (NOT)")
+        self.assertEqual(widget.popup.btn_match_none.toolTip(), "Hide tracks matching ANY selected value")
+
+        committed_modes = []
+        widget.popup.selection_committed.connect(lambda sel, mode: committed_modes.append(mode))
+        widget.popup.btn_match_none.click()
+        self.assertEqual(widget.get_match_mode(), "none")
+        self.assertIn("none", committed_modes)
+        self.assertEqual(widget.button.text(), "🏷️ Tags (2 [NOT]) ▾")
+        self.assertIn("Match: NOT - Exclude any", widget.button.toolTip())
+
+        # Single item selected with NOT mode
+        widget.set_selected(["Afro House"], match_mode="none")
+        self.assertEqual(widget.button.text(), "🏷️ Tags: NOT Afro House ▾")
+
+        # Clear selection resets to default 'any'
         widget.clear_selection()
         self.assertFalse(widget.is_active())
         self.assertEqual(widget.get_selected(), [])
+        self.assertEqual(widget.get_match_mode(), "any")
         self.assertEqual(widget.button.text(), "🏷️ Tags: All ▾")
 
         # Test clicking behavior (never auto-unchecks)

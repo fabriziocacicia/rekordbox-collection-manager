@@ -180,6 +180,13 @@ class MultiSelectPopup(QDialog):
             self.btn_match_all.clicked.connect(lambda: self._set_match_mode("all"))
             match_layout.addWidget(self.btn_match_all)
 
+            self.btn_match_none = QPushButton("None (NOT)")
+            self.btn_match_none.setFixedHeight(22)
+            self.btn_match_none.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.btn_match_none.setToolTip("Hide tracks matching ANY selected value")
+            self.btn_match_none.clicked.connect(lambda: self._set_match_mode("none"))
+            match_layout.addWidget(self.btn_match_none)
+
             match_layout.addStretch(1)
             layout.addLayout(match_layout)
             self._update_match_buttons_style()
@@ -329,12 +336,11 @@ class MultiSelectPopup(QDialog):
                 background-color: #334155;
             }
         """
-        if self._match_mode == "any":
-            self.btn_match_any.setStyleSheet(active_style)
-            self.btn_match_all.setStyleSheet(inactive_style)
-        else:
-            self.btn_match_any.setStyleSheet(inactive_style)
-            self.btn_match_all.setStyleSheet(active_style)
+        mode = str(self._match_mode).strip().lower() if self._match_mode else "any"
+        self.btn_match_any.setStyleSheet(active_style if mode == "any" else inactive_style)
+        self.btn_match_all.setStyleSheet(active_style if mode == "all" else inactive_style)
+        if hasattr(self, "btn_match_none"):
+            self.btn_match_none.setStyleSheet(active_style if mode in ("none", "not") else inactive_style)
 
     def _set_match_mode(self, mode: str) -> None:
         if self._match_mode == mode:
@@ -426,6 +432,8 @@ class MultiSelectPopup(QDialog):
             self.selection_committed.emit(self.get_selected(), self._match_mode)
 
     def _clear_selection(self) -> None:
+        self._match_mode = "any"
+        self._update_match_buttons_style()
         if not self._selected_items:
             return
         self.list_widget.blockSignals(True)
@@ -586,14 +594,22 @@ class MultiSelectSearchFilter(QWidget):
             """)
             self.button.setToolTip(f"Filter by {self.title_text} (All)")
         else:
-            match_mode = self.popup.get_match_mode()
-            mode_lbl = "ALL" if match_mode == "all" else "ANY"
+            match_mode = str(self.popup.get_match_mode()).strip().lower()
+            if match_mode in ("none", "not"):
+                mode_lbl = "NOT"
+            elif match_mode == "all":
+                mode_lbl = "ALL"
+            else:
+                mode_lbl = "ANY"
 
             if count == 1:
                 display_val = selected[0]
                 if len(display_val) > 16:
                     display_val = display_val[:14] + "…"
-                self.button.setText(f"{prefix}{self.title_text}: {display_val} ▾")
+                if mode_lbl == "NOT":
+                    self.button.setText(f"{prefix}{self.title_text}: NOT {display_val} ▾")
+                else:
+                    self.button.setText(f"{prefix}{self.title_text}: {display_val} ▾")
             else:
                 if self.popup.enable_match_mode:
                     self.button.setText(f"{prefix}{self.title_text} ({count} [{mode_lbl}]) ▾")
@@ -620,9 +636,14 @@ class MultiSelectSearchFilter(QWidget):
             if count > 5:
                 items_preview += f" (+{count - 5} more)"
             if self.popup.enable_match_mode:
-                self.button.setToolTip(
-                    f"{self.title_text} filter (Match: {mode_lbl}):\n{items_preview}"
-                )
+                if mode_lbl == "NOT":
+                    self.button.setToolTip(
+                        f"{self.title_text} filter (Match: NOT - Exclude any):\n{items_preview}"
+                    )
+                else:
+                    self.button.setToolTip(
+                        f"{self.title_text} filter (Match: {mode_lbl}):\n{items_preview}"
+                    )
             else:
                 self.button.setToolTip(
                     f"{self.title_text} filter:\n{items_preview}"
