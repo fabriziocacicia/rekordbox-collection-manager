@@ -1220,6 +1220,10 @@ class TestTracksView(unittest.TestCase):
             },
         ]
 
+    def tearDown(self):
+        self.view.cleanup()
+        self.view.close()
+
     def test_tracks_view_initial_ui(self):
         self.assertEqual(self.view.tracks_header_label.text(), "TRACKS")
         self.assertEqual(self.view.table.columnCount(), 15)
@@ -1474,6 +1478,56 @@ class TestTracksView(unittest.TestCase):
         self.assertFalse(self.view.key_filter_widget.is_active())
         self.assertEqual(self.view.key_filter_widget.get_selected(), [])
         self.assertEqual(self.view.key_filter_widget.button.text(), "🎹 Key: All ▾")
+
+    def test_tracks_view_not_filter_active_badge_and_reset(self):
+        self.view.show()
+        # 1. Initially no active filters
+        self.assertFalse(self.view.playlist_filter_widget.is_active())
+        self.assertFalse(self.view.tag_filter_widget.is_active())
+        self.assertFalse(self.view.btn_reset_filters.isVisible())
+        self.assertEqual(self.view.active_filters_badge.text(), "")
+
+        # 2. Select Playlist in NOT mode
+        self.view.playlist_filter_widget.set_selected(["Mainstage - BP"], match_mode="none")
+        self.view._update_all_filter_styles()
+        self.assertTrue(self.view.playlist_filter_widget.is_active())
+        self.assertEqual(self.view.playlist_filter_widget.get_match_mode(), "none")
+        self.assertEqual(self.view.playlist_filter_widget.button.text(), "📁 Playlists: NOT Mainstage - BP ▾")
+        self.assertEqual(self.view.active_filters_badge.text(), "1 active")
+        self.assertTrue(self.view.btn_reset_filters.isVisible())
+
+        # 3. Also select Tag in NOT mode
+        self.view.tag_filter_widget.set_selected(["Club", "Electro"], match_mode="none")
+        self.view._update_all_filter_styles()
+        self.assertTrue(self.view.tag_filter_widget.is_active())
+        self.assertEqual(self.view.tag_filter_widget.get_match_mode(), "none")
+        self.assertEqual(self.view.tag_filter_widget.button.text(), "🏷️ Tags (2 [NOT]) ▾")
+        self.assertEqual(self.view.active_filters_badge.text(), "2 active")
+
+        # 4. Reset filters
+        self.view._on_reset_filters()
+        self.assertFalse(self.view.playlist_filter_widget.is_active())
+        self.assertEqual(self.view.playlist_filter_widget.get_match_mode(), "any")
+        self.assertEqual(self.view.playlist_filter_widget.button.text(), "📁 Playlists: All ▾")
+        self.assertFalse(self.view.tag_filter_widget.is_active())
+        self.assertEqual(self.view.tag_filter_widget.get_match_mode(), "any")
+        self.assertEqual(self.view.tag_filter_widget.button.text(), "🏷️ Tags: All ▾")
+        self.assertEqual(self.view.active_filters_badge.text(), "")
+        self.assertFalse(self.view.btn_reset_filters.isVisible())
+
+    def test_tracks_view_execute_search_passes_not_match_modes(self):
+        engine = create_engine("sqlite:///:memory:")
+        self.view.engine = engine
+
+        self.view.playlist_filter_widget.set_selected(["Festival"], match_mode="none")
+        self.view.tag_filter_widget.set_selected(["Electro", "Club"], match_mode="none")
+
+        self.view._execute_search()
+        self.assertIsNotNone(self.view.active_search_worker)
+        self.assertEqual(self.view.active_search_worker.playlist_filter, ["Festival"])
+        self.assertEqual(self.view.active_search_worker.playlist_match_mode, "none")
+        self.assertEqual(self.view.active_search_worker.tag_filter, ["Club", "Electro"])
+        self.assertEqual(self.view.active_search_worker.tag_match_mode, "none")
 
 
 
