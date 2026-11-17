@@ -603,6 +603,45 @@ class TestEditPlayCount(unittest.TestCase):
         all_pls_none = search_tracks(self.engine, "", playlist_filter=["Festival 2026", "Club Night"], playlist_match_mode="all")
         self.assertEqual(len(all_pls_none), 0)
 
+        # Multi-tag NONE / NOT: Exclude tracks with Peak Time or Chill
+        not_tags = search_tracks(self.engine, "", tag_filter=["Peak Time", "Chill"], tag_match_mode="none")
+        not_tag_ids = {t["id"] for t in not_tags}
+        self.assertNotIn("1", not_tag_ids)
+        self.assertNotIn("2", not_tag_ids)
+        self.assertIn("3", not_tag_ids)
+        self.assertIn("5", not_tag_ids)
+        self.assertIn("6", not_tag_ids)
+
+        # Single tag NOT (using alias "not")
+        not_peak = search_tracks(self.engine, "", tag_filter=["Peak Time"], tag_match_mode="not")
+        not_peak_ids = {t["id"] for t in not_peak}
+        self.assertNotIn("1", not_peak_ids)
+        self.assertIn("2", not_peak_ids)
+
+        # Multi-playlist NONE / NOT: Exclude tracks in Festival 2026 or Club Night
+        not_pls = search_tracks(self.engine, "", playlist_filter=["Festival 2026", "Club Night"], playlist_match_mode="none")
+        not_pl_ids = {t["id"] for t in not_pls}
+        self.assertNotIn("1", not_pl_ids)
+        self.assertNotIn("2", not_pl_ids)
+        self.assertIn("3", not_pl_ids)
+        self.assertIn("5", not_pl_ids)
+        self.assertIn("6", not_pl_ids)
+
+        # Single playlist NOT (using alias "not")
+        not_fest = search_tracks(self.engine, "", playlist_filter=["Festival 2026"], playlist_match_mode="not")
+        not_fest_ids = {t["id"] for t in not_fest}
+        self.assertNotIn("1", not_fest_ids)
+        self.assertIn("2", not_fest_ids)
+
+        # Combined: Positive Tag (Chill) AND NOT Playlist (Festival 2026)
+        combined = search_tracks(
+            self.engine, "",
+            tag_filter=["Chill"], tag_match_mode="any",
+            playlist_filter=["Festival 2026"], playlist_match_mode="none"
+        )
+        self.assertEqual(len(combined), 1)
+        self.assertEqual(combined[0]["id"], "2")
+
     def test_search_tracks_with_store_filter(self):
         with self.engine.begin() as conn:
             conn.exec_driver_sql("ALTER TABLE djmdContent ADD COLUMN Commnt TEXT;")
