@@ -475,6 +475,7 @@ class MultiSelectPopup(QDialog):
         return sorted(list(self._selected_items))
 
     def get_match_mode(self) -> str:
+        """Return active match mode ('any', 'all', or 'none')."""
         return self._match_mode
 
     def set_selected(self, items: Sequence[str], match_mode: str = "any") -> None:
@@ -664,7 +665,7 @@ class MultiSelectSearchFilter(QWidget):
         return self.popup.get_selected()
 
     def get_match_mode(self) -> str:
-        """Return 'any' or 'all'."""
+        """Return active match mode ('any', 'all', or 'none')."""
         return self.popup.get_match_mode()
 
     def clear_selection(self) -> None:

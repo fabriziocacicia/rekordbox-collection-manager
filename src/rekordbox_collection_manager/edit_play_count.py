@@ -410,6 +410,7 @@ def search_tracks(
                         SELECT smt.ContentID FROM djmdSongMyTag smt
                         JOIN djmdMyTag t ON smt.MyTagID = t.ID
                         WHERE t.Name IN ({", ".join(tag_placeholders)})
+                          AND smt.ContentID IS NOT NULL
                           AND (smt.rb_local_deleted = 0 OR smt.rb_local_deleted IS NULL)
                           AND (t.rb_local_deleted = 0 OR t.rb_local_deleted IS NULL)
                     )"""
@@ -459,6 +460,7 @@ def search_tracks(
                         SELECT sp.ContentID FROM djmdSongPlaylist sp
                         JOIN djmdPlaylist p ON sp.PlaylistID = p.ID
                         WHERE p.Attribute = 0 AND p.Name IN ({", ".join(pl_placeholders)})
+                          AND sp.ContentID IS NOT NULL
                           AND (p.rb_local_deleted = 0 OR p.rb_local_deleted IS NULL)
                           AND (sp.rb_local_deleted = 0 OR sp.rb_local_deleted IS NULL)
                     )"""
