@@ -21,18 +21,24 @@ Transform Rekordbox Collection Manager into an autonomous, self-contained macOS 
 
 * **User**: Project maintainer (Fabrizio) running the application across personal Macs without needing local repository clones or virtual environments.
 * **Success Criteria**:
-  1. Running `./scripts/build_app.sh` compiles a standalone `.app` in `dist/Rekordbox Collection Manager.app` and archives it to `dist/Rekordbox-Collection-Manager-v<version>-macOS-arm64.zip`.
-  2. The packaged app launches cleanly when extracted to an isolated folder on a system with no virtualenv or Python environment active.
-  3. All database drivers (`pyrekordbox`, SQLCipher/SQLite), audio metadata inspect tools (`mutagen`), Qt plugins (Cocoa platform, styles), and Cocoa workspace observers function without runtime import errors.
+  1. Running `./scripts/build_app.sh` compiles a standalone `.app` in `dist/Rekordbox Collection Manager.app`.
+  2. Running `./scripts/build_app.sh --package` (or `--zip`) additionally archives it to `dist/Rekordbox-Collection-Manager-v<version>-macOS-arm64.zip`.
+  3. The packaged app launches cleanly when extracted to an isolated folder on a system with no virtualenv or Python environment active.
+  4. All database drivers (`pyrekordbox`, SQLCipher/SQLite), audio metadata inspect tools (`mutagen`), Qt plugins (Cocoa platform, styles), and Cocoa workspace observers function without runtime import errors.
 
 ---
 
 ## 2. Executable Commands
 
 ### Build Commands
-* **Run standalone build**:
+* **Run standalone build (creates .app bundle only)**:
   ```bash
   ./scripts/build_app.sh
+  ```
+* **Run standalone build with release zip archive**:
+  ```bash
+  ./scripts/build_app.sh --package
+  # or: ./scripts/build_app.sh --zip
   ```
 * **Direct PyInstaller compilation**:
   ```bash
@@ -109,7 +115,9 @@ To keep the bundle size compact (under ~120MB) and prevent unused dynamic librar
 * **When** the developer executes `./scripts/build_app.sh`
 * **Then** `scripts/rekordbox_manager.spec` is executed via `uv run pyinstaller`
 * **And** `dist/Rekordbox Collection Manager.app` is produced
-* **And** `dist/Rekordbox-Collection-Manager-v<version>-macOS-arm64.zip` is created via `ditto`
+* **And** intermediate staging folders are cleaned up
+* **When** the developer executes `./scripts/build_app.sh --package`
+* **Then** `dist/Rekordbox-Collection-Manager-v<version>-macOS-arm64.zip` is created via `ditto`
 * **And** the script exits with status code `0`.
 
 ### Scenario 2: Portable Execution Outside Repository
