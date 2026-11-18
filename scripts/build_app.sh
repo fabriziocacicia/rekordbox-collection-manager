@@ -4,6 +4,24 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+PACKAGE_ZIP=false
+for arg in "$@"; do
+    case "$arg" in
+        --zip|--package)
+            PACKAGE_ZIP=true
+            ;;
+        -h|--help)
+            echo "Usage: $0 [--zip|--package]"
+            echo "  (default)        Builds standalone 'Rekordbox Collection Manager.app' in dist/"
+            echo "  --zip, --package Additionally creates a compressed .zip release archive"
+            exit 0
+            ;;
+        *)
+            echo "⚠️  Unknown argument: $arg (ignored)" >&2
+            ;;
+    esac
+done
+
 echo "🔨 Building standalone macOS App Bundle for Rekordbox Collection Manager..."
 
 # 1. Generate icon.icns if needed
@@ -37,6 +55,9 @@ echo "📦 Compiling standalone Python & PySide6 bundle via PyInstaller..."
 cd "$PROJECT_ROOT"
 uv run pyinstaller --noconfirm "$SCRIPT_DIR/rekordbox_manager.spec"
 
+# Clean up PyInstaller intermediate raw folder if present
+rm -rf "$PROJECT_ROOT/dist/Rekordbox Collection Manager"
+
 APP_DIR="$PROJECT_ROOT/dist/Rekordbox Collection Manager.app"
 
 if [ ! -d "$APP_DIR" ]; then
@@ -48,20 +69,29 @@ fi
 echo "🔏 Code signing app bundle..."
 codesign --force --deep -s - "$APP_DIR" > /dev/null 2>&1 || true
 
-# 5. Package Distributable Zip Archive
-ZIP_NAME="Rekordbox-Collection-Manager-v${APP_VERSION}-macOS-arm64.zip"
-ZIP_PATH="$PROJECT_ROOT/dist/$ZIP_NAME"
-echo "🗜️  Archiving bundle with ditto ($ZIP_NAME)..."
-rm -f "$ZIP_PATH"
-ditto -c -k --sequesterRsrc --keepParent "$APP_DIR" "$ZIP_PATH"
-
 APP_SIZE=$(du -sh "$APP_DIR" | cut -f1)
-ZIP_SIZE=$(du -sh "$ZIP_PATH" | cut -f1)
 
+# 5. Package Distributable Zip Archive (Optional)
+if [ "$PACKAGE_ZIP" = true ]; then
+    ZIP_NAME="Rekordbox-Collection-Manager-v${APP_VERSION}-macOS-arm64.zip"
+    ZIP_PATH="$PROJECT_ROOT/dist/$ZIP_NAME"
+    echo "🗜️  Archiving bundle with ditto ($ZIP_NAME)..."
+    rm -f "$ZIP_PATH"
+    ditto -c -k --sequesterRsrc --keepParent "$APP_DIR" "$ZIP_PATH"
+    ZIP_SIZE=$(du -sh "$ZIP_PATH" | cut -f1)
+fi
+
+echo ""
 echo "✅ Standalone App bundle successfully built:"
 echo "   • Bundle:  $APP_DIR ($APP_SIZE)"
-echo "   • Archive: $ZIP_PATH ($ZIP_SIZE)"
+if [ "$PACKAGE_ZIP" = true ]; then
+    echo "   • Archive: $ZIP_PATH ($ZIP_SIZE)"
+fi
 echo ""
 echo "🚀 Portable Distribution:"
 echo "   • To install locally: cp -R \"$APP_DIR\" /Applications/"
-echo "   • To test on another Mac: unzip $ZIP_NAME and open"
+if [ "$PACKAGE_ZIP" = true ]; then
+    echo "   • To test on another Mac: unzip $ZIP_NAME and open"
+else
+    echo "   • To package a release zip: ./scripts/build_app.sh --package"
+fi
