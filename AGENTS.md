@@ -7,7 +7,7 @@ A native macOS desktop application (PySide6 / Qt6), background sync daemon (`lau
 - **Desktop / Core**: Python >= 3.11, `uv`, PySide6 (Qt6), `pyrekordbox` (SQLCipher/SQLite), `mutagen` (audio metadata), `libsql-client` (Turso HTTP pipeline), `pyobjc-framework-cocoa` (macOS workspace observer), `questionary` (CLI prompts).
 - **Testing**: `pytest` (Headless Qt configured via `QT_QPA_PLATFORM=offscreen` in `tests/conftest.py`).
 - **Mobile Companion**: Swift 5.0, SwiftUI, SQLite, iOS >= 17.0 (`ios/RekordboxCompanion/`).
-- **Package & Build Management**: `uv_build`, `pyproject.toml`, `uv.lock`, Clang launcher (`scripts/launcher.c`, `scripts/build_app.sh`).
+- **Package & Build Management**: `uv_build`, `pyproject.toml`, `uv.lock`, PyInstaller standalone packaging (`scripts/rekordbox_manager.spec`, `scripts/build_app.sh`).
 
 ---
 
@@ -26,7 +26,7 @@ A native macOS desktop application (PySide6 / Qt6), background sync daemon (`lau
 - Background daemon: `uv run rekordbox-daemon status` (or `run`, `sync`, `install`, `uninstall`)
 
 ### Operational & Release Scripts
-- Build standalone `.app` bundle: `./scripts/build_app.sh`
+- Build standalone `.app` bundle: `./scripts/build_app.sh` (or `./scripts/build_app.sh --package` to include `.zip`)
 - Desktop version bump: `uv run python scripts/desktop_version.py [patch|minor|major] [--commit] [--tag]`
 - iOS version bump: `uv run python scripts/ios_version.py [patch|minor|major] [--commit] [--tag]`
 - Manual backup: `./scripts/backup_rekordbox_mac.sh`

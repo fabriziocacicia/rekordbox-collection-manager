@@ -43,7 +43,7 @@ flowchart TD
 ## Subdirectories & System Boundaries
 - `src`: [src](./src/README.md) - Source root (`module-root = "src"` in `pyproject.toml`) housing the core Python library, CLI entry points, macOS `launchd` sync daemon, analytics engine, backup/restore, Turso sync ([`rekordbox_collection_manager`](./src/rekordbox_collection_manager/README.md)), PySide6 desktop GUI ([`gui`](./src/rekordbox_collection_manager/gui/README.md)), and custom analytics chart widgets ([`analytics_widgets`](./src/rekordbox_collection_manager/gui/analytics_widgets/README.md)).
 - `ios`: [ios](./ios/README.md) - SwiftUI iOS companion subtree containing the Xcode project container ([`RekordboxCompanion`](./ios/RekordboxCompanion/README.md)) and single application target (`iOS 17.0`, `Swift 5.0`) with Turso config, domain models, SQLite/HTTP sync services, and SwiftUI views.
-- `scripts`: [scripts](./scripts/README.md) - Operational bash/Python/C utilities for macOS Rekordbox backup and restore (`backup_rekordbox_mac.sh`, `restore_rekordbox_mac.sh`), native `.app` bundle compilation (`build_app.sh`, `launcher.c`), and desktop/iOS SemVer release management (`desktop_version.py`, `ios_version.py`).
+- `scripts`: [scripts](./scripts/README.md) - Operational bash/Python utilities for macOS Rekordbox backup and restore (`backup_rekordbox_mac.sh`, `restore_rekordbox_mac.sh`), standalone `.app` bundle packaging (`build_app.sh`, `rekordbox_manager.spec`), and desktop/iOS SemVer release management (`desktop_version.py`, `ios_version.py`).
 - Non-contract directories: `tests/` (pytest test suite) and `assets/` (application icon assets: `icon.icns`, `icon.png`, `icon.svg`).
 
 ## Global Invariants
@@ -149,8 +149,11 @@ You can launch the app from the terminal or build a native macOS `.app` bundle:
 
 **Option A: Native macOS App (Dock & Applications)**
 ```bash
-# Build the native macOS .app bundle
+# Build the native standalone macOS .app bundle
 ./scripts/build_app.sh
+
+# Or build and create a compressed release archive (.zip)
+./scripts/build_app.sh --package
 
 # Open the native macOS app
 open "dist/Rekordbox Collection Manager.app"

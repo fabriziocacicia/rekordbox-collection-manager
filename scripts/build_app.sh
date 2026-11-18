@@ -4,10 +4,28 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-echo "🔨 Building native macOS App Bundle for Rekordbox Collection Manager..."
+PACKAGE_ZIP=false
+for arg in "$@"; do
+    case "$arg" in
+        --zip|--package)
+            PACKAGE_ZIP=true
+            ;;
+        -h|--help)
+            echo "Usage: $0 [--zip|--package]"
+            echo "  (default)        Builds standalone 'Rekordbox Collection Manager.app' in dist/"
+            echo "  --zip, --package Additionally creates a compressed .zip release archive"
+            exit 0
+            ;;
+        *)
+            echo "⚠️  Unknown argument: $arg (ignored)" >&2
+            ;;
+    esac
+done
+
+echo "🔨 Building standalone macOS App Bundle for Rekordbox Collection Manager..."
 
 # 1. Generate icon.icns if needed
-if [ -f "$PROJECT_ROOT/assets/icon.png" ]; then
+if [ ! -f "$PROJECT_ROOT/assets/icon.icns" ] && [ -f "$PROJECT_ROOT/assets/icon.png" ]; then
     echo "🎨 Generating Apple Icon (icon.icns)..."
     ICONSET="$PROJECT_ROOT/assets/icon.iconset"
     mkdir -p "$ICONSET"
@@ -24,98 +42,56 @@ if [ -f "$PROJECT_ROOT/assets/icon.png" ]; then
     iconutil -c icns "$ICONSET" -o "$PROJECT_ROOT/assets/icon.icns"
     rm -rf "$ICONSET"
 fi
+rm -rf "$PROJECT_ROOT/assets/icon.iconset"
 
-# 2. Build .app Bundle Structure
-APP_DIR="$PROJECT_ROOT/dist/Rekordbox Collection Manager.app"
-mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
-
-if [ -f "$PROJECT_ROOT/assets/icon.icns" ]; then
-    cp "$PROJECT_ROOT/assets/icon.icns" "$APP_DIR/Contents/Resources/icon.icns"
-fi
-
-# 3. Write Info.plist
+# 2. Extract Application Version
 APP_VERSION=$(grep -m 1 '^version = ' "$PROJECT_ROOT/pyproject.toml" | cut -d '"' -f 2)
 if [ -z "$APP_VERSION" ]; then
-    APP_VERSION="0.2.0"
+    APP_VERSION="0.20.0"
 fi
 
-cat << EOF > "$APP_DIR/Contents/Info.plist"
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>CFBundleDevelopmentRegion</key>
-    <string>en</string>
-    <key>CFBundleDisplayName</key>
-    <string>Rekordbox Collection Manager</string>
-    <key>CFBundleExecutable</key>
-    <string>Rekordbox Collection Manager</string>
-    <key>CFBundleIconFile</key>
-    <string>icon.icns</string>
-    <key>CFBundleIdentifier</key>
-    <string>com.fabriziocacicia.rekordbox-collection-manager</string>
-    <key>CFBundleInfoDictionaryVersion</key>
-    <string>6.0</string>
-    <key>CFBundleName</key>
-    <string>Rekordbox Collection Manager</string>
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
-    <key>CFBundleShortVersionString</key>
-    <string>${APP_VERSION}</string>
-    <key>CFBundleVersion</key>
-    <string>${APP_VERSION}</string>
-    <key>NSHighResolutionCapable</key>
-    <true/>
-</dict>
-</plist>
-EOF
+# 3. Compile Standalone Bundle via PyInstaller
+echo "📦 Compiling standalone Python & PySide6 bundle via PyInstaller..."
+cd "$PROJECT_ROOT"
+uv run pyinstaller --noconfirm "$SCRIPT_DIR/rekordbox_manager.spec"
 
-# 4. Compile Native Mach-O Executable Launcher
-echo "⚙️  Compiling native Mach-O executable launcher..."
-PYTHON_BIN="$PROJECT_ROOT/.venv/bin/python"
-if [ ! -x "$PYTHON_BIN" ]; then
-    PYTHON_BIN="$(which python3)"
+# Clean up PyInstaller intermediate raw folder if present
+rm -rf "$PROJECT_ROOT/dist/Rekordbox Collection Manager"
+
+APP_DIR="$PROJECT_ROOT/dist/Rekordbox Collection Manager.app"
+
+if [ ! -d "$APP_DIR" ]; then
+    echo "❌ Error: App bundle was not created at $APP_DIR" >&2
+    exit 1
 fi
 
-PYTHON_HOME=$("$PYTHON_BIN" -c "import sys; print(sys.base_prefix)")
-PYTHON_LIBDIR=$("$PYTHON_BIN" -c "import sysconfig; print(sysconfig.get_config_var('LIBDIR') or '')")
-PYTHON_LDLIBRARY=$("$PYTHON_BIN" -c "import sysconfig; print(sysconfig.get_config_var('LDLIBRARY') or '')")
-PYTHON_VERSION_STR=$("$PYTHON_BIN" -c "import sys; print(f'python{sys.version_info.major}.{sys.version_info.minor}')")
-
-DYLIB_PATH=""
-if [ -n "$PYTHON_LIBDIR" ] && [ -n "$PYTHON_LDLIBRARY" ] && [ -f "$PYTHON_LIBDIR/$PYTHON_LDLIBRARY" ]; then
-    DYLIB_PATH="$PYTHON_LIBDIR/$PYTHON_LDLIBRARY"
-fi
-
-mkdir -p "$APP_DIR/Contents/Frameworks"
-if [ -n "$DYLIB_PATH" ] && [ -f "$DYLIB_PATH" ]; then
-    echo "📦 Bundling Python runtime library ($PYTHON_LDLIBRARY)..."
-    cp "$DYLIB_PATH" "$APP_DIR/Contents/Frameworks/"
-fi
-
-clang -O2 \
-    -DDEFAULT_PROJECT_ROOT="\"$PROJECT_ROOT\"" \
-    -DDEFAULT_PYTHON_HOME="\"$PYTHON_HOME\"" \
-    -DDEFAULT_DYLIB_PATH="\"$DYLIB_PATH\"" \
-    -DPYTHON_VERSION_STR="\"$PYTHON_VERSION_STR\"" \
-    -DAPP_MODULE="\"rekordbox_collection_manager.gui.app\"" \
-    -DAPP_NAME="\"Rekordbox Collection Manager\"" \
-    "$PROJECT_ROOT/scripts/launcher.c" \
-    -o "$APP_DIR/Contents/MacOS/Rekordbox Collection Manager"
-
-chmod +x "$APP_DIR/Contents/MacOS/Rekordbox Collection Manager"
-
-# 5. Ad-hoc Code Sign App Bundle
+# 4. Ad-hoc Code Sign App Bundle
 echo "🔏 Code signing app bundle..."
 codesign --force --deep -s - "$APP_DIR" > /dev/null 2>&1 || true
 
-echo "✅ App bundle successfully built at:"
-echo "   $APP_DIR"
+APP_SIZE=$(du -sh "$APP_DIR" | cut -f1)
+
+# 5. Package Distributable Zip Archive (Optional)
+if [ "$PACKAGE_ZIP" = true ]; then
+    ZIP_NAME="Rekordbox-Collection-Manager-v${APP_VERSION}-macOS-arm64.zip"
+    ZIP_PATH="$PROJECT_ROOT/dist/$ZIP_NAME"
+    echo "🗜️  Archiving bundle with ditto ($ZIP_NAME)..."
+    rm -f "$ZIP_PATH"
+    ditto -c -k --sequesterRsrc --keepParent "$APP_DIR" "$ZIP_PATH"
+    ZIP_SIZE=$(du -sh "$ZIP_PATH" | cut -f1)
+fi
+
 echo ""
-echo "🚀 You can now:"
-echo "   • Open it with: open \"$APP_DIR\""
-echo "   • Drag it into your Applications folder or Dock to keep it permanently."
-if [ -d "/Applications/Rekordbox Collection Manager.app" ]; then
-    echo "   ⚠️  Note: If you previously copied this app to /Applications, replace it with:"
-    echo "      cp -R \"$APP_DIR\" /Applications/"
+echo "✅ Standalone App bundle successfully built:"
+echo "   • Bundle:  $APP_DIR ($APP_SIZE)"
+if [ "$PACKAGE_ZIP" = true ]; then
+    echo "   • Archive: $ZIP_PATH ($ZIP_SIZE)"
+fi
+echo ""
+echo "🚀 Portable Distribution:"
+echo "   • To install locally: cp -R \"$APP_DIR\" /Applications/"
+if [ "$PACKAGE_ZIP" = true ]; then
+    echo "   • To test on another Mac: unzip $ZIP_NAME and open"
+else
+    echo "   • To package a release zip: ./scripts/build_app.sh --package"
 fi

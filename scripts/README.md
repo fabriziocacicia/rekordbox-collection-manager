@@ -1,7 +1,7 @@
 # Scripts
 
 ## Overview
-Operational and release-engineering utilities for `rekordbox-collection-manager`, covering macOS Rekordbox database backup and restore (`backup_rekordbox_mac.sh`, `restore_rekordbox_mac.sh`), native macOS `.app` bundle compilation and launch (`build_app.sh`, `launcher.c`), and semantic version management for both the desktop Python package and the iOS companion Xcode project (`desktop_version.py`, `ios_version.py`).
+Operational and release-engineering utilities for `rekordbox-collection-manager`, covering macOS Rekordbox database backup and restore (`backup_rekordbox_mac.sh`, `restore_rekordbox_mac.sh`), standalone macOS `.app` bundle packaging (`build_app.sh`, `rekordbox_manager.spec`), and semantic version management for both the desktop Python package and the iOS companion Xcode project (`desktop_version.py`, `ios_version.py`).
 
 ## Interface
 
@@ -24,18 +24,15 @@ Operational and release-engineering utilities for `rekordbox-collection-manager`
 
 ### `build_app.sh`
 - `[build_app.sh:SCRIPT_DIR]` / `[build_app.sh:PROJECT_ROOT]`: Directory containing `build_app.sh` and its parent repository root.
+- `[build_app.sh:PACKAGE_ZIP]`: Flag toggled by `--package` or `--zip` to optionally package a compressed `.zip` distribution archive.
 - `[build_app.sh:ICONSET]`: Temporary iconset directory (`$PROJECT_ROOT/assets/icon.iconset`).
-- `[build_app.sh:APP_DIR]`: Output macOS application bundle (`$PROJECT_ROOT/dist/Rekordbox Collection Manager.app`).
-- `[build_app.sh:APP_VERSION]`: Version parsed from the first `^version = ` line in `$PROJECT_ROOT/pyproject.toml` (defaults to `'0.2.0'` if empty).
-- `[build_app.sh:PYTHON_BIN]`: Python interpreter (`$PROJECT_ROOT/.venv/bin/python` if executable, else `$(which python3)`).
-- `[build_app.sh:PYTHON_HOME]`, `[build_app.sh:PYTHON_LIBDIR]`, `[build_app.sh:PYTHON_LDLIBRARY]`, `[build_app.sh:PYTHON_VERSION_STR]`, `[build_app.sh:DYLIB_PATH]`: Python installation metadata queried from `$PYTHON_BIN` and passed to `launcher.c` compilation / bundle Frameworks.
+- `[build_app.sh:APP_DIR]`: Output standalone macOS application bundle (`$PROJECT_ROOT/dist/Rekordbox Collection Manager.app`).
+- `[build_app.sh:APP_VERSION]`: Version parsed from the first `^version = ` line in `$PROJECT_ROOT/pyproject.toml` (defaults to `'0.20.0'` if empty).
+- `[build_app.sh:ZIP_NAME]` / `[build_app.sh:ZIP_PATH]`: Target archive path (`Rekordbox-Collection-Manager-v${APP_VERSION}-macOS-arm64.zip`) created via `ditto` when `--package` is passed.
 
-### `launcher.c`
-- `[launcher.c:DEFAULT_PROJECT_ROOT]`, `[launcher.c:DEFAULT_PYTHON_HOME]`, `[launcher.c:DEFAULT_DYLIB_PATH]`, `[launcher.c:PYTHON_VERSION_STR]` (`"python3.12"`), `[launcher.c:APP_MODULE]` (`"rekordbox_collection_manager.gui.app"`), `[launcher.c:APP_NAME]` (`"Rekordbox Collection Manager"`): Overridable compile-time preprocessor macros.
-- `[launcher.c:Py_BytesMain_t]`: Function pointer typedef `int (*Py_BytesMain_t)(int argc, char **argv)`.
-- `[launcher.c:path_exists]`, `[launcher.c:get_parent_dir]`: Internal `static` filesystem helpers (`stat` existence check and `dirname` wrapper).
-- `[launcher.c:main]`: Mach-O bundle entry point forwarding non-`-psn_` arguments to dynamically resolved `[launcher.c:Py_BytesMain]`.
-- `[launcher.c:PYTHONHOME]`, `[launcher.c:VIRTUAL_ENV]`, `[launcher.c:PYTHONPATH]`, `[launcher.c:PATH]`, `[launcher.c:OBJC_DISABLE_INITIALIZE_FORK_SAFETY]`: Environment variables read/configured prior to launching Python.
+### `rekordbox_manager.spec`
+- `[rekordbox_manager.spec:Analysis]`: PyInstaller entry point (`src/rekordbox_collection_manager/gui/app.py`), bundled assets (`assets/icon.png`, `assets/icon.icns`), and explicit hidden imports for SQLCipher drivers (`sqlcipher3`, `sqlalchemy.dialects.sqlite.pysqlcipher`), `pyrekordbox`, `mutagen`, and `libsql_client`.
+- `[rekordbox_manager.spec:BUNDLE]`: Apple Silicon `arm64` application bundle configuration containing Info.plist metadata, high-resolution rendering settings, and dock icon binding.
 
 ### `desktop_version.py`
 - `[desktop_version.py:SCRIPT_DIR]`, `[desktop_version.py:PROJECT_ROOT]`, `[desktop_version.py:PYPROJECT_PATH]` (`pyproject.toml`), `[desktop_version.py:UV_LOCK_PATH]` (`uv.lock`): Resolved manifest and lockfile paths.
