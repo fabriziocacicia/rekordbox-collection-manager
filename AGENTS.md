@@ -27,7 +27,8 @@ A native macOS desktop application (PySide6 / Qt6), background sync daemon (`lau
 
 ### Operational & Release Scripts
 - Build standalone `.app` bundle: `./scripts/build_app.sh` (or `./scripts/build_app.sh --package` to include `.zip`)
-- Desktop version bump: `uv run python scripts/desktop_version.py [patch|minor|major] [--commit] [--tag]`
+- Desktop version bump & changelog rotate: `uv run python scripts/desktop_version.py [patch|minor|major] [--commit] [--tag]`
+- Changelog backfill & check: `uv run python scripts/changelog.py [--backfill|--unreleased|--check]`
 - iOS version bump: `uv run python scripts/ios_version.py [patch|minor|major] [--commit] [--tag]`
 - Manual backup: `./scripts/backup_rekordbox_mac.sh`
 - Manual restore: `./scripts/restore_rekordbox_mac.sh [-y]`

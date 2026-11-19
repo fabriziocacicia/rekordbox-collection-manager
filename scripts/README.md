@@ -1,7 +1,7 @@
 # Scripts
 
 ## Overview
-Operational and release-engineering utilities for `rekordbox-collection-manager`, covering macOS Rekordbox database backup and restore (`backup_rekordbox_mac.sh`, `restore_rekordbox_mac.sh`), standalone macOS `.app` bundle packaging (`build_app.sh`, `rekordbox_manager.spec`), and semantic version management for both the desktop Python package and the iOS companion Xcode project (`desktop_version.py`, `ios_version.py`).
+Operational and release-engineering utilities for `rekordbox-collection-manager`, covering macOS Rekordbox database backup and restore (`backup_rekordbox_mac.sh`, `restore_rekordbox_mac.sh`), standalone macOS `.app` bundle packaging (`build_app.sh`, `rekordbox_manager.spec`), changelog extraction and rotation adhering to Keep a Changelog 1.1.0 (`changelog.py`), and semantic version management for both the desktop Python package and the iOS companion Xcode project (`desktop_version.py`, `ios_version.py`).
 
 ## Interface
 
@@ -34,11 +34,23 @@ Operational and release-engineering utilities for `rekordbox-collection-manager`
 - `[rekordbox_manager.spec:Analysis]`: PyInstaller entry point (`src/rekordbox_collection_manager/gui/app.py`), bundled assets (`assets/icon.png`, `assets/icon.icns`), and explicit hidden imports for SQLCipher drivers (`sqlcipher3`, `sqlalchemy.dialects.sqlite.pysqlcipher`), `pyrekordbox`, `mutagen`, and `libsql_client`.
 - `[rekordbox_manager.spec:BUNDLE]`: Apple Silicon `arm64` application bundle configuration containing Info.plist metadata, high-resolution rendering settings, and dock icon binding.
 
+### `changelog.py`
+- `[changelog.py:SCRIPT_DIR]`, `[changelog.py:PROJECT_ROOT]`, `[changelog.py:CHANGELOG_PATH]`: Resolved paths for repository root and root `CHANGELOG.md`.
+- `[changelog.py:get_desktop_tags]`: Discovers SemVer tags (`vX.Y.Z`) in ascending order, filtering out iOS tags (`ios-v*`).
+- `[changelog.py:get_commits_for_range]`: Fetches commits and touched files using ASCII record separators (`%x1e`).
+- `[changelog.py:is_ios_commit]`: Filters out commits scoped to `(ios)` or touching exclusively `ios/` files to maintain clean monorepo boundary.
+- `[changelog.py:is_noise_commit]`: Filters out version bump commits (`chore(...): bump version...`) and merge commits.
+- `[changelog.py:categorize_commits]`: Groups entries into Keep a Changelog categories (`Added`, `Changed`, `Fixed`, `Maintenance`, `Other Changes`).
+- `[changelog.py:generate_backfill]`: Reconstructs entire `CHANGELOG.md` with active `## [Unreleased]`, historical release sections, and GitHub compare links.
+- `[changelog.py:rotate_changelog]`: Rotates `## [Unreleased]` into `## [X.Y.Z] - YYYY-MM-DD`, resets unreleased template, and updates comparison links.
+- `[changelog.py:check_changelog]`: Validates `CHANGELOG.md` formatting, release headers, and compare URLs.
+- `[changelog.py:main]`: CLI entry point accepting `--backfill`, `--unreleased`, `--rotate <version>`, `--date <YYYY-MM-DD>`, `--check`, `--target <desktop|ios>`, and `--dry-run`.
+
 ### `desktop_version.py`
-- `[desktop_version.py:SCRIPT_DIR]`, `[desktop_version.py:PROJECT_ROOT]`, `[desktop_version.py:PYPROJECT_PATH]` (`pyproject.toml`), `[desktop_version.py:UV_LOCK_PATH]` (`uv.lock`): Resolved manifest and lockfile paths.
+- `[desktop_version.py:SCRIPT_DIR]`, `[desktop_version.py:PROJECT_ROOT]`, `[desktop_version.py:PYPROJECT_PATH]` (`pyproject.toml`), `[desktop_version.py:UV_LOCK_PATH]` (`uv.lock`), `[desktop_version.py:CHANGELOG_PATH]` (`CHANGELOG.md`): Resolved manifest, lockfile, and changelog paths.
 - `[desktop_version.py:get_current_version]`, `[desktop_version.py:validate_semver]`, `[desktop_version.py:bump_semver]`: SemVer parsing, validation, and incrementing helpers.
-- `[desktop_version.py:update_pyproject]`, `[desktop_version.py:update_uv_lock]`, `[desktop_version.py:git_commit_and_tag]`: Manifest updater, `uv lock` runner, and git commit/tag helper.
-- `[desktop_version.py:main]`: CLI entry point accepting positional `[desktop_version.py:action]` (`current`, `show`, `patch`, `minor`, `major`, `set`; default `current`), positional `[desktop_version.py:version]`, `[desktop_version.py:--commit]`, `[desktop_version.py:--tag]`, `[desktop_version.py:--no-uv-lock]`, and `[desktop_version.py:--dry-run]`.
+- `[desktop_version.py:update_pyproject]`, `[desktop_version.py:update_uv_lock]`, `[desktop_version.py:git_commit_and_tag]`: Manifest updater, `uv lock` runner, and git commit/tag helper (staging `CHANGELOG.md` when rotated).
+- `[desktop_version.py:main]`: CLI entry point accepting positional `[desktop_version.py:action]` (`current`, `show`, `patch`, `minor`, `major`, `set`; default `current`), positional `[desktop_version.py:version]`, `[desktop_version.py:--commit]`, `[desktop_version.py:--tag]`, `[desktop_version.py:--no-uv-lock]`, `[desktop_version.py:--no-changelog]`, and `[desktop_version.py:--dry-run]`.
 
 ### `ios_version.py`
 - `[ios_version.py:SCRIPT_DIR]`, `[ios_version.py:PROJECT_ROOT]`, `[ios_version.py:PBXPROJ_PATH]` (`ios/RekordboxCompanion/RekordboxCompanion.xcodeproj/project.pbxproj`): Resolved Xcode project manifest path.
@@ -77,4 +89,4 @@ Operational and release-engineering utilities for `rekordbox-collection-manager`
 
 ## Verification
 - Run: `uv run pytest`
-- Relevant script test modules: `uv run pytest tests/test_backup_restore.py tests/test_restore_script.py tests/test_version.py`
+- Relevant script test modules: `uv run pytest tests/test_backup_restore.py tests/test_restore_script.py tests/test_version.py tests/test_changelog.py`
