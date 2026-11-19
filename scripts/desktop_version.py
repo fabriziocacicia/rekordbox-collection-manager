@@ -18,6 +18,14 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
 PYPROJECT_PATH = PROJECT_ROOT / "pyproject.toml"
 UV_LOCK_PATH = PROJECT_ROOT / "uv.lock"
+CHANGELOG_PATH = PROJECT_ROOT / "CHANGELOG.md"
+
+try:
+    from scripts.changelog import rotate_changelog
+except ImportError:
+    if str(PROJECT_ROOT) not in sys.path:
+        sys.path.insert(0, str(PROJECT_ROOT))
+    from scripts.changelog import rotate_changelog
 
 
 def get_current_version(content: str) -> str:
@@ -95,13 +103,20 @@ def update_uv_lock(dry_run: bool = False) -> bool:
         return False
 
 
-def git_commit_and_tag(new_version: str, create_tag: bool, uv_lock_updated: bool) -> None:
+def git_commit_and_tag(
+    new_version: str,
+    create_tag: bool,
+    uv_lock_updated: bool,
+    changelog_updated: bool = False,
+) -> None:
     """Commit changes to git and optionally create an annotated tag."""
     commit_msg = f"chore(desktop): bump version to {new_version}"
     try:
         files_to_add = [str(PYPROJECT_PATH)]
         if uv_lock_updated and UV_LOCK_PATH.exists():
             files_to_add.append(str(UV_LOCK_PATH))
+        if changelog_updated and CHANGELOG_PATH.exists():
+            files_to_add.append(str(CHANGELOG_PATH))
 
         subprocess.run(
             ["git", "add"] + files_to_add,
@@ -170,6 +185,11 @@ def main() -> None:
         help="Skip synchronizing uv.lock",
     )
     parser.add_argument(
+        "--no-changelog",
+        action="store_true",
+        help="Skip rotating CHANGELOG.md upon version bump",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Preview changes without modifying project files",
@@ -210,10 +230,27 @@ def main() -> None:
     if not args.dry_run and not args.no_uv_lock:
         uv_lock_updated = update_uv_lock(dry_run=args.dry_run)
 
+    changelog_updated = False
+    if not args.no_changelog and CHANGELOG_PATH.exists():
+        try:
+            changelog_updated = rotate_changelog(
+                new_version,
+                cwd=PROJECT_ROOT,
+                changelog_path=CHANGELOG_PATH,
+                dry_run=args.dry_run,
+            )
+        except Exception as e:
+            print(f"⚠️  Warning: Failed to rotate CHANGELOG.md: {e}", file=sys.stderr)
+
     if not args.dry_run:
         print("✅ pyproject.toml updated successfully.")
         if args.commit or args.tag:
-            git_commit_and_tag(new_version, create_tag=args.tag, uv_lock_updated=uv_lock_updated)
+            git_commit_and_tag(
+                new_version,
+                create_tag=args.tag,
+                uv_lock_updated=uv_lock_updated,
+                changelog_updated=changelog_updated,
+            )
 
 
 if __name__ == "__main__":

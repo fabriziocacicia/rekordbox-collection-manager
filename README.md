@@ -43,7 +43,7 @@ flowchart TD
 ## Subdirectories & System Boundaries
 - `src`: [src](./src/README.md) - Source root (`module-root = "src"` in `pyproject.toml`) housing the core Python library, CLI entry points, macOS `launchd` sync daemon, analytics engine, backup/restore, Turso sync ([`rekordbox_collection_manager`](./src/rekordbox_collection_manager/README.md)), PySide6 desktop GUI ([`gui`](./src/rekordbox_collection_manager/gui/README.md)), and custom analytics chart widgets ([`analytics_widgets`](./src/rekordbox_collection_manager/gui/analytics_widgets/README.md)).
 - `ios`: [ios](./ios/README.md) - SwiftUI iOS companion subtree containing the Xcode project container ([`RekordboxCompanion`](./ios/RekordboxCompanion/README.md)) and single application target (`iOS 17.0`, `Swift 5.0`) with Turso config, domain models, SQLite/HTTP sync services, and SwiftUI views.
-- `scripts`: [scripts](./scripts/README.md) - Operational bash/Python utilities for macOS Rekordbox backup and restore (`backup_rekordbox_mac.sh`, `restore_rekordbox_mac.sh`), standalone `.app` bundle packaging (`build_app.sh`, `rekordbox_manager.spec`), and desktop/iOS SemVer release management (`desktop_version.py`, `ios_version.py`).
+- `scripts`: [scripts](./scripts/README.md) - Operational bash/Python utilities for macOS Rekordbox backup and restore (`backup_rekordbox_mac.sh`, `restore_rekordbox_mac.sh`), standalone `.app` bundle packaging (`build_app.sh`, `rekordbox_manager.spec`), changelog extraction and Keep a Changelog 1.1.0 maintenance (`changelog.py`), and desktop/iOS SemVer release management (`desktop_version.py`, `ios_version.py`).
 - Non-contract directories: `tests/` (pytest test suite) and `assets/` (application icon assets: `icon.icns`, `icon.png`, `icon.svg`).
 
 ## Global Invariants
@@ -52,7 +52,7 @@ flowchart TD
 - **Streaming Track Exclusion & Play-Count Floor**: Streaming tracks (`[src/rekordbox_collection_manager/utils.py:STREAMING_FILE_TYPES]`, `[src/rekordbox_collection_manager/utils.py:build_exclude_streaming_clause]`, `[ios/RekordboxCompanion/RekordboxCompanion/Models/Track.swift:Track.isStreaming]`, `[ios/RekordboxCompanion/RekordboxCompanion/Services/LocalDatabase.swift:pruneStreamingTracks()]`) are excluded across desktop analytics/search/sync and iOS track/playlist/live-set views; play-count mutations on both platforms clamp `DJPlayCount >= 0` (`[src/rekordbox_collection_manager/edit_play_count.py:update_track_play_count]`, `[src/rekordbox_collection_manager/rename_history.py:soft_delete_history_session]`, `[ios/RekordboxCompanion/RekordboxCompanion/Services/AppState.swift:AppState.adjustPlayCount(track:delta:)]`, `[ios/RekordboxCompanion/RekordboxCompanion/Services/LocalDatabase.swift:updatePlayCountLocally(trackId:newCount:)]`).
 - **Destructive Action & Unsaved-Edit Safeguards**: Both Python (`[src/rekordbox_collection_manager/backup_restore.py:perform_restore]`) and shell (`[scripts/restore_rekordbox_mac.sh:SAFETY_BACKUP_DIR]`) restores create a pre-restore safety snapshot before overwriting live Rekordbox directories; `[src/rekordbox_collection_manager/replace_file.py:replace_track_audio_file]` requires an AIFF target and rolls back file moves on DB failure; GUI navigation invokes `confirm_unsaved_changes()` before discarding staged edits (`[src/rekordbox_collection_manager/gui/tracks_view.py:TracksView.confirm_unsaved_changes]`, `[src/rekordbox_collection_manager/gui/track_table.py:TracksTableWidget.confirm_unsaved_changes]`).
 - **Signed/Unsigned 32-bit MyTag & Smart Playlist Boundaries**: Desktop MyTag and smartlist queries resolve signed/unsigned 32-bit tag IDs via `[src/rekordbox_collection_manager/utils.py:resolve_tag_matching_ids]` and `[src/rekordbox_collection_manager/playlists.py:parse_smartlist_to_sql]`; iOS treats smart playlists (`[ios/RekordboxCompanion/RekordboxCompanion/Models/Playlist.swift:Playlist.isSmart]` where `attribute == 4`) as read-only (`[ios/RekordboxCompanion/RekordboxCompanion/Views/PlaylistDetailView.swift:PlaylistDetailView.body]`) and scopes MyTag category browsing/editing to root `Genre` and `Style` folders (`[ios/RekordboxCompanion/RekordboxCompanion/Views/TagsView.swift:TagsView.categoryFolders]`, `[ios/RekordboxCompanion/RekordboxCompanion/Views/TrackDetailSheet.swift:TrackDetailSheet.categoryFolders]`).
-- **Release Versioning Synchronization**: Desktop SemVer (`pyproject.toml` and `uv.lock`) is updated atomically by `[scripts/desktop_version.py:update_pyproject]`/`[scripts/desktop_version.py:update_uv_lock]` and read by `[src/rekordbox_collection_manager/__init__.py:_get_version]` and `[scripts/build_app.sh:APP_VERSION]`; iOS `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` in `project.pbxproj` are updated atomically by `[scripts/ios_version.py:update_pbxproj]`.
+- **Release Versioning & Changelog Synchronization**: Desktop SemVer (`pyproject.toml` and `uv.lock`) and `CHANGELOG.md` are updated atomically by `[scripts/desktop_version.py:update_pyproject]`, `[scripts/desktop_version.py:update_uv_lock]`, and `[scripts/changelog.py:rotate_changelog]`; read by `[src/rekordbox_collection_manager/__init__.py:_get_version]` and `[scripts/build_app.sh:APP_VERSION]`; iOS `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` in `project.pbxproj` are updated atomically by `[scripts/ios_version.py:update_pbxproj]`. Releases adhere strictly to [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/).
 
 ## Global Side Effects
 - **Rekordbox Local Databases**: Reads and mutates SQLCipher/SQLite `master.db` (`~/Library/Pioneer/rekordbox/`) and DeviceSQL `exportLibrary.db` across `djmdContent`, `djmdPlaylist`, `djmdSongPlaylist`, `djmdMyTag`, `djmdSongMyTag`, `djmdHistory`, `djmdSongHistory`, `djmdCue`, `djmdArtist`/`djmdAlbum`/`djmdGenre`/`djmdLabel`, `agentRegistry`, and legacy `content`/`history`/`songHistory` tables (`[src/rekordbox_collection_manager/utils.py:open_database]`).
@@ -200,6 +200,21 @@ A dedicated CLI script at [`scripts/desktop_version.py`](scripts/desktop_version
 
 # Bump version, sync uv.lock, auto-commit to git, and create annotated tag 'v0.9.1'
 ./scripts/desktop_version.py patch --commit --tag
+```
+
+### Changelog Management
+
+Historical desktop releases and active unreleased changes are tracked in [`CHANGELOG.md`](CHANGELOG.md) adhering to [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/). A dedicated CLI script at [`scripts/changelog.py`](scripts/changelog.py) manages backfilling, verification, and rotation:
+
+```bash
+# Check integrity of CHANGELOG.md and compare links
+./scripts/changelog.py --check
+
+# Preview unreleased changes since the latest tag
+./scripts/changelog.py --unreleased
+
+# Backfill or regenerate CHANGELOG.md from git history
+./scripts/changelog.py --backfill
 ```
 
 ---
