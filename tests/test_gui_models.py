@@ -499,6 +499,7 @@ class TestMainWindowSidebar(unittest.TestCase):
         self.assertEqual(self.window.btn_play_count.text(), "🔢  Play Counts")
         self.assertEqual(self.window.btn_replace_file.text(), "🔄  Replace File")
         self.assertEqual(self.window.btn_analytics.text(), "📊  Analytics")
+        self.assertEqual(self.window.btn_stores.text(), "🏪  Stores")
         self.assertEqual(self.window.btn_info.text(), "ℹ️  Collection Info")
         self.assertFalse(self.window.sidebar_section_label.isHidden())
         self.assertFalse(self.window.app_ver.isHidden())
@@ -515,6 +516,7 @@ class TestMainWindowSidebar(unittest.TestCase):
         self.assertEqual(self.window.btn_play_count.text(), "🔢")
         self.assertEqual(self.window.btn_replace_file.text(), "🔄")
         self.assertEqual(self.window.btn_analytics.text(), "📊")
+        self.assertEqual(self.window.btn_stores.text(), "🏪")
         self.assertEqual(self.window.btn_info.text(), "ℹ️")
         self.assertTrue(self.window.sidebar_section_label.isHidden())
         self.assertTrue(self.window.app_ver.isHidden())
@@ -526,6 +528,7 @@ class TestMainWindowSidebar(unittest.TestCase):
         self.assertEqual(self.window.btn_play_count.toolTip(), "Play Counts")
         self.assertEqual(self.window.btn_replace_file.toolTip(), "Replace File")
         self.assertEqual(self.window.btn_analytics.toolTip(), "Analytics")
+        self.assertEqual(self.window.btn_stores.toolTip(), "Stores")
         self.assertEqual(self.window.btn_info.toolTip(), "Collection Info")
 
     def test_sidebar_expand(self):
@@ -562,14 +565,28 @@ class TestMainWindowSidebar(unittest.TestCase):
         self.assertEqual(self.window.stacked_widget.currentIndex(), 5)
         self.window.btn_analytics.click()
         self.assertEqual(self.window.stacked_widget.currentIndex(), 6)
-        self.window.btn_info.click()
+        self.window.btn_stores.click()
         self.assertEqual(self.window.stacked_widget.currentIndex(), 7)
+        self.window.btn_info.click()
+        self.assertEqual(self.window.stacked_widget.currentIndex(), 8)
         self.window.btn_tracks.click()
         self.assertEqual(self.window.stacked_widget.currentIndex(), 0)
 
+    def test_open_tracks_filtered_by_store(self):
+        # Start on Stores tab
+        self.window.btn_stores.click()
+        self.assertEqual(self.window.stacked_widget.currentIndex(), 7)
+
+        # Trigger deep-link navigation
+        with patch.object(self.window.tracks_view, "navigate_to_store_filter") as mock_nav:
+            self.window.open_tracks_filtered_by_store("purchasable", "Beatport")
+            self.assertEqual(self.window.stacked_widget.currentIndex(), 0)
+            self.assertTrue(self.window.btn_tracks.isChecked())
+            mock_nav.assert_called_once_with("purchasable", "Beatport")
+
     def test_main_window_open_history_session_navigation(self):
-        # Nav setup has 8 tabs and index 3 is History Sessions
-        self.assertEqual(len(self.window.nav_items), 8)
+        # Nav setup has 9 tabs and index 3 is History Sessions
+        self.assertEqual(len(self.window.nav_items), 9)
         self.assertEqual(self.window.nav_items[3]["title"], "History Sessions")
         self.assertEqual(self.window.btn_history.toolTip(), "History Sessions")
 

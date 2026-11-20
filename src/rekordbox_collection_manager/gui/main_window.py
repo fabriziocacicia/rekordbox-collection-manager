@@ -43,6 +43,7 @@ from rekordbox_collection_manager.gui.play_count_view import PlayCountView
 from rekordbox_collection_manager.gui.playlists_view import PlaylistsView
 from rekordbox_collection_manager.gui.replace_file_view import ReplaceFileView
 from rekordbox_collection_manager.gui.restore_dialog import RestoreDialog
+from rekordbox_collection_manager.gui.stores_view import StoresView
 from rekordbox_collection_manager.gui.tags_view import TagsView
 from rekordbox_collection_manager.gui.tracks_view import TracksView
 from rekordbox_collection_manager.gui.theme import (
@@ -186,6 +187,11 @@ class MainWindow(QMainWindow):
             },
             {
                 "id": 7,
+                "icon": "🏪",
+                "title": "Stores",
+            },
+            {
+                "id": 8,
                 "icon": "ℹ️",
                 "title": "Collection Info",
             },
@@ -339,7 +345,8 @@ class MainWindow(QMainWindow):
         self.btn_play_count = self.nav_buttons[4]
         self.btn_replace_file = self.nav_buttons[5]
         self.btn_analytics = self.nav_buttons[6]
-        self.btn_info = self.nav_buttons[7]
+        self.btn_stores = self.nav_buttons[7]
+        self.btn_info = self.nav_buttons[8]
 
         sidebar_layout.addStretch(1)
 
@@ -412,6 +419,11 @@ class MainWindow(QMainWindow):
         self.analytics_view.open_tag_requested.connect(self.open_tag)
         self.analytics_view.replace_file_requested.connect(self.open_replace_file_for_track)
         self.stacked_widget.addWidget(self.analytics_view)
+
+        self.stores_view = StoresView(self)
+        self.stores_view.notify_status.connect(self._show_status_message)
+        self.stores_view.open_tracks_by_store.connect(self.open_tracks_filtered_by_store)
+        self.stacked_widget.addWidget(self.stores_view)
 
         self.tracks_view.replace_file_requested.connect(self.open_replace_file_for_track)
         self.history_view.replace_file_requested.connect(self.open_replace_file_for_track)
@@ -490,6 +502,10 @@ class MainWindow(QMainWindow):
             if page_id in self._dirty_views:
                 self.analytics_view.refresh()
                 self._dirty_views.discard(6)
+        elif page_id == 7 and hasattr(self, "stores_view"):
+            if page_id in self._dirty_views:
+                self.stores_view.refresh()
+                self._dirty_views.discard(7)
 
         self.stacked_widget.setCurrentIndex(page_id)
 
@@ -546,6 +562,19 @@ class MainWindow(QMainWindow):
             self.nav_buttons[5].setChecked(True)
         self.stacked_widget.setCurrentIndex(5)
         self.replace_file_view.preselect_track(track_data)
+
+    def open_tracks_filtered_by_store(self, purchase_status: str, store_name: str) -> None:
+        """Switch navigation to Tracks tab and apply store + purchase status filter."""
+        curr = self.stacked_widget.currentIndex()
+        if curr != 0:
+            curr_widget = self.stacked_widget.currentWidget()
+            if curr_widget and hasattr(curr_widget, "confirm_unsaved_changes"):
+                if not curr_widget.confirm_unsaved_changes():
+                    return
+        if self.nav_buttons and len(self.nav_buttons) > 0:
+            self.nav_buttons[0].setChecked(True)
+        self.stacked_widget.setCurrentIndex(0)
+        self.tracks_view.navigate_to_store_filter(purchase_status, store_name)
 
     def toggle_sidebar(self) -> None:
         """Toggle sidebar between expanded and collapsed icon-only mode."""
@@ -709,6 +738,7 @@ class MainWindow(QMainWindow):
         self.play_count_view.set_engine(engine, db_path=path)
         self.replace_file_view.set_engine(engine, db_path=path)
         self.analytics_view.set_engine(engine, db_path=path)
+        self.stores_view.set_engine(engine, db_path=path)
 
         active_hist = sum(1 for r in history_records if not r.get("is_deleted"))
         del_hist = sum(1 for r in history_records if r.get("is_deleted"))
@@ -885,7 +915,7 @@ class MainWindow(QMainWindow):
     def _on_db_saved(self) -> None:
         """Trigger background cloud sync after database modifications and refresh data across views."""
         curr_page = self.stacked_widget.currentIndex()
-        all_data_views = {0, 1, 2, 4, 6}  # 0: Tracks, 1: Playlists, 2: Tags, 4: Play Counts, 6: Analytics
+        all_data_views = {0, 1, 2, 4, 6, 7}  # 0: Tracks, 1: Playlists, 2: Tags, 4: Play Counts, 6: Analytics, 7: Stores
         self._dirty_views.update(all_data_views - {curr_page})
 
         # Eagerly pre-refresh tracks view in background if it has no unsaved edits
@@ -1000,6 +1030,7 @@ class MainWindow(QMainWindow):
             getattr(self, "play_count_view", None),
             getattr(self, "replace_file_view", None),
             getattr(self, "analytics_view", None),
+            getattr(self, "stores_view", None),
         ]
         for v in views:
             if v is not None:
