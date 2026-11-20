@@ -200,6 +200,18 @@ A dedicated CLI script at [`scripts/desktop_version.py`](scripts/desktop_version
 
 # Bump version, sync uv.lock, auto-commit to git, and create annotated tag 'v0.9.1'
 ./scripts/desktop_version.py patch --commit --tag
+
+# Automated 7-step desktop release pipeline (pre-flights -> build .app/.zip -> changelog -> preview prompt -> push & GitHub release)
+./scripts/desktop_version.py patch --release
+
+# One-shot unattended release without prompt
+./scripts/desktop_version.py minor --release -y
+
+# Publish staged release as private draft on GitHub
+./scripts/desktop_version.py patch --release --draft
+
+# Preview release pipeline without mutations or network calls
+./scripts/desktop_version.py patch --release --dry-run
 ```
 
 ### Changelog Management

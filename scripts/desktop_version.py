@@ -7,11 +7,15 @@ and automates git commits and release tagging.
 """
 
 import argparse
+import datetime
+import hashlib
+import os
 import re
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 # Paths
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -19,13 +23,374 @@ PROJECT_ROOT = SCRIPT_DIR.parent
 PYPROJECT_PATH = PROJECT_ROOT / "pyproject.toml"
 UV_LOCK_PATH = PROJECT_ROOT / "uv.lock"
 CHANGELOG_PATH = PROJECT_ROOT / "CHANGELOG.md"
+BUILD_SCRIPT_PATH = SCRIPT_DIR / "build_app.sh"
+DIST_DIR = PROJECT_ROOT / "dist"
 
 try:
-    from scripts.changelog import rotate_changelog
+    from scripts.changelog import (
+        CATEGORIES_ORDER,
+        categorize_commits,
+        get_commits_for_range,
+        get_desktop_tags,
+        rotate_changelog,
+        run_git,
+    )
 except ImportError:
     if str(PROJECT_ROOT) not in sys.path:
         sys.path.insert(0, str(PROJECT_ROOT))
-    from scripts.changelog import rotate_changelog
+    from scripts.changelog import (
+        CATEGORIES_ORDER,
+        categorize_commits,
+        get_commits_for_range,
+        get_desktop_tags,
+        rotate_changelog,
+        run_git,
+    )
+
+
+REQUIRED_TOOLS = ("uv", "clang", "ditto", "gh")
+
+
+def check_required_tools(tools: tuple[str, ...] = REQUIRED_TOOLS) -> list[str]:
+    """Verify presence of required CLI tools and gh auth status. Returns list of error messages."""
+    errors: list[str] = []
+    for tool in tools:
+        if not shutil.which(tool):
+            errors.append(f"Missing required tool: '{tool}' was not found in PATH.")
+
+    if shutil.which("gh"):
+        try:
+            res = subprocess.run(
+                ["gh", "auth", "status"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if res.returncode != 0:
+                err_detail = (res.stderr or res.stdout).strip()
+                errors.append(f"GitHub CLI ('gh') is not authenticated: {err_detail}")
+        except Exception as e:
+            errors.append(f"Failed to check GitHub CLI auth status: {e}")
+    return errors
+
+
+def check_git_clean(cwd: Path = PROJECT_ROOT) -> list[str]:
+    """Verify that working tree has no uncommitted changes or untracked files."""
+    try:
+        status = run_git(["status", "--porcelain"], cwd=cwd)
+        if status:
+            return ["Git working tree is dirty. Please commit or stash changes before releasing."]
+        return []
+    except Exception as e:
+        return [f"Failed to check git working tree status: {e}"]
+
+
+def check_git_branch(
+    expected_branch: str = "main",
+    check_remote: bool = True,
+    cwd: Path = PROJECT_ROOT,
+) -> list[str]:
+    """Verify that current branch is expected_branch and is in sync with origin."""
+    errors: list[str] = []
+    try:
+        curr_branch = run_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=cwd)
+        if curr_branch != expected_branch:
+            errors.append(
+                f"Current branch is '{curr_branch}', but releases must be cut from '{expected_branch}'."
+            )
+            return errors
+    except Exception as e:
+        return [f"Failed to determine current git branch: {e}"]
+
+    if check_remote:
+        try:
+            run_git(["fetch", "origin", expected_branch], cwd=cwd)
+            local_sha = run_git(["rev-parse", "HEAD"], cwd=cwd)
+            remote_sha = run_git(["rev-parse", f"origin/{expected_branch}"], cwd=cwd)
+            if local_sha != remote_sha:
+                counts = run_git(["rev-list", "--left-right", "--count", f"HEAD...origin/{expected_branch}"], cwd=cwd)
+                ahead, behind = counts.split()
+                errors.append(
+                    f"Local branch '{expected_branch}' is not in sync with origin/{expected_branch} "
+                    f"({ahead} ahead, {behind} behind)."
+                )
+        except Exception as e:
+            errors.append(f"Failed to verify upstream sync with origin/{expected_branch}: {e}")
+
+    return errors
+
+
+def check_tag_collision(
+    version: str,
+    check_remote: bool = True,
+    cwd: Path = PROJECT_ROOT,
+) -> list[str]:
+    """Verify that tag v<version> does not exist locally or on remote origin."""
+    errors: list[str] = []
+    tag_name = f"v{version.lstrip('v')}"
+    try:
+        local_tags = run_git(["tag", "-l", tag_name], cwd=cwd)
+        if local_tags:
+            errors.append(f"Local tag '{tag_name}' already exists.")
+    except Exception as e:
+        errors.append(f"Failed to check local git tags: {e}")
+
+    if check_remote:
+        try:
+            remote_tag_output = run_git(["ls-remote", "--tags", "origin", f"refs/tags/{tag_name}"], cwd=cwd)
+            if remote_tag_output:
+                errors.append(f"Remote tag '{tag_name}' already exists on origin.")
+        except Exception as e:
+            errors.append(f"Failed to check remote tags on origin: {e}")
+
+    return errors
+
+
+def check_preflight_conditions(
+    version: str,
+    expected_branch: str = "main",
+    check_remote: bool = True,
+    cwd: Path = PROJECT_ROOT,
+) -> list[str]:
+    """Run all pre-flight release checks and return consolidated list of errors."""
+    errors: list[str] = []
+    errors.extend(check_required_tools())
+    errors.extend(check_git_clean(cwd=cwd))
+    errors.extend(check_git_branch(expected_branch=expected_branch, check_remote=check_remote, cwd=cwd))
+    errors.extend(check_tag_collision(version=version, check_remote=check_remote, cwd=cwd))
+    return errors
+
+
+def get_git_checkpoint(cwd: Path = PROJECT_ROOT) -> str:
+    """Get current git commit SHA to serve as a rollback checkpoint."""
+    return run_git(["rev-parse", "HEAD"], cwd=cwd)
+
+
+def rollback_to_checkpoint(
+    checkpoint_sha: str,
+    tag_name: str | None = None,
+    cwd: Path = PROJECT_ROOT,
+) -> None:
+    """
+    Roll back working tree and project files to checkpoint_sha.
+    Deletes local tag if it was created.
+    """
+    try:
+        # Revert unstaged changes to tracked files
+        subprocess.run(["git", "checkout", "--", "."], cwd=cwd, check=True, capture_output=True)
+        # In case a commit was created after checkpoint_sha:
+        current_sha = run_git(["rev-parse", "HEAD"], cwd=cwd)
+        if current_sha != checkpoint_sha:
+            subprocess.run(["git", "reset", "--hard", checkpoint_sha], cwd=cwd, check=True, capture_output=True)
+        # Delete local tag if created
+        if tag_name:
+            tags = run_git(["tag", "-l", tag_name], cwd=cwd)
+            if tags:
+                subprocess.run(["git", "tag", "-d", tag_name], cwd=cwd, check=True, capture_output=True)
+    except Exception as e:
+        print(f"⚠️  Warning: Failed during rollback to checkpoint {checkpoint_sha}: {e}", file=sys.stderr)
+
+
+class BuildArtifactInfo(NamedTuple):
+    app_path: Path
+    zip_path: Path
+    zip_size: str
+    sha256: str
+
+
+def compute_sha256(file_path: Path) -> str:
+    """Compute SHA-256 hex digest of a file."""
+    h = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def get_expected_zip_path(version: str, dist_dir: Path = DIST_DIR) -> Path:
+    """Return expected release zip path for a given version."""
+    clean_ver = version.lstrip("v")
+    return dist_dir / f"Rekordbox-Collection-Manager-v{clean_ver}-macOS-arm64.zip"
+
+
+def build_and_package_app(
+    version: str,
+    cwd: Path = PROJECT_ROOT,
+    build_script: Path = BUILD_SCRIPT_PATH,
+    dist_dir: Path = DIST_DIR,
+    dry_run: bool = False,
+) -> BuildArtifactInfo:
+    """
+    Execute scripts/build_app.sh --package to compile standalone .app and create .zip archive.
+    Returns BuildArtifactInfo with paths, human-readable size, and sha256 checksum.
+    """
+    expected_zip = get_expected_zip_path(version, dist_dir=dist_dir)
+    app_path = dist_dir / "Rekordbox Collection Manager.app"
+
+    if dry_run:
+        return BuildArtifactInfo(
+            app_path=app_path,
+            zip_path=expected_zip,
+            zip_size="[dry-run]",
+            sha256="[dry-run-sha256]",
+        )
+
+    if not build_script.exists():
+        raise FileNotFoundError(f"Build script not found at {build_script}")
+
+    # Clean old/stale archive if present
+    if expected_zip.exists():
+        expected_zip.unlink()
+
+    print("🔨 Compiling standalone macOS bundle & packaging release zip...")
+    env = os.environ.copy()
+    env["APP_VERSION"] = version.lstrip("v")
+    res = subprocess.run(
+        ["bash", str(build_script), "--package"],
+        cwd=cwd,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if res.returncode != 0:
+        raise RuntimeError(
+            f"Build and packaging script failed with code {res.returncode}:\n{res.stderr.strip() or res.stdout.strip()}"
+        )
+
+    if not expected_zip.exists():
+        raise FileNotFoundError(
+            f"Expected release archive was not found at {expected_zip} after build."
+        )
+
+    size_bytes = expected_zip.stat().st_size
+    size_mb = size_bytes / (1024 * 1024)
+    zip_size_str = f"{size_mb:.1f} MB"
+    checksum = compute_sha256(expected_zip)
+
+    print(f"📦 Successfully packaged release archive: {expected_zip.name} ({zip_size_str})")
+    print(f"🔑 SHA-256: {checksum}")
+
+    return BuildArtifactInfo(
+        app_path=app_path,
+        zip_path=expected_zip,
+        zip_size=zip_size_str,
+        sha256=checksum,
+    )
+
+
+def extract_unreleased_notes(changelog_path: Path = CHANGELOG_PATH) -> str:
+    """Extract body text under ## [Unreleased] from CHANGELOG.md if present."""
+    if not changelog_path.exists():
+        return ""
+    text = changelog_path.read_text(encoding="utf-8")
+    unreleased_pattern = re.compile(
+        r"## \[Unreleased\][^\n]*\n(?P<body>.*?)(?=\n## \[\d|\n\[Unreleased\]:|\Z)",
+        re.DOTALL,
+    )
+    match = unreleased_pattern.search(text)
+    if match:
+        return match.group("body").strip()
+    return ""
+
+
+def extract_release_notes(version: str, changelog_path: Path = CHANGELOG_PATH) -> str:
+    """Extract release notes for version from CHANGELOG.md."""
+    if not changelog_path.exists():
+        return ""
+    clean_ver = version.lstrip("v")
+    text = changelog_path.read_text(encoding="utf-8")
+    pattern = re.compile(
+        rf"## \[{re.escape(clean_ver)}\][^\n]*\n(?P<body>.*?)(?=\n## \[\d|\n\[|\Z)",
+        re.DOTALL,
+    )
+    match = pattern.search(text)
+    if match:
+        return match.group("body").strip()
+    return ""
+
+
+def sync_changelog_for_release(
+    version: str,
+    date_str: str | None = None,
+    cwd: Path = PROJECT_ROOT,
+    changelog_path: Path = CHANGELOG_PATH,
+    dry_run: bool = False,
+) -> tuple[bool, str]:
+    """
+    Ensure [Unreleased] is populated (auto-populating from desktop conventional commits if empty),
+    rotate CHANGELOG.md for new_version, and return (updated_bool, release_notes_markdown).
+    """
+    clean_ver = version.lstrip("v")
+    if date_str is None:
+        date_str = datetime.date.today().isoformat()
+
+    unreleased_notes = extract_unreleased_notes(changelog_path=changelog_path)
+
+    # If unreleased notes are empty, auto-extract commits since last desktop tag
+    if not unreleased_notes and not dry_run and changelog_path.exists():
+        tags = get_desktop_tags(cwd=cwd)
+        if tags:
+            latest_tag = tags[-1]
+            commits = get_commits_for_range(f"{latest_tag}..HEAD", cwd=cwd)
+            categorized = categorize_commits(commits, target="desktop")
+            if categorized:
+                lines = []
+                for cat in CATEGORIES_ORDER:
+                    items = categorized.get(cat)
+                    if items:
+                        lines.append(f"### {cat}\n")
+                        for item in items:
+                            lines.append(item)
+                        lines.append("")
+                auto_body = "\n".join(lines).strip()
+                if auto_body:
+                    content = changelog_path.read_text(encoding="utf-8")
+                    unreleased_pattern = re.compile(
+                        r"(## \[Unreleased\][^\n]*\n)(?P<body>.*?)(?=\n## \[(?P<next_ver>\d+\.\d+(?:\.\d+)?)\])",
+                        re.DOTALL,
+                    )
+                    match = unreleased_pattern.search(content)
+                    if match:
+                        new_content = unreleased_pattern.sub(
+                            lambda m: f"{m.group(1)}\n{auto_body}\n",
+                            content,
+                            count=1,
+                        )
+                        changelog_path.write_text(new_content, encoding="utf-8")
+
+    # Rotate CHANGELOG.md
+    updated = rotate_changelog(
+        new_version=clean_ver,
+        date_str=date_str,
+        cwd=cwd,
+        changelog_path=changelog_path,
+        dry_run=dry_run,
+    )
+
+    release_notes = extract_release_notes(clean_ver, changelog_path=changelog_path)
+    if not release_notes and dry_run:
+        if unreleased_notes:
+            release_notes = unreleased_notes
+        else:
+            tags = get_desktop_tags(cwd=cwd)
+            if tags:
+                latest_tag = tags[-1]
+                commits = get_commits_for_range(f"{latest_tag}..HEAD", cwd=cwd)
+                categorized = categorize_commits(commits, target="desktop")
+                lines = []
+                for cat in CATEGORIES_ORDER:
+                    items = categorized.get(cat)
+                    if items:
+                        lines.append(f"### {cat}\n")
+                        for item in items:
+                            lines.append(item)
+                        lines.append("")
+                release_notes = "\n".join(lines).strip()
+        if not release_notes:
+            release_notes = "- Routine updates and maintenance."
+
+    return updated, release_notes
 
 
 def get_current_version(content: str) -> str:
@@ -140,7 +505,251 @@ def git_commit_and_tag(
             print(f"🏷️  Tagged: {tag_name}")
     except subprocess.CalledProcessError as e:
         print(f"❌ Git command failed: {e}", file=sys.stderr)
+        raise RuntimeError(f"Git command failed: {e}") from e
+
+
+def publish_git_push(version: str, cwd: Path = PROJECT_ROOT) -> None:
+    """Push main branch and annotated version tag to origin atomically."""
+    tag_name = f"v{version.lstrip('v')}"
+    print(f"🚀 Pushing main branch and tag {tag_name} to origin...")
+    run_git(["push", "origin", "main", tag_name], cwd=cwd)
+
+
+def publish_github_release(
+    version: str,
+    zip_path: Path,
+    release_notes: str,
+    draft: bool = False,
+    dist_dir: Path = DIST_DIR,
+    cwd: Path = PROJECT_ROOT,
+) -> str:
+    """Publish GitHub release with standalone zip asset attached via gh CLI."""
+    tag_name = f"v{version.lstrip('v')}"
+    dist_dir.mkdir(parents=True, exist_ok=True)
+    notes_file = dist_dir / f"RELEASE_NOTES_{tag_name}.md"
+    notes_file.write_text(release_notes, encoding="utf-8")
+
+    cmd = [
+        "gh",
+        "release",
+        "create",
+        tag_name,
+        str(zip_path),
+        "--title",
+        f"Rekordbox Collection Manager {tag_name}",
+        "--notes-file",
+        str(notes_file),
+    ]
+    if draft:
+        cmd.append("--draft")
+
+    print(f"📢 Publishing GitHub release {tag_name}...")
+    res = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=False)
+    if res.returncode != 0:
+        err_msg = res.stderr.strip() or res.stdout.strip()
+        print(f"\n❌ Error: Failed to publish GitHub release ({err_msg}).", file=sys.stderr)
+        print("⚠️  Git commit and tag were already pushed to origin.", file=sys.stderr)
+        print("   To retry publishing the GitHub release without rebuilding, run:", file=sys.stderr)
+        print(f"   {' '.join(cmd)}\n", file=sys.stderr)
+        raise RuntimeError(f"GitHub release creation failed: {err_msg}")
+
+    release_url = res.stdout.strip()
+    return release_url
+
+
+def confirm_release_prompt(summary: str) -> bool:
+    """Prompt user interactively to confirm release publishing."""
+    print(summary)
+    try:
+        reply = input("\nProceed with git push and publishing GitHub release? [Y/n]: ").strip().lower()
+        if reply in ("", "y", "yes"):
+            return True
+        return False
+    except (KeyboardInterrupt, EOFError):
+        print()
+        return False
+
+
+def run_release_pipeline(
+    action: str,
+    target_version: str | None = None,
+    yes: bool = False,
+    draft: bool = False,
+    dry_run: bool = False,
+    cwd: Path = PROJECT_ROOT,
+    pyproject_path: Path = PYPROJECT_PATH,
+    changelog_path: Path = CHANGELOG_PATH,
+    dist_dir: Path = DIST_DIR,
+    build_script: Path = BUILD_SCRIPT_PATH,
+) -> None:
+    """
+    Execute the 7-step safe desktop release pipeline.
+    """
+    if action not in ("patch", "minor", "major", "set"):
+        raise ValueError(
+            f"Action must be one of 'patch', 'minor', 'major', or 'set' when using --release (got '{action}')."
+        )
+
+    if not pyproject_path.exists():
+        raise FileNotFoundError(f"Cannot find pyproject.toml at {pyproject_path}")
+
+    content = pyproject_path.read_text(encoding="utf-8")
+    curr_version = get_current_version(content)
+
+    if action in ("patch", "minor", "major"):
+        new_version = bump_semver(curr_version, action)
+    else:  # set
+        if not target_version:
+            raise ValueError("Must specify a version string when using 'set' (e.g., set 1.0.0)")
+        validate_semver(target_version)
+        new_version = target_version
+
+    print("🚀 Rekordbox Collection Manager Desktop Release Automation:")
+    print(f"   Version: {curr_version} -> {new_version}")
+
+    # Step 1: Pre-flight Verification
+    print("🔍 Running pre-flight verification...")
+    errors = check_preflight_conditions(
+        new_version,
+        expected_branch="main",
+        check_remote=not dry_run,
+        cwd=cwd,
+    )
+    if errors:
+        print("❌ Pre-flight checks failed:", file=sys.stderr)
+        for err in errors:
+            print(f"   • {err}", file=sys.stderr)
         sys.exit(1)
+    print("✅ Pre-flight checks passed.")
+
+    # Step 2: Build & Packaging
+    if dry_run:
+        artifact = build_and_package_app(
+            new_version,
+            cwd=cwd,
+            build_script=build_script,
+            dist_dir=dist_dir,
+            dry_run=True,
+        )
+        _, release_notes = sync_changelog_for_release(
+            new_version,
+            cwd=cwd,
+            changelog_path=changelog_path,
+            dry_run=True,
+        )
+
+        print("\n--- [dry-run] Release Preview ---")
+        print(f"Target Version: v{new_version}")
+        print(f"Archive:        {artifact.zip_path.name} ({artifact.zip_size})")
+        print(f"Checksum:       {artifact.sha256}")
+        print(f"\n--- [dry-run] Release Notes Preview ---\n{release_notes}")
+        print("---------------------------------------")
+        print(f"[dry-run] Would commit 'chore(desktop): bump version to {new_version}'")
+        print(f"[dry-run] Would create annotated tag 'v{new_version}'")
+        print(f"[dry-run] Would push branch to origin main and tag to origin v{new_version}")
+        gh_cmd = f"gh release create v{new_version} {artifact.zip_path} --title 'Rekordbox Collection Manager v{new_version}'"
+        if draft:
+            gh_cmd += " --draft"
+        print(f"[dry-run] Would publish release via: {gh_cmd}")
+        print("\n✅ Dry-run release simulation completed successfully. Zero changes were made.")
+        return
+
+    # Real execution
+    checkpoint_sha = get_git_checkpoint(cwd=cwd)
+    tag_name = f"v{new_version}"
+    try:
+        update_pyproject(new_version, dry_run=False)
+        uv_lock_updated = update_uv_lock(dry_run=False)
+        changelog_updated, release_notes = sync_changelog_for_release(
+            new_version,
+            cwd=cwd,
+            changelog_path=changelog_path,
+            dry_run=False,
+        )
+
+        artifact = build_and_package_app(
+            new_version,
+            cwd=cwd,
+            build_script=build_script,
+            dist_dir=dist_dir,
+            dry_run=False,
+        )
+
+        summary = (
+            f"\n🚀 Ready to publish release:\n"
+            f"   • Version:  {curr_version} -> {new_version}\n"
+            f"   • Archive:  {artifact.zip_path.name} ({artifact.zip_size})\n"
+            f"   • Checksum: {artifact.sha256}\n"
+            f"\n--- Release Notes Preview ({new_version}) ---\n"
+            f"{release_notes}\n"
+            f"----------------------------------------------"
+        )
+
+        if not yes:
+            if not sys.stdin.isatty():
+                raise RuntimeError(
+                    "Non-interactive environment detected without -y / --yes. Pass -y to publish unattended."
+                )
+            confirmed = confirm_release_prompt(summary)
+            if not confirmed:
+                print("\n❌ Release aborted by user. Rolling back local changes...")
+                rollback_to_checkpoint(checkpoint_sha, cwd=cwd)
+                print("✅ Working tree restored to clean state.")
+                sys.exit(1)
+        else:
+            print(summary)
+
+    except Exception as e:
+        print(f"\n⚠️  Error occurred during release preparation ({e}). Rolling back local state...", file=sys.stderr)
+        try:
+            rollback_to_checkpoint(checkpoint_sha, cwd=cwd)
+            print("✅ Local working tree restored to checkpoint.", file=sys.stderr)
+        except Exception as rb_err:
+            print(f"⚠️  Rollback attempt encountered error: {rb_err}", file=sys.stderr)
+        raise
+
+    # Step 6: Commit and Tag
+    try:
+        git_commit_and_tag(
+            new_version,
+            create_tag=True,
+            uv_lock_updated=uv_lock_updated,
+            changelog_updated=changelog_updated,
+        )
+    except Exception as e:
+        print(f"\n❌ Error during git commit/tag: {e}. Rolling back working tree and tag...", file=sys.stderr)
+        try:
+            rollback_to_checkpoint(checkpoint_sha, tag_name=tag_name, cwd=cwd)
+            print("✅ Working tree and tag rolled back.", file=sys.stderr)
+        except Exception as rb_err:
+            print(f"⚠️  Rollback attempt encountered error: {rb_err}", file=sys.stderr)
+        raise
+
+    # Step 7: Remote Publishing Zone (Never hard-reset local main here!)
+    try:
+        publish_git_push(new_version, cwd=cwd)
+    except Exception as e:
+        print(f"\n❌ Error during git push: {e}.", file=sys.stderr)
+        print("⚠️  Local commit and tag were preserved. Origin push failed.", file=sys.stderr)
+        print(f"   To retry push manually, run:\n   git push origin main {tag_name}", file=sys.stderr)
+        raise
+
+    try:
+        release_url = publish_github_release(
+            new_version,
+            zip_path=artifact.zip_path,
+            release_notes=release_notes,
+            draft=draft,
+            dist_dir=dist_dir,
+            cwd=cwd,
+        )
+        print(f"\n🎉 Successfully published release v{new_version}!")
+        if release_url:
+            print(f"🔗 {release_url}")
+    except Exception as e:
+        print(f"\n❌ Error during GitHub release: {e}.", file=sys.stderr)
+        print("⚠️  Git commit and tag are already pushed to origin.", file=sys.stderr)
+        raise
 
 
 def main() -> None:
@@ -154,6 +763,10 @@ def main() -> None:
   %(prog)s major                # Bump major: 0.9.0 -> 1.0.0
   %(prog)s set 1.0.0            # Set specific SemVer
   %(prog)s patch --commit --tag # Bump patch, commit to git, and create tag vX.Y.Z
+  %(prog)s patch --release      # Automated patch release with interactive confirmation
+  %(prog)s minor --release -y   # Automated minor release without prompt (one-shot)
+  %(prog)s minor --release --draft # Automated minor release staged as draft
+  %(prog)s patch --release --dry-run # Preview release without touching files or network
 """,
     )
 
@@ -168,6 +781,22 @@ def main() -> None:
         "version",
         nargs="?",
         help="Target version when action is 'set' (e.g., 1.0.0)",
+    )
+    parser.add_argument(
+        "--release",
+        action="store_true",
+        help="Execute the 7-step automated desktop release pipeline",
+    )
+    parser.add_argument(
+        "-y",
+        "--yes",
+        action="store_true",
+        help="Bypass confirmation prompt for unattended one-shot release",
+    )
+    parser.add_argument(
+        "--draft",
+        action="store_true",
+        help="Create GitHub release in draft status instead of public",
     )
     parser.add_argument(
         "--commit",
@@ -196,6 +825,16 @@ def main() -> None:
     )
 
     args = parser.parse_args()
+
+    if args.release:
+        run_release_pipeline(
+            action=args.action,
+            target_version=args.version,
+            yes=args.yes,
+            draft=args.draft,
+            dry_run=args.dry_run,
+        )
+        return
 
     if not PYPROJECT_PATH.exists():
         print(f"❌ Error: Cannot find pyproject.toml at {PYPROJECT_PATH}", file=sys.stderr)
