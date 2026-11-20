@@ -283,15 +283,21 @@ def test_build_and_package_app_success(tmp_path):
     fake_script.chmod(0o755)
 
     expected_zip = tmp_path / "Rekordbox-Collection-Manager-v0.21.0-macOS-arm64.zip"
-    expected_zip.write_bytes(b"dummy archive content")
+    expected_zip.write_bytes(b"stale archive content")
 
-    with patch("subprocess.run") as mock_run:
-        mock_run.return_value = MagicMock(returncode=0, stdout="Done")
+    def fake_build(cmd, **kwargs):
+        assert not expected_zip.exists()
+        expected_zip.write_bytes(b"dummy archive content")
+        return MagicMock(returncode=0, stdout="Done")
+
+    with patch("subprocess.run", side_effect=fake_build) as mock_run:
         info = build_and_package_app("0.21.0", build_script=fake_script, dist_dir=tmp_path)
 
         assert info.zip_path == expected_zip
         assert info.zip_size == "0.0 MB"
         assert len(info.sha256) == 64
+        call_kwargs = mock_run.call_args[1]
+        assert call_kwargs.get("env", {}).get("APP_VERSION") == "0.21.0"
 
 
 def test_extract_unreleased_notes(tmp_path):
@@ -430,10 +436,7 @@ def test_sync_changelog_for_release_dry_run(tmp_path):
 def test_publish_git_push():
     with patch("scripts.desktop_version.run_git") as mock_run_git:
         publish_git_push("0.21.0")
-        assert mock_run_git.call_count == 2
-        calls = [c[0][0] for c in mock_run_git.call_args_list]
-        assert calls[0] == ["push", "origin", "main"]
-        assert calls[1] == ["push", "origin", "v0.21.0"]
+        mock_run_git.assert_called_once_with(["push", "origin", "main", "v0.21.0"], cwd=PROJECT_ROOT)
 
 
 def test_publish_github_release_success(tmp_path):
@@ -588,17 +591,18 @@ def test_run_release_pipeline_full_success_with_yes(tmp_path):
     changelog = tmp_path / "CHANGELOG.md"
     changelog.write_text("# Changelog\n\n## [Unreleased]\n\n- Ready\n\n## [0.20.0] - 2026-11-18\n")
 
+    parent_mock = MagicMock()
     with patch("scripts.desktop_version.check_preflight_conditions", return_value=[]), \
          patch("scripts.desktop_version.get_git_checkpoint", return_value="checkpoint_sha"), \
-         patch("scripts.desktop_version.build_and_package_app") as mock_build, \
-         patch("scripts.desktop_version.update_pyproject") as mock_upd_pyproject, \
+         patch("scripts.desktop_version.build_and_package_app", side_effect=parent_mock.build_and_package_app) as mock_build, \
+         patch("scripts.desktop_version.update_pyproject", side_effect=parent_mock.update_pyproject) as mock_upd_pyproject, \
          patch("scripts.desktop_version.update_uv_lock", return_value=True), \
          patch("scripts.desktop_version.sync_changelog_for_release", return_value=(True, "Notes")), \
          patch("scripts.desktop_version.git_commit_and_tag") as mock_commit_tag, \
          patch("scripts.desktop_version.publish_git_push") as mock_push, \
          patch("scripts.desktop_version.publish_github_release", return_value="https://github.com/release/v0.20.1") as mock_pub_gh:
 
-        mock_build.return_value = BuildArtifactInfo(
+        parent_mock.build_and_package_app.return_value = BuildArtifactInfo(
             app_path=tmp_path / "app",
             zip_path=tmp_path / "app.zip",
             zip_size="10 MB",
@@ -626,5 +630,117 @@ def test_run_release_pipeline_full_success_with_yes(tmp_path):
             dist_dir=tmp_path,
             cwd=PROJECT_ROOT,
         )
+
+        # Assert update_pyproject occurred BEFORE build_and_package_app
+        call_names = [call[0] for call in parent_mock.mock_calls]
+        assert call_names == ["update_pyproject", "build_and_package_app"]
+
+
+def test_run_release_pipeline_non_interactive_without_yes(tmp_path):
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text('version = "0.20.0"\n')
+    changelog = tmp_path / "CHANGELOG.md"
+    changelog.write_text("# Changelog\n\n## [Unreleased]\n\n- Ready\n\n## [0.20.0] - 2026-11-18\n")
+
+    with patch("scripts.desktop_version.check_preflight_conditions", return_value=[]), \
+         patch("scripts.desktop_version.get_git_checkpoint", return_value="checkpoint_sha"), \
+         patch("scripts.desktop_version.build_and_package_app") as mock_build, \
+         patch("scripts.desktop_version.update_pyproject"), \
+         patch("scripts.desktop_version.update_uv_lock", return_value=True), \
+         patch("scripts.desktop_version.sync_changelog_for_release", return_value=(True, "Notes")), \
+         patch("sys.stdin.isatty", return_value=False), \
+         patch("scripts.desktop_version.rollback_to_checkpoint") as mock_rollback:
+
+        mock_build.return_value = BuildArtifactInfo(
+            app_path=tmp_path / "app",
+            zip_path=tmp_path / "app.zip",
+            zip_size="10 MB",
+            sha256="sha256_dummy",
+        )
+
+        with pytest.raises(RuntimeError, match="Non-interactive environment detected without -y"):
+            run_release_pipeline(
+                action="patch",
+                yes=False,
+                pyproject_path=pyproject,
+                changelog_path=changelog,
+                dist_dir=tmp_path,
+                dry_run=False,
+            )
+
+        mock_rollback.assert_called_once_with("checkpoint_sha", cwd=PROJECT_ROOT)
+
+
+def test_run_release_pipeline_push_failure_preserves_local_state(tmp_path):
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text('version = "0.20.0"\n')
+    changelog = tmp_path / "CHANGELOG.md"
+    changelog.write_text("# Changelog\n\n## [Unreleased]\n\n- Ready\n\n## [0.20.0] - 2026-11-18\n")
+
+    with patch("scripts.desktop_version.check_preflight_conditions", return_value=[]), \
+         patch("scripts.desktop_version.get_git_checkpoint", return_value="checkpoint_sha"), \
+         patch("scripts.desktop_version.build_and_package_app") as mock_build, \
+         patch("scripts.desktop_version.update_pyproject"), \
+         patch("scripts.desktop_version.update_uv_lock", return_value=True), \
+         patch("scripts.desktop_version.sync_changelog_for_release", return_value=(True, "Notes")), \
+         patch("scripts.desktop_version.git_commit_and_tag") as mock_commit_tag, \
+         patch("scripts.desktop_version.publish_git_push", side_effect=RuntimeError("Network push timeout")), \
+         patch("scripts.desktop_version.rollback_to_checkpoint") as mock_rollback:
+
+        mock_build.return_value = BuildArtifactInfo(
+            app_path=tmp_path / "app",
+            zip_path=tmp_path / "app.zip",
+            zip_size="10 MB",
+            sha256="sha256_dummy",
+        )
+
+        with pytest.raises(RuntimeError, match="Network push timeout"):
+            run_release_pipeline(
+                action="patch",
+                yes=True,
+                pyproject_path=pyproject,
+                changelog_path=changelog,
+                dist_dir=tmp_path,
+                dry_run=False,
+            )
+
+        mock_commit_tag.assert_called_once()
+        # Ensure rollback_to_checkpoint was NEVER called when push failed!
+        mock_rollback.assert_not_called()
+
+
+def test_run_release_pipeline_commit_tag_failure_rolls_back(tmp_path):
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text('version = "0.20.0"\n')
+    changelog = tmp_path / "CHANGELOG.md"
+    changelog.write_text("# Changelog\n\n## [Unreleased]\n\n- Ready\n\n## [0.20.0] - 2026-11-18\n")
+
+    with patch("scripts.desktop_version.check_preflight_conditions", return_value=[]), \
+         patch("scripts.desktop_version.get_git_checkpoint", return_value="checkpoint_sha"), \
+         patch("scripts.desktop_version.build_and_package_app") as mock_build, \
+         patch("scripts.desktop_version.update_pyproject"), \
+         patch("scripts.desktop_version.update_uv_lock", return_value=True), \
+         patch("scripts.desktop_version.sync_changelog_for_release", return_value=(True, "Notes")), \
+         patch("scripts.desktop_version.git_commit_and_tag", side_effect=RuntimeError("Tag failed")), \
+         patch("scripts.desktop_version.rollback_to_checkpoint") as mock_rollback:
+
+        mock_build.return_value = BuildArtifactInfo(
+            app_path=tmp_path / "app",
+            zip_path=tmp_path / "app.zip",
+            zip_size="10 MB",
+            sha256="sha256_dummy",
+        )
+
+        with pytest.raises(RuntimeError, match="Tag failed"):
+            run_release_pipeline(
+                action="patch",
+                yes=True,
+                pyproject_path=pyproject,
+                changelog_path=changelog,
+                dist_dir=tmp_path,
+                dry_run=False,
+            )
+
+        mock_rollback.assert_called_once_with("checkpoint_sha", tag_name="v0.20.1", cwd=PROJECT_ROOT)
 
 

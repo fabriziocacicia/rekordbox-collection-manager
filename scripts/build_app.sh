@@ -45,7 +45,7 @@ fi
 rm -rf "$PROJECT_ROOT/assets/icon.iconset"
 
 # 2. Extract Application Version
-APP_VERSION=$(grep -m 1 '^version = ' "$PROJECT_ROOT/pyproject.toml" | cut -d '"' -f 2)
+APP_VERSION="${APP_VERSION:-$(grep -m 1 '^version = ' "$PROJECT_ROOT/pyproject.toml" | cut -d '"' -f 2)}"
 if [ -z "$APP_VERSION" ]; then
     APP_VERSION="0.20.0"
 fi

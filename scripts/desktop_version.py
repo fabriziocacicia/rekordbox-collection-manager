@@ -9,6 +9,7 @@ and automates git commits and release tagging.
 import argparse
 import datetime
 import hashlib
+import os
 import re
 import shutil
 import subprocess
@@ -32,6 +33,7 @@ try:
         get_commits_for_range,
         get_desktop_tags,
         rotate_changelog,
+        run_git,
     )
 except ImportError:
     if str(PROJECT_ROOT) not in sys.path:
@@ -42,25 +44,11 @@ except ImportError:
         get_commits_for_range,
         get_desktop_tags,
         rotate_changelog,
+        run_git,
     )
 
 
 REQUIRED_TOOLS = ("uv", "clang", "ditto", "gh")
-
-
-def run_git(cmd: list[str], cwd: Path = PROJECT_ROOT) -> str:
-    """Run git command and return stripped standard output."""
-    try:
-        res = subprocess.run(
-            ["git"] + cmd,
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        return res.stdout.strip()
-    except subprocess.CalledProcessError as e:
-        raise RuntimeError(f"Git command failed: {' '.join(cmd)}\n{e.stderr.strip()}") from e
 
 
 def check_required_tools(tools: tuple[str, ...] = REQUIRED_TOOLS) -> list[str]:
@@ -250,10 +238,17 @@ def build_and_package_app(
     if not build_script.exists():
         raise FileNotFoundError(f"Build script not found at {build_script}")
 
+    # Clean old/stale archive if present
+    if expected_zip.exists():
+        expected_zip.unlink()
+
     print("🔨 Compiling standalone macOS bundle & packaging release zip...")
+    env = os.environ.copy()
+    env["APP_VERSION"] = version.lstrip("v")
     res = subprocess.run(
         ["bash", str(build_script), "--package"],
         cwd=cwd,
+        env=env,
         capture_output=True,
         text=True,
         check=False,
@@ -358,7 +353,7 @@ def sync_changelog_for_release(
                     match = unreleased_pattern.search(content)
                     if match:
                         new_content = unreleased_pattern.sub(
-                            rf"\g<1>\n{auto_body}\n",
+                            lambda m: f"{m.group(1)}\n{auto_body}\n",
                             content,
                             count=1,
                         )
@@ -510,16 +505,14 @@ def git_commit_and_tag(
             print(f"🏷️  Tagged: {tag_name}")
     except subprocess.CalledProcessError as e:
         print(f"❌ Git command failed: {e}", file=sys.stderr)
-        sys.exit(1)
+        raise RuntimeError(f"Git command failed: {e}") from e
 
 
 def publish_git_push(version: str, cwd: Path = PROJECT_ROOT) -> None:
-    """Push main branch and annotated version tag to origin."""
+    """Push main branch and annotated version tag to origin atomically."""
     tag_name = f"v{version.lstrip('v')}"
-    print("🚀 Pushing main branch to origin...")
-    run_git(["push", "origin", "main"], cwd=cwd)
-    print(f"🏷️  Pushing tag {tag_name} to origin...")
-    run_git(["push", "origin", tag_name], cwd=cwd)
+    print(f"🚀 Pushing main branch and tag {tag_name} to origin...")
+    run_git(["push", "origin", "main", tag_name], cwd=cwd)
 
 
 def publish_github_release(
@@ -665,20 +658,20 @@ def run_release_pipeline(
     checkpoint_sha = get_git_checkpoint(cwd=cwd)
     tag_name = f"v{new_version}"
     try:
-        artifact = build_and_package_app(
-            new_version,
-            cwd=cwd,
-            build_script=build_script,
-            dist_dir=dist_dir,
-            dry_run=False,
-        )
-
         update_pyproject(new_version, dry_run=False)
         uv_lock_updated = update_uv_lock(dry_run=False)
         changelog_updated, release_notes = sync_changelog_for_release(
             new_version,
             cwd=cwd,
             changelog_path=changelog_path,
+            dry_run=False,
+        )
+
+        artifact = build_and_package_app(
+            new_version,
+            cwd=cwd,
+            build_script=build_script,
+            dist_dir=dist_dir,
             dry_run=False,
         )
 
@@ -692,7 +685,11 @@ def run_release_pipeline(
             f"----------------------------------------------"
         )
 
-        if not yes and sys.stdin.isatty():
+        if not yes:
+            if not sys.stdin.isatty():
+                raise RuntimeError(
+                    "Non-interactive environment detected without -y / --yes. Pass -y to publish unattended."
+                )
             confirmed = confirm_release_prompt(summary)
             if not confirmed:
                 print("\n❌ Release aborted by user. Rolling back local changes...")
@@ -702,16 +699,42 @@ def run_release_pipeline(
         else:
             print(summary)
 
-        # Step 6: Commit and Tag
+    except Exception as e:
+        print(f"\n⚠️  Error occurred during release preparation ({e}). Rolling back local state...", file=sys.stderr)
+        try:
+            rollback_to_checkpoint(checkpoint_sha, cwd=cwd)
+            print("✅ Local working tree restored to checkpoint.", file=sys.stderr)
+        except Exception as rb_err:
+            print(f"⚠️  Rollback attempt encountered error: {rb_err}", file=sys.stderr)
+        raise
+
+    # Step 6: Commit and Tag
+    try:
         git_commit_and_tag(
             new_version,
             create_tag=True,
             uv_lock_updated=uv_lock_updated,
             changelog_updated=changelog_updated,
         )
+    except Exception as e:
+        print(f"\n❌ Error during git commit/tag: {e}. Rolling back working tree and tag...", file=sys.stderr)
+        try:
+            rollback_to_checkpoint(checkpoint_sha, tag_name=tag_name, cwd=cwd)
+            print("✅ Working tree and tag rolled back.", file=sys.stderr)
+        except Exception as rb_err:
+            print(f"⚠️  Rollback attempt encountered error: {rb_err}", file=sys.stderr)
+        raise
 
-        # Step 7: Push and Publish
+    # Step 7: Remote Publishing Zone (Never hard-reset local main here!)
+    try:
         publish_git_push(new_version, cwd=cwd)
+    except Exception as e:
+        print(f"\n❌ Error during git push: {e}.", file=sys.stderr)
+        print("⚠️  Local commit and tag were preserved. Origin push failed.", file=sys.stderr)
+        print(f"   To retry push manually, run:\n   git push origin main {tag_name}", file=sys.stderr)
+        raise
+
+    try:
         release_url = publish_github_release(
             new_version,
             zip_path=artifact.zip_path,
@@ -724,15 +747,8 @@ def run_release_pipeline(
         if release_url:
             print(f"🔗 {release_url}")
     except Exception as e:
-        # Check if remote tag exists; if not, rollback
-        try:
-            remote_tag_check = run_git(["ls-remote", "--tags", "origin", f"refs/tags/{tag_name}"], cwd=cwd)
-            if not remote_tag_check:
-                print(f"\n⚠️  Error occurred during release ({e}). Rolling back local state...", file=sys.stderr)
-                rollback_to_checkpoint(checkpoint_sha, tag_name=tag_name, cwd=cwd)
-                print("✅ Local working tree restored to checkpoint.", file=sys.stderr)
-        except Exception as rb_err:
-            print(f"⚠️  Rollback attempt encountered error: {rb_err}", file=sys.stderr)
+        print(f"\n❌ Error during GitHub release: {e}.", file=sys.stderr)
+        print("⚠️  Git commit and tag are already pushed to origin.", file=sys.stderr)
         raise
 
 
