@@ -1297,12 +1297,15 @@ class TestPlaylistChipsUI(unittest.TestCase):
         # play_filter_combo should be hidden and reset to 'All'
         self.assertTrue(t_view.play_filter_combo.isHidden())
         self.assertEqual(t_view.play_filter_combo.currentIndex(), 0)
-        self.assertTrue(t_view.store_filter_widget.isHidden())
+        self.assertFalse(t_view.store_filter_widget.isHidden())
+        self.assertTrue(t_view.table.is_column_visible("Buy At"))
         self.assertFalse(t_view.table.is_column_visible("Purchased At"))
 
-        # Switch back to 'All Statuses' -> play_filter_combo reappears
+        # Switch back to 'All Statuses' -> play_filter_combo reappears, store filter hidden
         t_view.purchase_combo.setCurrentIndex(0)
         self.assertFalse(t_view.play_filter_combo.isHidden())
+        self.assertTrue(t_view.store_filter_widget.isHidden())
+        self.assertFalse(t_view.table.is_column_visible("Buy At"))
 
         # Test reset button restores visibility
         t_view.purchase_combo.setCurrentIndex(idx_purchasable)

@@ -1131,3 +1131,29 @@ class AnalyticsLoaderWorker(QThread):
                 self.error.emit(str(e))
 
 
+class StoresSummaryWorker(QThread):
+    """Worker to calculate store summary counts in the background."""
+
+    success = Signal(dict)
+    error = Signal(str)
+
+    def __init__(self, engine: Engine, parent: Optional[Any] = None):
+        super().__init__(parent)
+        self.engine = engine
+
+    def run(self) -> None:
+        try:
+            if self.isInterruptionRequested():
+                return
+            from rekordbox_collection_manager.utils import get_store_summary_counts
+
+            counts = get_store_summary_counts(self.engine)
+            if self.isInterruptionRequested():
+                return
+            self.success.emit(counts)
+        except Exception as e:
+            if not self.isInterruptionRequested():
+                self.error.emit(str(e))
+
+
+

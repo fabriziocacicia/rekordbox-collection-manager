@@ -499,6 +499,7 @@ class TestMainWindowSidebar(unittest.TestCase):
         self.assertEqual(self.window.btn_play_count.text(), "🔢  Play Counts")
         self.assertEqual(self.window.btn_replace_file.text(), "🔄  Replace File")
         self.assertEqual(self.window.btn_analytics.text(), "📊  Analytics")
+        self.assertEqual(self.window.btn_stores.text(), "🏪  Stores")
         self.assertEqual(self.window.btn_info.text(), "ℹ️  Collection Info")
         self.assertFalse(self.window.sidebar_section_label.isHidden())
         self.assertFalse(self.window.app_ver.isHidden())
@@ -515,6 +516,7 @@ class TestMainWindowSidebar(unittest.TestCase):
         self.assertEqual(self.window.btn_play_count.text(), "🔢")
         self.assertEqual(self.window.btn_replace_file.text(), "🔄")
         self.assertEqual(self.window.btn_analytics.text(), "📊")
+        self.assertEqual(self.window.btn_stores.text(), "🏪")
         self.assertEqual(self.window.btn_info.text(), "ℹ️")
         self.assertTrue(self.window.sidebar_section_label.isHidden())
         self.assertTrue(self.window.app_ver.isHidden())
@@ -526,7 +528,14 @@ class TestMainWindowSidebar(unittest.TestCase):
         self.assertEqual(self.window.btn_play_count.toolTip(), "Play Counts")
         self.assertEqual(self.window.btn_replace_file.toolTip(), "Replace File")
         self.assertEqual(self.window.btn_analytics.toolTip(), "Analytics")
+        self.assertEqual(self.window.btn_stores.toolTip(), "Stores")
         self.assertEqual(self.window.btn_info.toolTip(), "Collection Info")
+
+    def test_nav_click_stores_view_refresh_when_active(self):
+        self.window.stacked_widget.setCurrentIndex(7)
+        with patch.object(self.window.stores_view, "refresh") as mock_refresh:
+            self.window._on_nav_clicked(7)
+            mock_refresh.assert_called_once()
 
     def test_sidebar_expand(self):
         self.window.set_sidebar_collapsed(True, animate=False)
@@ -562,14 +571,28 @@ class TestMainWindowSidebar(unittest.TestCase):
         self.assertEqual(self.window.stacked_widget.currentIndex(), 5)
         self.window.btn_analytics.click()
         self.assertEqual(self.window.stacked_widget.currentIndex(), 6)
-        self.window.btn_info.click()
+        self.window.btn_stores.click()
         self.assertEqual(self.window.stacked_widget.currentIndex(), 7)
+        self.window.btn_info.click()
+        self.assertEqual(self.window.stacked_widget.currentIndex(), 8)
         self.window.btn_tracks.click()
         self.assertEqual(self.window.stacked_widget.currentIndex(), 0)
 
+    def test_open_tracks_filtered_by_store(self):
+        # Start on Stores tab
+        self.window.btn_stores.click()
+        self.assertEqual(self.window.stacked_widget.currentIndex(), 7)
+
+        # Trigger deep-link navigation
+        with patch.object(self.window.tracks_view, "navigate_to_store_filter") as mock_nav:
+            self.window.open_tracks_filtered_by_store("purchasable", "Beatport")
+            self.assertEqual(self.window.stacked_widget.currentIndex(), 0)
+            self.assertTrue(self.window.btn_tracks.isChecked())
+            mock_nav.assert_called_once_with("purchasable", "Beatport")
+
     def test_main_window_open_history_session_navigation(self):
-        # Nav setup has 8 tabs and index 3 is History Sessions
-        self.assertEqual(len(self.window.nav_items), 8)
+        # Nav setup has 9 tabs and index 3 is History Sessions
+        self.assertEqual(len(self.window.nav_items), 9)
         self.assertEqual(self.window.nav_items[3]["title"], "History Sessions")
         self.assertEqual(self.window.btn_history.toolTip(), "History Sessions")
 
@@ -2576,7 +2599,8 @@ class TestBuyAtStore(unittest.TestCase):
         mock_dlg.exec.return_value = 1
         mock_dlg.selected_store = "Qobuz"
 
-        with patch("rekordbox_collection_manager.gui.track_detail_view.SelectStoreDialog", return_value=mock_dlg):
+        with patch("rekordbox_collection_manager.gui.track_detail_view.SelectStoreDialog", return_value=mock_dlg), \
+             patch("rekordbox_collection_manager.gui.track_table.is_rekordbox_running", return_value=False):
             self.view.table._open_buy_at_store_dialog(0)
 
         # Record in table updated
@@ -2621,7 +2645,8 @@ class TestBuyAtStore(unittest.TestCase):
         mock_dlg.selected_store = None
         mock_dlg.cleared = True
 
-        with patch("rekordbox_collection_manager.gui.track_detail_view.SelectStoreDialog", return_value=mock_dlg):
+        with patch("rekordbox_collection_manager.gui.track_detail_view.SelectStoreDialog", return_value=mock_dlg), \
+             patch("rekordbox_collection_manager.gui.track_table.is_rekordbox_running", return_value=False):
             self.view.table._open_buy_at_store_dialog(0)
 
         self.assertIsNone(self.view.table.records[0]["buy_at_store"])
@@ -2704,6 +2729,46 @@ class TestBuyAtStore(unittest.TestCase):
         res = search_tracks(engine, sort_by="buy_at_store", sort_order="asc", limit=10)
         self.assertEqual(res[0]["title"], "Beta")
         self.assertEqual(res[1]["title"], "Alpha")
+
+    def test_store_filter_visibility_on_purchasable(self):
+        # Default: All Statuses -> store filter widget hidden
+        self.assertTrue(self.view.store_filter_widget.isHidden())
+
+        # Switch to purchasable -> store filter widget visible
+        idx_purchasable = self.view.purchase_combo.findData("purchasable")
+        self.view.purchase_combo.setCurrentIndex(idx_purchasable)
+        self.assertFalse(self.view.store_filter_widget.isHidden())
+
+        # Switch to purchased -> store filter widget visible
+        idx_purchased = self.view.purchase_combo.findData("purchased")
+        self.view.purchase_combo.setCurrentIndex(idx_purchased)
+        self.assertFalse(self.view.store_filter_widget.isHidden())
+
+        # Switch to downloaded -> store filter widget hidden
+        idx_downloaded = self.view.purchase_combo.findData("downloaded")
+        self.view.purchase_combo.setCurrentIndex(idx_downloaded)
+        self.assertTrue(self.view.store_filter_widget.isHidden())
+
+    def test_navigate_to_store_filter(self):
+        from rekordbox_collection_manager.gui.track_table import TrackColumn
+
+        # 1. Navigate to purchasable at Beatport
+        self.view.navigate_to_store_filter("purchasable", "Beatport")
+        self.assertEqual(self.view.purchase_combo.currentData(), "purchasable")
+        self.assertEqual(self.view.store_filter_widget.get_selected(), ["Beatport"])
+        self.assertFalse(self.view.filter_panel.isHidden())
+        self.assertTrue(self.view.table.is_column_visible(TrackColumn.BUY_AT))
+        self.assertFalse(self.view.table.is_column_visible(TrackColumn.PURCHASED_AT))
+        self.assertEqual(self.view.active_filters_badge.text(), "2 active")
+
+        # 2. Navigate to purchased at Bandcamp
+        self.view.navigate_to_store_filter("purchased", "Bandcamp")
+        self.assertEqual(self.view.purchase_combo.currentData(), "purchased")
+        self.assertEqual(self.view.store_filter_widget.get_selected(), ["Bandcamp"])
+        self.assertTrue(self.view.table.is_column_visible(TrackColumn.PURCHASED_AT))
+        self.assertFalse(self.view.table.is_column_visible(TrackColumn.BUY_AT))
+        self.assertEqual(self.view.active_filters_badge.text(), "2 active")
+
 
 
 if __name__ == "__main__":

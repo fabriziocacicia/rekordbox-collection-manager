@@ -677,6 +677,49 @@ class TestEditPlayCount(unittest.TestCase):
         stores = [t["store"] for t in sorted_tracks]
         self.assertEqual(stores, ["Bandcamp", "Beatport", "Qobuz", "Traxsource"])
 
+    def test_search_tracks_with_purchasable_store_filter(self):
+        with self.engine.begin() as conn:
+            conn.exec_driver_sql("ALTER TABLE djmdContent ADD COLUMN Commnt TEXT;")
+            # Track 1: DJPlayCount 5, non-purchased, Buy at Beatport.com -> Purchasable at Beatport
+            conn.exec_driver_sql("UPDATE djmdContent SET Commnt = 'Buy at Beatport.com', FolderPath = '/Music/Downloaded/1.mp3' WHERE ID = '1';")
+            # Track 2: DJPlayCount 2, non-purchased, Buy at Bandcamp.com -> Plays < 3, NOT purchasable!
+            conn.exec_driver_sql("UPDATE djmdContent SET Commnt = 'Buy at Bandcamp.com', FolderPath = '/Music/Downloaded/2.mp3' WHERE ID = '2';")
+            # Track 3: DJPlayCount 0, non-purchased, Buy at Qobuz.com -> Plays < 3, NOT purchasable!
+            conn.exec_driver_sql("UPDATE djmdContent SET Commnt = 'Buy at qobuz.com', FolderPath = '/Music/Downloaded/3.mp3' WHERE ID = '3';")
+            # Track 5: DJPlayCount 4, non-purchased, Buy at Bandcamp.com -> Purchasable at Bandcamp
+            conn.exec_driver_sql("UPDATE djmdContent SET DJPlayCount = 4, Commnt = 'Buy at Bandcamp.com', FolderPath = '/Music/Downloaded/5.mp3' WHERE ID = '5';")
+            # Track 6: DJPlayCount 3, PURCHASED, Buy at Beatport.com -> Purchased, NOT purchasable!
+            conn.exec_driver_sql("UPDATE djmdContent SET DJPlayCount = 3, Commnt = 'Buy at Beatport.com', FolderPath = '/Music/Purchased/6.mp3' WHERE ID = '6';")
+
+        # 1. Search purchasable tracks with store_filter = ["Beatport"] -> Only Track 1
+        bp_tracks = search_tracks(self.engine, "", purchased_filter="purchasable", store_filter=["Beatport"])
+        self.assertEqual(len(bp_tracks), 1)
+        self.assertEqual(bp_tracks[0]["id"], "1")
+        self.assertEqual(bp_tracks[0]["buy_at_store"], "Beatport")
+
+        # 2. Search purchasable tracks with store_filter = ["Bandcamp"] -> Only Track 5 (Track 2 has DJPlayCount 2 < 3)
+        bc_tracks = search_tracks(self.engine, "", purchased_filter="purchasable", store_filter=["Bandcamp"])
+        self.assertEqual(len(bc_tracks), 1)
+        self.assertEqual(bc_tracks[0]["id"], "5")
+        self.assertEqual(bc_tracks[0]["buy_at_store"], "Bandcamp")
+
+        # 3. Search purchasable tracks with store_filter = ["Qobuz"] -> Empty (Track 3 has 0 plays)
+        qobuz_tracks = search_tracks(self.engine, "", purchased_filter="purchasable", store_filter=["Qobuz"])
+        self.assertEqual(len(qobuz_tracks), 0)
+
+        # 4. Multi-store filter: ["Beatport", "Bandcamp"] -> Tracks 1 and 5
+        multi_tracks = search_tracks(self.engine, "", purchased_filter="purchasable", store_filter=["Beatport", "Bandcamp"])
+        multi_ids = {t["id"] for t in multi_tracks}
+        self.assertEqual(multi_ids, {"1", "5"})
+
+        # 5. Track with NULL FolderPath but purchasable (DJPlayCount >= 3 and Buy at Beatport)
+        with self.engine.begin() as conn:
+            conn.exec_driver_sql("UPDATE djmdContent SET FolderPath = NULL WHERE ID = '1';")
+        null_folder_tracks = search_tracks(self.engine, "", purchased_filter="purchasable", store_filter=["Beatport"])
+        self.assertEqual(len(null_folder_tracks), 1)
+        self.assertEqual(null_folder_tracks[0]["id"], "1")
+
+
     def test_main_running_check(self):
         with patch("rekordbox_collection_manager.edit_play_count.ensure_rekordbox_not_running") as mock_check, \
              patch("rekordbox_collection_manager.edit_play_count.resolve_db_path", return_value="dummy.db"), \

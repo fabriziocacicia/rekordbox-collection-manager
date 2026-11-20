@@ -79,7 +79,7 @@ A native macOS desktop application (PySide6 / Qt6), background sync daemon (`lau
   - `app.py`: Desktop entry point, QApplication setup, custom dark theme.
   - `main_window.py`: Window frame, navigation sidebar, Rekordbox safety polling timer (`safety_timer`).
   - `workers.py`: `QThread` async workers for long-running DB and sync tasks.
-  - `*_view.py`: Views for Tracks, Playlists, Tags, History, Analytics, PlayCount, ReplaceFile.
+  - `*_view.py`: Views for Tracks, Playlists, Tags, History, Analytics, PlayCount, ReplaceFile, Stores.
   - `analytics_widgets/`: Custom PySide6 QPainter chart widgets (Camelot wheel, turnover graph, etc.).
 - `ios/RekordboxCompanion/`:
   - SwiftUI companion application target with local SQLite offline cache and Turso sync.

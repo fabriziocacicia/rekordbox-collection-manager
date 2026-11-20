@@ -7,6 +7,7 @@ Organized into:
 """
 
 import argparse
+import logging
 import os
 import re
 import shutil
@@ -19,6 +20,8 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple, Uni
 import questionary
 from pyrekordbox.db6.database import get_rekordbox_pid
 from sqlalchemy.engine import Engine
+
+logger = logging.getLogger(__name__)
 
 
 # ==============================================================================
@@ -1230,6 +1233,95 @@ def get_store_comment(store_name: str) -> str:
 def get_buy_store_comment(store_name: str) -> str:
     """Return standard planned purchase comment string for a store."""
     return BUY_STORE_COMMENT_TEMPLATES.get(store_name, "")
+
+
+def get_store_summary_counts(engine: Any) -> Dict[str, Dict[str, int]]:
+    """Return purchased and to-buy (purchasable >=3 plays) track counts for each known store.
+
+    Returns:
+        Dict mapping each store in KNOWN_STORES to {"purchased": int, "to_buy": int}.
+    """
+    results: Dict[str, Dict[str, int]] = {
+        store: {"purchased": 0, "to_buy": 0} for store in KNOWN_STORES
+    }
+    if engine is None:
+        return results
+
+    try:
+        tbl = detect_content_table(engine)
+    except Exception:
+        return results
+
+    try:
+        with engine.connect() as conn:
+            cols = {
+                r[1]
+                for r in conn.exec_driver_sql(f"PRAGMA table_info({tbl});").fetchall()
+            }
+            if not cols or "Commnt" not in cols or "FolderPath" not in cols:
+                return results
+
+            where_conds = []
+            if "rb_local_deleted" in cols:
+                where_conds.append("(c.rb_local_deleted = 0 OR c.rb_local_deleted IS NULL)")
+
+            streaming_clause = build_exclude_streaming_clause(cols, table_alias="c")
+            where_clause = f"WHERE {' AND '.join(where_conds)}" if where_conds else ""
+            if streaming_clause:
+                where_clause = f"{where_clause} {streaming_clause}" if where_clause else f"WHERE {streaming_clause.removeprefix('AND ')}"
+
+            purchased_expr = """(
+                COALESCE(c.FolderPath, '') LIKE '%/Purchased/%' 
+                OR COALESCE(c.FolderPath, '') LIKE '%/Purchased' 
+                OR COALESCE(c.FolderPath, '') LIKE '%\\Purchased\\%' 
+                OR COALESCE(c.FolderPath, '') LIKE '%\\Purchased'
+            )"""
+
+            play_col = "c.DJPlayCount" if "DJPlayCount" in cols else ("c.PlayCount" if "PlayCount" in cols else "0")
+
+            query = f"""
+                SELECT
+                    -- Beatport
+                    COUNT(CASE WHEN {purchased_expr} AND lower(c.Commnt) LIKE '%purchased at beatport.com%' THEN 1 END) AS bp_purchased,
+                    COUNT(CASE WHEN NOT {purchased_expr} AND ({play_col} >= 3) AND lower(c.Commnt) LIKE '%buy at beatport.com%' THEN 1 END) AS bp_to_buy,
+
+                    -- Bandcamp
+                    COUNT(CASE WHEN {purchased_expr} AND (lower(c.Commnt) LIKE '%bandcamp.com%' OR lower(c.Commnt) LIKE 'visit %bandcamp.com%') THEN 1 END) AS bc_purchased,
+                    COUNT(CASE WHEN NOT {purchased_expr} AND ({play_col} >= 3) AND lower(c.Commnt) LIKE '%buy at bandcamp.com%' THEN 1 END) AS bc_to_buy,
+
+                    -- Qobuz
+                    COUNT(CASE WHEN {purchased_expr} AND lower(c.Commnt) LIKE '%purchased at qobuz.com%' THEN 1 END) AS qb_purchased,
+                    COUNT(CASE WHEN NOT {purchased_expr} AND ({play_col} >= 3) AND lower(c.Commnt) LIKE '%buy at qobuz.com%' THEN 1 END) AS qb_to_buy,
+
+                    -- Traxsource
+                    COUNT(CASE WHEN {purchased_expr} AND lower(c.Commnt) LIKE '%purchased at traxsource.com%' THEN 1 END) AS ts_purchased,
+                    COUNT(CASE WHEN NOT {purchased_expr} AND ({play_col} >= 3) AND lower(c.Commnt) LIKE '%buy at traxsource.com%' THEN 1 END) AS ts_to_buy
+                FROM {tbl} c
+                {where_clause};
+            """
+            row = conn.exec_driver_sql(query).mappings().first()
+            if row:
+                results[STORE_BEATPORT] = {
+                    "purchased": int(row.get("bp_purchased") or 0),
+                    "to_buy": int(row.get("bp_to_buy") or 0),
+                }
+                results[STORE_BANDCAMP] = {
+                    "purchased": int(row.get("bc_purchased") or 0),
+                    "to_buy": int(row.get("bc_to_buy") or 0),
+                }
+                results[STORE_QOBUZ] = {
+                    "purchased": int(row.get("qb_purchased") or 0),
+                    "to_buy": int(row.get("qb_to_buy") or 0),
+                }
+                results[STORE_TRAXSOURCE] = {
+                    "purchased": int(row.get("ts_purchased") or 0),
+                    "to_buy": int(row.get("ts_to_buy") or 0),
+                }
+    except Exception as e:
+        logger.warning(f"Error computing store summary counts: {e}")
+
+    return results
+
 
 
 def update_track_comment(

@@ -705,6 +705,72 @@ class TestUtils(unittest.TestCase):
             self.assertTrue(os.path.exists(cached_path))
             self.assertEqual(res_str, "120×120")
 
+    def test_get_store_summary_counts(self):
+        engine = create_engine("sqlite:///:memory:")
+        with engine.begin() as conn:
+            conn.exec_driver_sql("""
+                CREATE TABLE djmdContent (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    Title VARCHAR(255),
+                    DJPlayCount INTEGER,
+                    FolderPath VARCHAR(255),
+                    Commnt TEXT,
+                    FileType INTEGER DEFAULT 1,
+                    rb_local_deleted INTEGER DEFAULT 0
+                );
+            """)
+            conn.exec_driver_sql("""
+                INSERT INTO djmdContent (ID, Title, DJPlayCount, FolderPath, Commnt, FileType, rb_local_deleted)
+                VALUES
+                    -- Beatport: 2 purchased, 1 to buy
+                    ('1', 'T1', 5, '/Music/Purchased/1.aiff', 'Purchased at Beatport.com', 12, 0),
+                    ('2', 'T2', 0, '/Music/Purchased/2.mp3', 'Purchased at Beatport.com', 1, 0),
+                    ('3', 'T3', 4, '/Music/Downloaded/3.mp3', 'Buy at Beatport.com', 1, 0),
+                    ('4', 'T4', 2, '/Music/Downloaded/4.mp3', 'Buy at Beatport.com', 1, 0),
+                    
+                    -- Bandcamp: 1 purchased, 2 to buy
+                    ('5', 'T5', 10, '/Music/Purchased/5.flac', 'Visit https://artist.bandcamp.com', 1, 0),
+                    ('6', 'T6', 3, '/Music/Downloaded/6.aiff', 'Buy at Bandcamp.com', 12, 0),
+                    ('7', 'T7', 7, '/Music/Downloaded/7.mp3', 'Buy at Bandcamp.com', 1, 0),
+                    
+                    -- Qobuz: 1 purchased, 0 to buy
+                    ('8', 'T8', 1, '/Music/Purchased/8.aiff', 'Purchased at qobuz.com', 12, 0),
+                    
+                    -- Traxsource: 0 purchased, 1 to buy
+                    ('9', 'T9', 8, '/Music/Downloaded/9.aiff', 'Buy at Traxsource.com', 12, 0),
+                    
+                    -- NULL FolderPath purchasable track (should be counted in to_buy)
+                    ('12', 'T12', 6, NULL, 'Buy at Beatport.com', 1, 0),
+                    
+                    -- Exclusions: deleted track and streaming track
+                    ('10', 'T10', 9, '/Music/Downloaded/10.aiff', 'Buy at Beatport.com', 12, 1),
+                    ('11', 'T11', 12, 'spotify:track:12345', 'Buy at Beatport.com', 25, 0);
+            """)
+
+        from rekordbox_collection_manager.utils import get_store_summary_counts
+        counts = get_store_summary_counts(engine)
+        self.assertEqual(counts["Beatport"], {"purchased": 2, "to_buy": 2})
+        self.assertEqual(counts["Bandcamp"], {"purchased": 1, "to_buy": 2})
+        self.assertEqual(counts["Qobuz"], {"purchased": 1, "to_buy": 0})
+        self.assertEqual(counts["Traxsource"], {"purchased": 0, "to_buy": 1})
+
+    def test_get_store_summary_counts_missing_folderpath_column(self):
+        engine = create_engine("sqlite:///:memory:")
+        with engine.begin() as conn:
+            conn.exec_driver_sql("""
+                CREATE TABLE djmdContent (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    Title VARCHAR(255),
+                    Commnt TEXT
+                );
+            """)
+        from rekordbox_collection_manager.utils import get_store_summary_counts
+        counts = get_store_summary_counts(engine)
+        for store in ("Beatport", "Bandcamp", "Qobuz", "Traxsource"):
+            self.assertEqual(counts[store], {"purchased": 0, "to_buy": 0})
+
+
+
 
 if __name__ == "__main__":
     unittest.main()
