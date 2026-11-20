@@ -292,22 +292,37 @@ def search_tracks(
 
                 if st_list:
                     store_conds = []
+                    is_buy_at_mode = p_mode in ("purchasable", "buyable")
                     for idx, st_name in enumerate(st_list):
                         st_lower = st_name.lower()
                         p_name = f"st_cond_{idx}"
-                        if st_lower == "beatport":
-                            store_conds.append(f"lower(c.Commnt) LIKE :{p_name}")
-                            store_params[p_name] = "%purchased at beatport.com%"
-                        elif st_lower == "qobuz":
-                            store_conds.append(f"lower(c.Commnt) LIKE :{p_name}")
-                            store_params[p_name] = "%purchased at qobuz.com%"
-                        elif st_lower == "traxsource":
-                            store_conds.append(f"lower(c.Commnt) LIKE :{p_name}")
-                            store_params[p_name] = "%purchased at traxsource.com%"
-                        elif st_lower == "bandcamp":
-                            store_conds.append(f"(lower(c.Commnt) LIKE :{p_name}_1 OR lower(c.Commnt) LIKE :{p_name}_2)")
-                            store_params[f"{p_name}_1"] = "%bandcamp.com%"
-                            store_params[f"{p_name}_2"] = "visit %bandcamp.com%"
+                        if is_buy_at_mode:
+                            if st_lower == "beatport":
+                                store_conds.append(f"lower(c.Commnt) LIKE :{p_name}")
+                                store_params[p_name] = "%buy at beatport.com%"
+                            elif st_lower == "qobuz":
+                                store_conds.append(f"lower(c.Commnt) LIKE :{p_name}")
+                                store_params[p_name] = "%buy at qobuz.com%"
+                            elif st_lower == "traxsource":
+                                store_conds.append(f"lower(c.Commnt) LIKE :{p_name}")
+                                store_params[p_name] = "%buy at traxsource.com%"
+                            elif st_lower == "bandcamp":
+                                store_conds.append(f"lower(c.Commnt) LIKE :{p_name}")
+                                store_params[p_name] = "%buy at bandcamp.com%"
+                        else:
+                            if st_lower == "beatport":
+                                store_conds.append(f"lower(c.Commnt) LIKE :{p_name}")
+                                store_params[p_name] = "%purchased at beatport.com%"
+                            elif st_lower == "qobuz":
+                                store_conds.append(f"lower(c.Commnt) LIKE :{p_name}")
+                                store_params[p_name] = "%purchased at qobuz.com%"
+                            elif st_lower == "traxsource":
+                                store_conds.append(f"lower(c.Commnt) LIKE :{p_name}")
+                                store_params[p_name] = "%purchased at traxsource.com%"
+                            elif st_lower == "bandcamp":
+                                store_conds.append(f"(lower(c.Commnt) LIKE :{p_name}_1 OR lower(c.Commnt) LIKE :{p_name}_2)")
+                                store_params[f"{p_name}_1"] = "%bandcamp.com%"
+                                store_params[f"{p_name}_2"] = "visit %bandcamp.com%"
                     if store_conds:
                         store_clause = f"AND ({' OR '.join(store_conds)})"
 
