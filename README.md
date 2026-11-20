@@ -98,7 +98,7 @@ flowchart TD
 - Safely disables write transactions when Rekordbox is open to protect SQLite journals (`master.db-wal` / `master.db-shm`) from corruption or concurrent lock errors.
 
 #### 🎵 Tracks View & Track Detail View
-- **Instant Search & Multi-Filtering**: Search across Title, Artist, Key, Tags, Playlists, or Filename, plus filter by purchase status (`Downloaded`, `Purchased Only`, `Purchasable >=3 plays`), store, play count, audio format, musical key, BPM range, MyTags (`ANY`/`ALL`), and playlists (`ANY`/`ALL`).
+- **Instant Search & Multi-Filtering**: Search across Title, Artist, Key, Tags, Playlists, or Filename, plus filter by purchase status (`Downloaded`, `Purchased Only`, `Purchasable (≥3 plays)`), store (for both purchased and purchasable tracks), play count, audio format, musical key, BPM range, MyTags (`ANY`/`ALL`), and playlists (`ANY`/`ALL`).
 - **Multi-Column Sorting**: Sort by Title, Artist, Key, BPM, Duration, Play Count, Bitrate, Audio Format, Purchase Store, Folder, or File Name.
 - **Track Detail View**:
   - Inspect full audio tech specs (sample rate, bit depth, bitrate, format, file size, file path), artwork, star rating, BPM, key, and play count.
@@ -139,6 +139,10 @@ flowchart TD
 #### 📊 Analytics View
 - Interactive library and live-set analytics dashboard powered by five custom charts: **Crate Health Matrix**, **Camelot Wheel**, **Set Turnover & DNA**, **Survival Decay**, and **Transitions & Combos**.
 - Click chart regions or KPI cards to drill down into matching tracks and export purge crates to `.m3u8`, Rekordbox XML, or a new Rekordbox playlist.
+
+#### 🏪 Stores Summary View
+- Overview dashboard summarizing purchased tracks and planned/purchasable tracks ("To Buy", ≥3 plays) across the 4 supported digital download stores (**Beatport**, **Bandcamp**, **Qobuz**, and **Traxsource**).
+- One-click deep linking: Click any counter to navigate directly to **Tracks View** with store and purchase status pre-filtered.
 
 #### ℹ️ Collection Info View
 - Summary statistics of your Rekordbox library: total track count, total playlists, history sessions, MyTags, active database path, and file size.

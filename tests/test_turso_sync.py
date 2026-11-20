@@ -79,6 +79,7 @@ def test_run_sync_cycle_full_success(tmp_path):
     with patch("rekordbox_collection_manager.turso_sync.is_turso_configured", return_value=True), \
          patch("rekordbox_collection_manager.turso_sync.is_rekordbox_running", return_value=False), \
          patch("rekordbox_collection_manager.turso_sync.create_turso_client", return_value=mock_client), \
+         patch("rekordbox_collection_manager.turso_sync._get_sync_state_path", return_value=str(tmp_path / "sync_state.json")), \
          patch("rekordbox_collection_manager.turso_sync.create_database_backup", return_value={"backup_folder": str(tmp_path / "backups")}) as mock_backup, \
          patch("rekordbox_collection_manager.turso_sync.apply_changelog_events", return_value=2) as mock_apply, \
          patch("rekordbox_collection_manager.turso_sync.export_collection_to_turso", return_value=mock_stats) as mock_export:
