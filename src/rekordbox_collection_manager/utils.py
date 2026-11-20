@@ -1258,7 +1258,7 @@ def get_store_summary_counts(engine: Any) -> Dict[str, Dict[str, int]]:
                 r[1]
                 for r in conn.exec_driver_sql(f"PRAGMA table_info({tbl});").fetchall()
             }
-            if not cols or "Commnt" not in cols:
+            if not cols or "Commnt" not in cols or "FolderPath" not in cols:
                 return results
 
             where_conds = []
@@ -1268,13 +1268,13 @@ def get_store_summary_counts(engine: Any) -> Dict[str, Dict[str, int]]:
             streaming_clause = build_exclude_streaming_clause(cols, table_alias="c")
             where_clause = f"WHERE {' AND '.join(where_conds)}" if where_conds else ""
             if streaming_clause:
-                where_clause = f"{where_clause} {streaming_clause}" if where_clause else f"WHERE {streaming_clause.lstrip('AND ')}"
+                where_clause = f"{where_clause} {streaming_clause}" if where_clause else f"WHERE {streaming_clause.removeprefix('AND ')}"
 
             purchased_expr = """(
-                c.FolderPath LIKE '%/Purchased/%' 
-                OR c.FolderPath LIKE '%/Purchased' 
-                OR c.FolderPath LIKE '%\\Purchased\\%' 
-                OR c.FolderPath LIKE '%\\Purchased'
+                COALESCE(c.FolderPath, '') LIKE '%/Purchased/%' 
+                OR COALESCE(c.FolderPath, '') LIKE '%/Purchased' 
+                OR COALESCE(c.FolderPath, '') LIKE '%\\Purchased\\%' 
+                OR COALESCE(c.FolderPath, '') LIKE '%\\Purchased'
             )"""
 
             play_col = "c.DJPlayCount" if "DJPlayCount" in cols else ("c.PlayCount" if "PlayCount" in cols else "0")

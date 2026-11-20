@@ -477,6 +477,8 @@ class MainWindow(QMainWindow):
                 self.play_count_view.reset_to_list()
                 if hasattr(self.play_count_view, "refresh"):
                     self.play_count_view.refresh(preserve_scroll=False)
+            elif page_id == 7 and hasattr(self.stores_view, "refresh"):
+                self.stores_view.refresh()
 
         # Refresh destination view if its database state is stale or on explicit reload
         if page_id == 0 and hasattr(self, "tracks_view"):

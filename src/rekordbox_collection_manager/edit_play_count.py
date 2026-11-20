@@ -259,10 +259,10 @@ def search_tracks(
 
             # Purchased filter (inside folder named Purchased)
             purchased_sql = """(
-                c.FolderPath LIKE '%/Purchased/%' 
-                OR c.FolderPath LIKE '%/Purchased' 
-                OR c.FolderPath LIKE '%\\Purchased\\%' 
-                OR c.FolderPath LIKE '%\\Purchased'
+                COALESCE(c.FolderPath, '') LIKE '%/Purchased/%' 
+                OR COALESCE(c.FolderPath, '') LIKE '%/Purchased' 
+                OR COALESCE(c.FolderPath, '') LIKE '%\\Purchased\\%' 
+                OR COALESCE(c.FolderPath, '') LIKE '%\\Purchased'
             )"""
             purchased_clause = ""
             p_mode = str(purchased_filter or "all").strip().lower()

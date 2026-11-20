@@ -739,6 +739,9 @@ class TestUtils(unittest.TestCase):
                     -- Traxsource: 0 purchased, 1 to buy
                     ('9', 'T9', 8, '/Music/Downloaded/9.aiff', 'Buy at Traxsource.com', 12, 0),
                     
+                    -- NULL FolderPath purchasable track (should be counted in to_buy)
+                    ('12', 'T12', 6, NULL, 'Buy at Beatport.com', 1, 0),
+                    
                     -- Exclusions: deleted track and streaming track
                     ('10', 'T10', 9, '/Music/Downloaded/10.aiff', 'Buy at Beatport.com', 12, 1),
                     ('11', 'T11', 12, 'spotify:track:12345', 'Buy at Beatport.com', 25, 0);
@@ -746,10 +749,26 @@ class TestUtils(unittest.TestCase):
 
         from rekordbox_collection_manager.utils import get_store_summary_counts
         counts = get_store_summary_counts(engine)
-        self.assertEqual(counts["Beatport"], {"purchased": 2, "to_buy": 1})
+        self.assertEqual(counts["Beatport"], {"purchased": 2, "to_buy": 2})
         self.assertEqual(counts["Bandcamp"], {"purchased": 1, "to_buy": 2})
         self.assertEqual(counts["Qobuz"], {"purchased": 1, "to_buy": 0})
         self.assertEqual(counts["Traxsource"], {"purchased": 0, "to_buy": 1})
+
+    def test_get_store_summary_counts_missing_folderpath_column(self):
+        engine = create_engine("sqlite:///:memory:")
+        with engine.begin() as conn:
+            conn.exec_driver_sql("""
+                CREATE TABLE djmdContent (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    Title VARCHAR(255),
+                    Commnt TEXT
+                );
+            """)
+        from rekordbox_collection_manager.utils import get_store_summary_counts
+        counts = get_store_summary_counts(engine)
+        for store in ("Beatport", "Bandcamp", "Qobuz", "Traxsource"):
+            self.assertEqual(counts[store], {"purchased": 0, "to_buy": 0})
+
 
 
 

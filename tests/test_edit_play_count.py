@@ -712,6 +712,13 @@ class TestEditPlayCount(unittest.TestCase):
         multi_ids = {t["id"] for t in multi_tracks}
         self.assertEqual(multi_ids, {"1", "5"})
 
+        # 5. Track with NULL FolderPath but purchasable (DJPlayCount >= 3 and Buy at Beatport)
+        with self.engine.begin() as conn:
+            conn.exec_driver_sql("UPDATE djmdContent SET FolderPath = NULL WHERE ID = '1';")
+        null_folder_tracks = search_tracks(self.engine, "", purchased_filter="purchasable", store_filter=["Beatport"])
+        self.assertEqual(len(null_folder_tracks), 1)
+        self.assertEqual(null_folder_tracks[0]["id"], "1")
+
 
     def test_main_running_check(self):
         with patch("rekordbox_collection_manager.edit_play_count.ensure_rekordbox_not_running") as mock_check, \

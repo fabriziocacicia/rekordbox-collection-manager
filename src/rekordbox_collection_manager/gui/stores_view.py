@@ -146,7 +146,8 @@ class StoreMetricBox(QFrame):
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
-            self.clicked.emit()
+            if self.count > 0:
+                self.clicked.emit()
             event.accept()
         else:
             super().mousePressEvent(event)

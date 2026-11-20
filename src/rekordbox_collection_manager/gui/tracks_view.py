@@ -411,7 +411,7 @@ class TracksView(QWidget):
                 c.setStyleSheet(self._filter_style_base)
 
         p_filter = self.purchase_combo.currentData() or "all"
-        if p_filter == "purchased" and hasattr(self, "store_filter_widget") and self.store_filter_widget.is_active():
+        if p_filter in ("purchased", "purchasable", "buyable") and hasattr(self, "store_filter_widget") and self.store_filter_widget.is_active():
             active_count += 1
         if self.format_filter_widget.is_active():
             active_count += 1

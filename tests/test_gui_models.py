@@ -531,6 +531,12 @@ class TestMainWindowSidebar(unittest.TestCase):
         self.assertEqual(self.window.btn_stores.toolTip(), "Stores")
         self.assertEqual(self.window.btn_info.toolTip(), "Collection Info")
 
+    def test_nav_click_stores_view_refresh_when_active(self):
+        self.window.stacked_widget.setCurrentIndex(7)
+        with patch.object(self.window.stores_view, "refresh") as mock_refresh:
+            self.window._on_nav_clicked(7)
+            mock_refresh.assert_called_once()
+
     def test_sidebar_expand(self):
         self.window.set_sidebar_collapsed(True, animate=False)
         self.window.set_sidebar_collapsed(False, animate=False)
@@ -2753,6 +2759,7 @@ class TestBuyAtStore(unittest.TestCase):
         self.assertFalse(self.view.filter_panel.isHidden())
         self.assertTrue(self.view.table.is_column_visible(TrackColumn.BUY_AT))
         self.assertFalse(self.view.table.is_column_visible(TrackColumn.PURCHASED_AT))
+        self.assertEqual(self.view.active_filters_badge.text(), "2 active")
 
         # 2. Navigate to purchased at Bandcamp
         self.view.navigate_to_store_filter("purchased", "Bandcamp")
@@ -2760,6 +2767,7 @@ class TestBuyAtStore(unittest.TestCase):
         self.assertEqual(self.view.store_filter_widget.get_selected(), ["Bandcamp"])
         self.assertTrue(self.view.table.is_column_visible(TrackColumn.PURCHASED_AT))
         self.assertFalse(self.view.table.is_column_visible(TrackColumn.BUY_AT))
+        self.assertEqual(self.view.active_filters_badge.text(), "2 active")
 
 
 

@@ -70,6 +70,27 @@ class TestStoresView(unittest.TestCase):
         self.assertEqual(card.box_purchased.action_label.text(), "No tracks")
         self.assertEqual(card.box_to_buy.action_label.text(), "No tracks")
 
+        # Zero-count box should not emit clicked on mousePressEvent
+        from PySide6.QtGui import QMouseEvent
+        from PySide6.QtCore import QPointF
+        received = []
+        card.box_purchased.clicked.connect(lambda: received.append("clicked"))
+        press_event = QMouseEvent(
+            QMouseEvent.Type.MouseButtonPress,
+            QPointF(10, 10),
+            QPointF(10, 10),
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        card.box_purchased.mousePressEvent(press_event)
+        self.assertEqual(received, [])
+
+        # Non-zero count box SHOULD emit clicked on mousePressEvent
+        card.set_counts(5, 0)
+        card.box_purchased.mousePressEvent(press_event)
+        self.assertEqual(received, ["clicked"])
+
     def test_stores_view_on_counts_ready(self):
         mock_counts = {
             STORE_BEATPORT: {"purchased": 50, "to_buy": 10},
