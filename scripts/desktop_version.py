@@ -28,6 +28,164 @@ except ImportError:
     from scripts.changelog import rotate_changelog
 
 
+REQUIRED_TOOLS = ("uv", "clang", "ditto", "gh")
+
+
+def run_git(cmd: list[str], cwd: Path = PROJECT_ROOT) -> str:
+    """Run git command and return stripped standard output."""
+    try:
+        res = subprocess.run(
+            ["git"] + cmd,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return res.stdout.strip()
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(f"Git command failed: {' '.join(cmd)}\n{e.stderr.strip()}") from e
+
+
+def check_required_tools(tools: tuple[str, ...] = REQUIRED_TOOLS) -> list[str]:
+    """Verify presence of required CLI tools and gh auth status. Returns list of error messages."""
+    errors: list[str] = []
+    for tool in tools:
+        if not shutil.which(tool):
+            errors.append(f"Missing required tool: '{tool}' was not found in PATH.")
+
+    if shutil.which("gh"):
+        try:
+            res = subprocess.run(
+                ["gh", "auth", "status"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if res.returncode != 0:
+                err_detail = (res.stderr or res.stdout).strip()
+                errors.append(f"GitHub CLI ('gh') is not authenticated: {err_detail}")
+        except Exception as e:
+            errors.append(f"Failed to check GitHub CLI auth status: {e}")
+    return errors
+
+
+def check_git_clean(cwd: Path = PROJECT_ROOT) -> list[str]:
+    """Verify that working tree has no uncommitted changes or untracked files."""
+    try:
+        status = run_git(["status", "--porcelain"], cwd=cwd)
+        if status:
+            return ["Git working tree is dirty. Please commit or stash changes before releasing."]
+        return []
+    except Exception as e:
+        return [f"Failed to check git working tree status: {e}"]
+
+
+def check_git_branch(
+    expected_branch: str = "main",
+    check_remote: bool = True,
+    cwd: Path = PROJECT_ROOT,
+) -> list[str]:
+    """Verify that current branch is expected_branch and is in sync with origin."""
+    errors: list[str] = []
+    try:
+        curr_branch = run_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=cwd)
+        if curr_branch != expected_branch:
+            errors.append(
+                f"Current branch is '{curr_branch}', but releases must be cut from '{expected_branch}'."
+            )
+            return errors
+    except Exception as e:
+        return [f"Failed to determine current git branch: {e}"]
+
+    if check_remote:
+        try:
+            run_git(["fetch", "origin", expected_branch], cwd=cwd)
+            local_sha = run_git(["rev-parse", "HEAD"], cwd=cwd)
+            remote_sha = run_git(["rev-parse", f"origin/{expected_branch}"], cwd=cwd)
+            if local_sha != remote_sha:
+                counts = run_git(["rev-list", "--left-right", "--count", f"HEAD...origin/{expected_branch}"], cwd=cwd)
+                ahead, behind = counts.split()
+                errors.append(
+                    f"Local branch '{expected_branch}' is not in sync with origin/{expected_branch} "
+                    f"({ahead} ahead, {behind} behind)."
+                )
+        except Exception as e:
+            errors.append(f"Failed to verify upstream sync with origin/{expected_branch}: {e}")
+
+    return errors
+
+
+def check_tag_collision(
+    version: str,
+    check_remote: bool = True,
+    cwd: Path = PROJECT_ROOT,
+) -> list[str]:
+    """Verify that tag v<version> does not exist locally or on remote origin."""
+    errors: list[str] = []
+    tag_name = f"v{version.lstrip('v')}"
+    try:
+        local_tags = run_git(["tag", "-l", tag_name], cwd=cwd)
+        if local_tags:
+            errors.append(f"Local tag '{tag_name}' already exists.")
+    except Exception as e:
+        errors.append(f"Failed to check local git tags: {e}")
+
+    if check_remote:
+        try:
+            remote_tag_output = run_git(["ls-remote", "--tags", "origin", f"refs/tags/{tag_name}"], cwd=cwd)
+            if remote_tag_output:
+                errors.append(f"Remote tag '{tag_name}' already exists on origin.")
+        except Exception as e:
+            errors.append(f"Failed to check remote tags on origin: {e}")
+
+    return errors
+
+
+def check_preflight_conditions(
+    version: str,
+    expected_branch: str = "main",
+    check_remote: bool = True,
+    cwd: Path = PROJECT_ROOT,
+) -> list[str]:
+    """Run all pre-flight release checks and return consolidated list of errors."""
+    errors: list[str] = []
+    errors.extend(check_required_tools())
+    errors.extend(check_git_clean(cwd=cwd))
+    errors.extend(check_git_branch(expected_branch=expected_branch, check_remote=check_remote, cwd=cwd))
+    errors.extend(check_tag_collision(version=version, check_remote=check_remote, cwd=cwd))
+    return errors
+
+
+def get_git_checkpoint(cwd: Path = PROJECT_ROOT) -> str:
+    """Get current git commit SHA to serve as a rollback checkpoint."""
+    return run_git(["rev-parse", "HEAD"], cwd=cwd)
+
+
+def rollback_to_checkpoint(
+    checkpoint_sha: str,
+    tag_name: str | None = None,
+    cwd: Path = PROJECT_ROOT,
+) -> None:
+    """
+    Roll back working tree and project files to checkpoint_sha.
+    Deletes local tag if it was created.
+    """
+    try:
+        # Revert unstaged changes to tracked files
+        subprocess.run(["git", "checkout", "--", "."], cwd=cwd, check=True, capture_output=True)
+        # In case a commit was created after checkpoint_sha:
+        current_sha = run_git(["rev-parse", "HEAD"], cwd=cwd)
+        if current_sha != checkpoint_sha:
+            subprocess.run(["git", "reset", "--hard", checkpoint_sha], cwd=cwd, check=True, capture_output=True)
+        # Delete local tag if created
+        if tag_name:
+            tags = run_git(["tag", "-l", tag_name], cwd=cwd)
+            if tags:
+                subprocess.run(["git", "tag", "-d", tag_name], cwd=cwd, check=True, capture_output=True)
+    except Exception as e:
+        print(f"⚠️  Warning: Failed during rollback to checkpoint {checkpoint_sha}: {e}", file=sys.stderr)
+
+
 def get_current_version(content: str) -> str:
     """Extract version from pyproject.toml content."""
     match = re.search(r'^version\s*=\s*["\']([^"\']+)["\']', content, re.MULTILINE)
