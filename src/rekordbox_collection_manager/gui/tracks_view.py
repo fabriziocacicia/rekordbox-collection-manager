@@ -371,11 +371,12 @@ class TracksView(QWidget):
         p_filter = self.purchase_combo.currentData() or "all"
         is_purchased_only = (p_filter == "purchased")
         is_purchasable = (p_filter in ("purchasable", "buyable"))
+        show_store = is_purchased_only or is_purchasable
 
         if hasattr(self, "store_filter_widget"):
-            if not is_purchased_only and self.store_filter_widget.is_active():
+            if not show_store and self.store_filter_widget.is_active():
                 self.store_filter_widget.clear_selection()
-            self.store_filter_widget.setVisible(is_purchased_only)
+            self.store_filter_widget.setVisible(show_store)
 
         if hasattr(self, "play_filter_combo"):
             if is_purchasable:
@@ -622,7 +623,7 @@ class TracksView(QWidget):
         )
         store_filter = (
             self.store_filter_widget.get_selected()
-            if (purchased_filter == "purchased" and hasattr(self, "store_filter_widget"))
+            if (purchased_filter in ("purchased", "purchasable", "buyable") and hasattr(self, "store_filter_widget"))
             else []
         )
         format_filter = self.format_filter_widget.get_selected()
@@ -702,7 +703,11 @@ class TracksView(QWidget):
             else:
                 info_extras.append("purchased excluded")
         elif p_filter in ("purchasable", "buyable"):
-            info_extras.append("purchasable: downloaded & ≥3 plays")
+            store_sel = self.store_filter_widget.get_selected() if hasattr(self, "store_filter_widget") else []
+            if store_sel:
+                info_extras.append(f"purchasable: {', '.join(store_sel)}")
+            else:
+                info_extras.append("purchasable: downloaded & ≥3 plays")
         elif p_filter == "purchased":
             store_sel = self.store_filter_widget.get_selected() if hasattr(self, "store_filter_widget") else []
             if store_sel:
@@ -816,6 +821,38 @@ class TracksView(QWidget):
         row = selected_rows[0]
         if 0 <= row < len(self.records):
             self._open_track_detail(self.records[row])
+
+    def navigate_to_store_filter(self, purchase_status: str, store_name: str) -> None:
+        """Programmatically apply purchase status and store filter, revealing filter panel if needed."""
+        if hasattr(self, "stack") and self.stack.currentIndex() != 0:
+            self.stack.setCurrentIndex(0)
+
+        status_key = "purchased" if str(purchase_status).strip().lower() == "purchased" else "purchasable"
+        for i in range(self.purchase_combo.count()):
+            if self.purchase_combo.itemData(i) == status_key:
+                self.purchase_combo.blockSignals(True)
+                self.purchase_combo.setCurrentIndex(i)
+                self.purchase_combo.blockSignals(False)
+                break
+
+        if hasattr(self, "filter_panel") and not self.filter_panel.isVisible():
+            self.filter_panel.setVisible(True)
+
+        is_purchased_only = (status_key == "purchased")
+        is_purchasable = (status_key in ("purchasable", "buyable"))
+        if hasattr(self, "store_filter_widget"):
+            self.store_filter_widget.setVisible(True)
+            self.store_filter_widget.set_selected([store_name])
+
+        if hasattr(self, "play_filter_combo"):
+            self.play_filter_combo.setVisible(not is_purchasable)
+
+        if hasattr(self, "table"):
+            self.table.set_column_visible(TrackColumn.PURCHASED_AT, is_purchased_only)
+            self.table.set_column_visible(TrackColumn.BUY_AT, is_purchasable)
+
+        self._update_all_filter_styles()
+        self._execute_search()
 
     def cleanup(self) -> None:
         """Stop background search workers and timers cleanly."""

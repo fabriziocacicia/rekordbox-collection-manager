@@ -2576,7 +2576,8 @@ class TestBuyAtStore(unittest.TestCase):
         mock_dlg.exec.return_value = 1
         mock_dlg.selected_store = "Qobuz"
 
-        with patch("rekordbox_collection_manager.gui.track_detail_view.SelectStoreDialog", return_value=mock_dlg):
+        with patch("rekordbox_collection_manager.gui.track_detail_view.SelectStoreDialog", return_value=mock_dlg), \
+             patch("rekordbox_collection_manager.gui.track_table.is_rekordbox_running", return_value=False):
             self.view.table._open_buy_at_store_dialog(0)
 
         # Record in table updated
@@ -2621,7 +2622,8 @@ class TestBuyAtStore(unittest.TestCase):
         mock_dlg.selected_store = None
         mock_dlg.cleared = True
 
-        with patch("rekordbox_collection_manager.gui.track_detail_view.SelectStoreDialog", return_value=mock_dlg):
+        with patch("rekordbox_collection_manager.gui.track_detail_view.SelectStoreDialog", return_value=mock_dlg), \
+             patch("rekordbox_collection_manager.gui.track_table.is_rekordbox_running", return_value=False):
             self.view.table._open_buy_at_store_dialog(0)
 
         self.assertIsNone(self.view.table.records[0]["buy_at_store"])
@@ -2704,6 +2706,44 @@ class TestBuyAtStore(unittest.TestCase):
         res = search_tracks(engine, sort_by="buy_at_store", sort_order="asc", limit=10)
         self.assertEqual(res[0]["title"], "Beta")
         self.assertEqual(res[1]["title"], "Alpha")
+
+    def test_store_filter_visibility_on_purchasable(self):
+        # Default: All Statuses -> store filter widget hidden
+        self.assertTrue(self.view.store_filter_widget.isHidden())
+
+        # Switch to purchasable -> store filter widget visible
+        idx_purchasable = self.view.purchase_combo.findData("purchasable")
+        self.view.purchase_combo.setCurrentIndex(idx_purchasable)
+        self.assertFalse(self.view.store_filter_widget.isHidden())
+
+        # Switch to purchased -> store filter widget visible
+        idx_purchased = self.view.purchase_combo.findData("purchased")
+        self.view.purchase_combo.setCurrentIndex(idx_purchased)
+        self.assertFalse(self.view.store_filter_widget.isHidden())
+
+        # Switch to downloaded -> store filter widget hidden
+        idx_downloaded = self.view.purchase_combo.findData("downloaded")
+        self.view.purchase_combo.setCurrentIndex(idx_downloaded)
+        self.assertTrue(self.view.store_filter_widget.isHidden())
+
+    def test_navigate_to_store_filter(self):
+        from rekordbox_collection_manager.gui.track_table import TrackColumn
+
+        # 1. Navigate to purchasable at Beatport
+        self.view.navigate_to_store_filter("purchasable", "Beatport")
+        self.assertEqual(self.view.purchase_combo.currentData(), "purchasable")
+        self.assertEqual(self.view.store_filter_widget.get_selected(), ["Beatport"])
+        self.assertFalse(self.view.filter_panel.isHidden())
+        self.assertTrue(self.view.table.is_column_visible(TrackColumn.BUY_AT))
+        self.assertFalse(self.view.table.is_column_visible(TrackColumn.PURCHASED_AT))
+
+        # 2. Navigate to purchased at Bandcamp
+        self.view.navigate_to_store_filter("purchased", "Bandcamp")
+        self.assertEqual(self.view.purchase_combo.currentData(), "purchased")
+        self.assertEqual(self.view.store_filter_widget.get_selected(), ["Bandcamp"])
+        self.assertTrue(self.view.table.is_column_visible(TrackColumn.PURCHASED_AT))
+        self.assertFalse(self.view.table.is_column_visible(TrackColumn.BUY_AT))
+
 
 
 if __name__ == "__main__":
