@@ -513,6 +513,229 @@ def git_commit_and_tag(
         sys.exit(1)
 
 
+def publish_git_push(version: str, cwd: Path = PROJECT_ROOT) -> None:
+    """Push main branch and annotated version tag to origin."""
+    tag_name = f"v{version.lstrip('v')}"
+    print("🚀 Pushing main branch to origin...")
+    run_git(["push", "origin", "main"], cwd=cwd)
+    print(f"🏷️  Pushing tag {tag_name} to origin...")
+    run_git(["push", "origin", tag_name], cwd=cwd)
+
+
+def publish_github_release(
+    version: str,
+    zip_path: Path,
+    release_notes: str,
+    draft: bool = False,
+    dist_dir: Path = DIST_DIR,
+    cwd: Path = PROJECT_ROOT,
+) -> str:
+    """Publish GitHub release with standalone zip asset attached via gh CLI."""
+    tag_name = f"v{version.lstrip('v')}"
+    dist_dir.mkdir(parents=True, exist_ok=True)
+    notes_file = dist_dir / f"RELEASE_NOTES_{tag_name}.md"
+    notes_file.write_text(release_notes, encoding="utf-8")
+
+    cmd = [
+        "gh",
+        "release",
+        "create",
+        tag_name,
+        str(zip_path),
+        "--title",
+        f"Rekordbox Collection Manager {tag_name}",
+        "--notes-file",
+        str(notes_file),
+    ]
+    if draft:
+        cmd.append("--draft")
+
+    print(f"📢 Publishing GitHub release {tag_name}...")
+    res = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=False)
+    if res.returncode != 0:
+        err_msg = res.stderr.strip() or res.stdout.strip()
+        print(f"\n❌ Error: Failed to publish GitHub release ({err_msg}).", file=sys.stderr)
+        print("⚠️  Git commit and tag were already pushed to origin.", file=sys.stderr)
+        print("   To retry publishing the GitHub release without rebuilding, run:", file=sys.stderr)
+        print(f"   {' '.join(cmd)}\n", file=sys.stderr)
+        raise RuntimeError(f"GitHub release creation failed: {err_msg}")
+
+    release_url = res.stdout.strip()
+    return release_url
+
+
+def confirm_release_prompt(summary: str) -> bool:
+    """Prompt user interactively to confirm release publishing."""
+    print(summary)
+    try:
+        reply = input("\nProceed with git push and publishing GitHub release? [Y/n]: ").strip().lower()
+        if reply in ("", "y", "yes"):
+            return True
+        return False
+    except (KeyboardInterrupt, EOFError):
+        print()
+        return False
+
+
+def run_release_pipeline(
+    action: str,
+    target_version: str | None = None,
+    yes: bool = False,
+    draft: bool = False,
+    dry_run: bool = False,
+    cwd: Path = PROJECT_ROOT,
+    pyproject_path: Path = PYPROJECT_PATH,
+    changelog_path: Path = CHANGELOG_PATH,
+    dist_dir: Path = DIST_DIR,
+    build_script: Path = BUILD_SCRIPT_PATH,
+) -> None:
+    """
+    Execute the 7-step safe desktop release pipeline.
+    """
+    if action not in ("patch", "minor", "major", "set"):
+        raise ValueError(
+            f"Action must be one of 'patch', 'minor', 'major', or 'set' when using --release (got '{action}')."
+        )
+
+    if not pyproject_path.exists():
+        raise FileNotFoundError(f"Cannot find pyproject.toml at {pyproject_path}")
+
+    content = pyproject_path.read_text(encoding="utf-8")
+    curr_version = get_current_version(content)
+
+    if action in ("patch", "minor", "major"):
+        new_version = bump_semver(curr_version, action)
+    else:  # set
+        if not target_version:
+            raise ValueError("Must specify a version string when using 'set' (e.g., set 1.0.0)")
+        validate_semver(target_version)
+        new_version = target_version
+
+    print("🚀 Rekordbox Collection Manager Desktop Release Automation:")
+    print(f"   Version: {curr_version} -> {new_version}")
+
+    # Step 1: Pre-flight Verification
+    print("🔍 Running pre-flight verification...")
+    errors = check_preflight_conditions(
+        new_version,
+        expected_branch="main",
+        check_remote=not dry_run,
+        cwd=cwd,
+    )
+    if errors:
+        print("❌ Pre-flight checks failed:", file=sys.stderr)
+        for err in errors:
+            print(f"   • {err}", file=sys.stderr)
+        sys.exit(1)
+    print("✅ Pre-flight checks passed.")
+
+    # Step 2: Build & Packaging
+    if dry_run:
+        artifact = build_and_package_app(
+            new_version,
+            cwd=cwd,
+            build_script=build_script,
+            dist_dir=dist_dir,
+            dry_run=True,
+        )
+        _, release_notes = sync_changelog_for_release(
+            new_version,
+            cwd=cwd,
+            changelog_path=changelog_path,
+            dry_run=True,
+        )
+
+        print("\n--- [dry-run] Release Preview ---")
+        print(f"Target Version: v{new_version}")
+        print(f"Archive:        {artifact.zip_path.name} ({artifact.zip_size})")
+        print(f"Checksum:       {artifact.sha256}")
+        print(f"\n--- [dry-run] Release Notes Preview ---\n{release_notes}")
+        print("---------------------------------------")
+        print(f"[dry-run] Would commit 'chore(desktop): bump version to {new_version}'")
+        print(f"[dry-run] Would create annotated tag 'v{new_version}'")
+        print(f"[dry-run] Would push branch to origin main and tag to origin v{new_version}")
+        gh_cmd = f"gh release create v{new_version} {artifact.zip_path} --title 'Rekordbox Collection Manager v{new_version}'"
+        if draft:
+            gh_cmd += " --draft"
+        print(f"[dry-run] Would publish release via: {gh_cmd}")
+        print("\n✅ Dry-run release simulation completed successfully. Zero changes were made.")
+        return
+
+    # Real execution
+    checkpoint_sha = get_git_checkpoint(cwd=cwd)
+    tag_name = f"v{new_version}"
+    try:
+        artifact = build_and_package_app(
+            new_version,
+            cwd=cwd,
+            build_script=build_script,
+            dist_dir=dist_dir,
+            dry_run=False,
+        )
+
+        update_pyproject(new_version, dry_run=False)
+        uv_lock_updated = update_uv_lock(dry_run=False)
+        changelog_updated, release_notes = sync_changelog_for_release(
+            new_version,
+            cwd=cwd,
+            changelog_path=changelog_path,
+            dry_run=False,
+        )
+
+        summary = (
+            f"\n🚀 Ready to publish release:\n"
+            f"   • Version:  {curr_version} -> {new_version}\n"
+            f"   • Archive:  {artifact.zip_path.name} ({artifact.zip_size})\n"
+            f"   • Checksum: {artifact.sha256}\n"
+            f"\n--- Release Notes Preview ({new_version}) ---\n"
+            f"{release_notes}\n"
+            f"----------------------------------------------"
+        )
+
+        if not yes and sys.stdin.isatty():
+            confirmed = confirm_release_prompt(summary)
+            if not confirmed:
+                print("\n❌ Release aborted by user. Rolling back local changes...")
+                rollback_to_checkpoint(checkpoint_sha, cwd=cwd)
+                print("✅ Working tree restored to clean state.")
+                sys.exit(1)
+        else:
+            print(summary)
+
+        # Step 6: Commit and Tag
+        git_commit_and_tag(
+            new_version,
+            create_tag=True,
+            uv_lock_updated=uv_lock_updated,
+            changelog_updated=changelog_updated,
+        )
+
+        # Step 7: Push and Publish
+        publish_git_push(new_version, cwd=cwd)
+        release_url = publish_github_release(
+            new_version,
+            zip_path=artifact.zip_path,
+            release_notes=release_notes,
+            draft=draft,
+            dist_dir=dist_dir,
+            cwd=cwd,
+        )
+        print(f"\n🎉 Successfully published release v{new_version}!")
+        if release_url:
+            print(f"🔗 {release_url}")
+    except Exception as e:
+        # Check if remote tag exists; if not, rollback
+        try:
+            remote_tag_check = run_git(["ls-remote", "--tags", "origin", f"refs/tags/{tag_name}"], cwd=cwd)
+            if not remote_tag_check:
+                print(f"\n⚠️  Error occurred during release ({e}). Rolling back local state...", file=sys.stderr)
+                rollback_to_checkpoint(checkpoint_sha, tag_name=tag_name, cwd=cwd)
+                print("✅ Local working tree restored to checkpoint.", file=sys.stderr)
+        except Exception as rb_err:
+            print(f"⚠️  Rollback attempt encountered error: {rb_err}", file=sys.stderr)
+        raise
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Rekordbox Collection Manager Desktop Semantic Versioning Manager",
@@ -524,6 +747,10 @@ def main() -> None:
   %(prog)s major                # Bump major: 0.9.0 -> 1.0.0
   %(prog)s set 1.0.0            # Set specific SemVer
   %(prog)s patch --commit --tag # Bump patch, commit to git, and create tag vX.Y.Z
+  %(prog)s patch --release      # Automated patch release with interactive confirmation
+  %(prog)s minor --release -y   # Automated minor release without prompt (one-shot)
+  %(prog)s minor --release --draft # Automated minor release staged as draft
+  %(prog)s patch --release --dry-run # Preview release without touching files or network
 """,
     )
 
@@ -538,6 +765,22 @@ def main() -> None:
         "version",
         nargs="?",
         help="Target version when action is 'set' (e.g., 1.0.0)",
+    )
+    parser.add_argument(
+        "--release",
+        action="store_true",
+        help="Execute the 7-step automated desktop release pipeline",
+    )
+    parser.add_argument(
+        "-y",
+        "--yes",
+        action="store_true",
+        help="Bypass confirmation prompt for unattended one-shot release",
+    )
+    parser.add_argument(
+        "--draft",
+        action="store_true",
+        help="Create GitHub release in draft status instead of public",
     )
     parser.add_argument(
         "--commit",
@@ -566,6 +809,16 @@ def main() -> None:
     )
 
     args = parser.parse_args()
+
+    if args.release:
+        run_release_pipeline(
+            action=args.action,
+            target_version=args.version,
+            yes=args.yes,
+            draft=args.draft,
+            dry_run=args.dry_run,
+        )
+        return
 
     if not PYPROJECT_PATH.exists():
         print(f"❌ Error: Cannot find pyproject.toml at {PYPROJECT_PATH}", file=sys.stderr)

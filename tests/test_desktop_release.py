@@ -24,12 +24,16 @@ from scripts.desktop_version import (
     check_required_tools,
     check_tag_collision,
     compute_sha256,
+    confirm_release_prompt,
     extract_release_notes,
     extract_unreleased_notes,
     get_expected_zip_path,
     get_git_checkpoint,
+    publish_git_push,
+    publish_github_release,
     rollback_to_checkpoint,
     run_git,
+    run_release_pipeline,
     sync_changelog_for_release,
 )
 
@@ -421,4 +425,206 @@ def test_sync_changelog_for_release_dry_run(tmp_path):
     assert "Pending work" in notes
     # File content must remain completely unchanged in dry run
     assert changelog.read_text() == initial_content
+
+
+def test_publish_git_push():
+    with patch("scripts.desktop_version.run_git") as mock_run_git:
+        publish_git_push("0.21.0")
+        assert mock_run_git.call_count == 2
+        calls = [c[0][0] for c in mock_run_git.call_args_list]
+        assert calls[0] == ["push", "origin", "main"]
+        assert calls[1] == ["push", "origin", "v0.21.0"]
+
+
+def test_publish_github_release_success(tmp_path):
+    dist_dir = tmp_path / "dist"
+    dist_dir.mkdir()
+    fake_zip = dist_dir / "app.zip"
+    fake_zip.write_bytes(b"zip data")
+
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="https://github.com/release/v0.21.0\n")
+        url = publish_github_release(
+            version="0.21.0",
+            zip_path=fake_zip,
+            release_notes="### Notes\n- Feature",
+            draft=False,
+            dist_dir=dist_dir,
+        )
+
+        assert url == "https://github.com/release/v0.21.0"
+        mock_run.assert_called_once()
+        cmd = mock_run.call_args[0][0]
+        assert cmd[0:3] == ["gh", "release", "create"]
+        assert cmd[3] == "v0.21.0"
+        assert cmd[4] == str(fake_zip)
+        assert "--draft" not in cmd
+
+
+def test_publish_github_release_draft_and_failure(tmp_path):
+    dist_dir = tmp_path / "dist"
+    dist_dir.mkdir()
+    fake_zip = dist_dir / "app.zip"
+    fake_zip.write_bytes(b"zip data")
+
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=1, stderr="Network upload failed", stdout="")
+        with pytest.raises(RuntimeError, match="GitHub release creation failed"):
+            publish_github_release(
+                version="0.21.0",
+                zip_path=fake_zip,
+                release_notes="Notes",
+                draft=True,
+                dist_dir=dist_dir,
+            )
+        cmd = mock_run.call_args[0][0]
+        assert "--draft" in cmd
+
+
+def test_confirm_release_prompt():
+    with patch("builtins.input", return_value=""):
+        assert confirm_release_prompt("summary") is True
+
+    with patch("builtins.input", return_value="y"):
+        assert confirm_release_prompt("summary") is True
+
+    with patch("builtins.input", return_value="yes"):
+        assert confirm_release_prompt("summary") is True
+
+    with patch("builtins.input", return_value="n"):
+        assert confirm_release_prompt("summary") is False
+
+    with patch("builtins.input", side_effect=KeyboardInterrupt):
+        assert confirm_release_prompt("summary") is False
+
+
+def test_run_release_pipeline_invalid_action():
+    with pytest.raises(ValueError, match="Action must be one of"):
+        run_release_pipeline(action="show")
+
+
+def test_run_release_pipeline_preflight_failure(tmp_path):
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text('version = "0.20.0"\n')
+
+    with patch("scripts.desktop_version.check_preflight_conditions", return_value=["dirty tree error"]), \
+         pytest.raises(SystemExit) as exc_info:
+        run_release_pipeline(
+            action="patch",
+            pyproject_path=pyproject,
+            dry_run=False,
+        )
+    assert exc_info.value.code == 1
+
+
+def test_run_release_pipeline_dry_run_success(tmp_path):
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text('version = "0.20.0"\n')
+    changelog = tmp_path / "CHANGELOG.md"
+    changelog.write_text("# Changelog\n\n## [Unreleased]\n\n- Ready\n\n## [0.20.0] - 2026-11-18\n")
+
+    with patch("scripts.desktop_version.check_preflight_conditions", return_value=[]), \
+         patch("scripts.desktop_version.build_and_package_app") as mock_build, \
+         patch("scripts.desktop_version.git_commit_and_tag") as mock_commit:
+        mock_build.return_value = BuildArtifactInfo(
+            app_path=tmp_path / "app",
+            zip_path=tmp_path / "app.zip",
+            zip_size="[dry-run]",
+            sha256="[dry-run-sha256]",
+        )
+
+        run_release_pipeline(
+            action="patch",
+            pyproject_path=pyproject,
+            changelog_path=changelog,
+            dist_dir=tmp_path,
+            dry_run=True,
+        )
+
+        mock_commit.assert_not_called()
+        assert 'version = "0.20.0"' in pyproject.read_text()
+
+
+def test_run_release_pipeline_aborted_at_prompt(tmp_path):
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text('version = "0.20.0"\n')
+    changelog = tmp_path / "CHANGELOG.md"
+    changelog.write_text("# Changelog\n\n## [Unreleased]\n\n- Ready\n\n## [0.20.0] - 2026-11-18\n")
+
+    with patch("scripts.desktop_version.check_preflight_conditions", return_value=[]), \
+         patch("scripts.desktop_version.get_git_checkpoint", return_value="checkpoint_sha"), \
+         patch("scripts.desktop_version.build_and_package_app") as mock_build, \
+         patch("scripts.desktop_version.update_pyproject"), \
+         patch("scripts.desktop_version.update_uv_lock", return_value=True), \
+         patch("scripts.desktop_version.sync_changelog_for_release", return_value=(True, "Notes")), \
+         patch("sys.stdin.isatty", return_value=True), \
+         patch("scripts.desktop_version.confirm_release_prompt", return_value=False), \
+         patch("scripts.desktop_version.rollback_to_checkpoint") as mock_rollback, \
+         pytest.raises(SystemExit) as exc_info:
+
+        mock_build.return_value = BuildArtifactInfo(
+            app_path=tmp_path / "app",
+            zip_path=tmp_path / "app.zip",
+            zip_size="10 MB",
+            sha256="sha256_dummy",
+        )
+
+        run_release_pipeline(
+            action="patch",
+            yes=False,
+            pyproject_path=pyproject,
+            changelog_path=changelog,
+            dist_dir=tmp_path,
+            dry_run=False,
+        )
+
+    assert exc_info.value.code == 1
+    mock_rollback.assert_called_once_with("checkpoint_sha", cwd=PROJECT_ROOT)
+
+
+def test_run_release_pipeline_full_success_with_yes(tmp_path):
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text('version = "0.20.0"\n')
+    changelog = tmp_path / "CHANGELOG.md"
+    changelog.write_text("# Changelog\n\n## [Unreleased]\n\n- Ready\n\n## [0.20.0] - 2026-11-18\n")
+
+    with patch("scripts.desktop_version.check_preflight_conditions", return_value=[]), \
+         patch("scripts.desktop_version.get_git_checkpoint", return_value="checkpoint_sha"), \
+         patch("scripts.desktop_version.build_and_package_app") as mock_build, \
+         patch("scripts.desktop_version.update_pyproject") as mock_upd_pyproject, \
+         patch("scripts.desktop_version.update_uv_lock", return_value=True), \
+         patch("scripts.desktop_version.sync_changelog_for_release", return_value=(True, "Notes")), \
+         patch("scripts.desktop_version.git_commit_and_tag") as mock_commit_tag, \
+         patch("scripts.desktop_version.publish_git_push") as mock_push, \
+         patch("scripts.desktop_version.publish_github_release", return_value="https://github.com/release/v0.20.1") as mock_pub_gh:
+
+        mock_build.return_value = BuildArtifactInfo(
+            app_path=tmp_path / "app",
+            zip_path=tmp_path / "app.zip",
+            zip_size="10 MB",
+            sha256="sha256_dummy",
+        )
+
+        run_release_pipeline(
+            action="patch",
+            yes=True,
+            draft=False,
+            pyproject_path=pyproject,
+            changelog_path=changelog,
+            dist_dir=tmp_path,
+            dry_run=False,
+        )
+
+        mock_upd_pyproject.assert_called_once_with("0.20.1", dry_run=False)
+        mock_commit_tag.assert_called_once()
+        mock_push.assert_called_once_with("0.20.1", cwd=PROJECT_ROOT)
+        mock_pub_gh.assert_called_once_with(
+            "0.20.1",
+            zip_path=tmp_path / "app.zip",
+            release_notes="Notes",
+            draft=False,
+            dist_dir=tmp_path,
+            cwd=PROJECT_ROOT,
+        )
+
 
