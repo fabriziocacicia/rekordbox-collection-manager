@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Maintenance
 
+- **release**: Automate desktop version bump, packaging, and GitHub release pipeline (#13)
 - **app**: Bundle standalone macOS .app with embedded Python dependencies (#14)
 - **changelog**: Implement changelog generator CLI and test suite
 
