@@ -7,11 +7,14 @@ and automates git commits and release tagging.
 """
 
 import argparse
+import datetime
+import hashlib
 import re
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 # Paths
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -19,13 +22,27 @@ PROJECT_ROOT = SCRIPT_DIR.parent
 PYPROJECT_PATH = PROJECT_ROOT / "pyproject.toml"
 UV_LOCK_PATH = PROJECT_ROOT / "uv.lock"
 CHANGELOG_PATH = PROJECT_ROOT / "CHANGELOG.md"
+BUILD_SCRIPT_PATH = SCRIPT_DIR / "build_app.sh"
+DIST_DIR = PROJECT_ROOT / "dist"
 
 try:
-    from scripts.changelog import rotate_changelog
+    from scripts.changelog import (
+        CATEGORIES_ORDER,
+        categorize_commits,
+        get_commits_for_range,
+        get_desktop_tags,
+        rotate_changelog,
+    )
 except ImportError:
     if str(PROJECT_ROOT) not in sys.path:
         sys.path.insert(0, str(PROJECT_ROOT))
-    from scripts.changelog import rotate_changelog
+    from scripts.changelog import (
+        CATEGORIES_ORDER,
+        categorize_commits,
+        get_commits_for_range,
+        get_desktop_tags,
+        rotate_changelog,
+    )
 
 
 REQUIRED_TOOLS = ("uv", "clang", "ditto", "gh")
@@ -184,6 +201,201 @@ def rollback_to_checkpoint(
                 subprocess.run(["git", "tag", "-d", tag_name], cwd=cwd, check=True, capture_output=True)
     except Exception as e:
         print(f"⚠️  Warning: Failed during rollback to checkpoint {checkpoint_sha}: {e}", file=sys.stderr)
+
+
+class BuildArtifactInfo(NamedTuple):
+    app_path: Path
+    zip_path: Path
+    zip_size: str
+    sha256: str
+
+
+def compute_sha256(file_path: Path) -> str:
+    """Compute SHA-256 hex digest of a file."""
+    h = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def get_expected_zip_path(version: str, dist_dir: Path = DIST_DIR) -> Path:
+    """Return expected release zip path for a given version."""
+    clean_ver = version.lstrip("v")
+    return dist_dir / f"Rekordbox-Collection-Manager-v{clean_ver}-macOS-arm64.zip"
+
+
+def build_and_package_app(
+    version: str,
+    cwd: Path = PROJECT_ROOT,
+    build_script: Path = BUILD_SCRIPT_PATH,
+    dist_dir: Path = DIST_DIR,
+    dry_run: bool = False,
+) -> BuildArtifactInfo:
+    """
+    Execute scripts/build_app.sh --package to compile standalone .app and create .zip archive.
+    Returns BuildArtifactInfo with paths, human-readable size, and sha256 checksum.
+    """
+    expected_zip = get_expected_zip_path(version, dist_dir=dist_dir)
+    app_path = dist_dir / "Rekordbox Collection Manager.app"
+
+    if dry_run:
+        return BuildArtifactInfo(
+            app_path=app_path,
+            zip_path=expected_zip,
+            zip_size="[dry-run]",
+            sha256="[dry-run-sha256]",
+        )
+
+    if not build_script.exists():
+        raise FileNotFoundError(f"Build script not found at {build_script}")
+
+    print("🔨 Compiling standalone macOS bundle & packaging release zip...")
+    res = subprocess.run(
+        ["bash", str(build_script), "--package"],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if res.returncode != 0:
+        raise RuntimeError(
+            f"Build and packaging script failed with code {res.returncode}:\n{res.stderr.strip() or res.stdout.strip()}"
+        )
+
+    if not expected_zip.exists():
+        raise FileNotFoundError(
+            f"Expected release archive was not found at {expected_zip} after build."
+        )
+
+    size_bytes = expected_zip.stat().st_size
+    size_mb = size_bytes / (1024 * 1024)
+    zip_size_str = f"{size_mb:.1f} MB"
+    checksum = compute_sha256(expected_zip)
+
+    print(f"📦 Successfully packaged release archive: {expected_zip.name} ({zip_size_str})")
+    print(f"🔑 SHA-256: {checksum}")
+
+    return BuildArtifactInfo(
+        app_path=app_path,
+        zip_path=expected_zip,
+        zip_size=zip_size_str,
+        sha256=checksum,
+    )
+
+
+def extract_unreleased_notes(changelog_path: Path = CHANGELOG_PATH) -> str:
+    """Extract body text under ## [Unreleased] from CHANGELOG.md if present."""
+    if not changelog_path.exists():
+        return ""
+    text = changelog_path.read_text(encoding="utf-8")
+    unreleased_pattern = re.compile(
+        r"## \[Unreleased\][^\n]*\n(?P<body>.*?)(?=\n## \[\d|\n\[Unreleased\]:|\Z)",
+        re.DOTALL,
+    )
+    match = unreleased_pattern.search(text)
+    if match:
+        return match.group("body").strip()
+    return ""
+
+
+def extract_release_notes(version: str, changelog_path: Path = CHANGELOG_PATH) -> str:
+    """Extract release notes for version from CHANGELOG.md."""
+    if not changelog_path.exists():
+        return ""
+    clean_ver = version.lstrip("v")
+    text = changelog_path.read_text(encoding="utf-8")
+    pattern = re.compile(
+        rf"## \[{re.escape(clean_ver)}\][^\n]*\n(?P<body>.*?)(?=\n## \[\d|\n\[|\Z)",
+        re.DOTALL,
+    )
+    match = pattern.search(text)
+    if match:
+        return match.group("body").strip()
+    return ""
+
+
+def sync_changelog_for_release(
+    version: str,
+    date_str: str | None = None,
+    cwd: Path = PROJECT_ROOT,
+    changelog_path: Path = CHANGELOG_PATH,
+    dry_run: bool = False,
+) -> tuple[bool, str]:
+    """
+    Ensure [Unreleased] is populated (auto-populating from desktop conventional commits if empty),
+    rotate CHANGELOG.md for new_version, and return (updated_bool, release_notes_markdown).
+    """
+    clean_ver = version.lstrip("v")
+    if date_str is None:
+        date_str = datetime.date.today().isoformat()
+
+    unreleased_notes = extract_unreleased_notes(changelog_path=changelog_path)
+
+    # If unreleased notes are empty, auto-extract commits since last desktop tag
+    if not unreleased_notes and not dry_run and changelog_path.exists():
+        tags = get_desktop_tags(cwd=cwd)
+        if tags:
+            latest_tag = tags[-1]
+            commits = get_commits_for_range(f"{latest_tag}..HEAD", cwd=cwd)
+            categorized = categorize_commits(commits, target="desktop")
+            if categorized:
+                lines = []
+                for cat in CATEGORIES_ORDER:
+                    items = categorized.get(cat)
+                    if items:
+                        lines.append(f"### {cat}\n")
+                        for item in items:
+                            lines.append(item)
+                        lines.append("")
+                auto_body = "\n".join(lines).strip()
+                if auto_body:
+                    content = changelog_path.read_text(encoding="utf-8")
+                    unreleased_pattern = re.compile(
+                        r"(## \[Unreleased\][^\n]*\n)(?P<body>.*?)(?=\n## \[(?P<next_ver>\d+\.\d+(?:\.\d+)?)\])",
+                        re.DOTALL,
+                    )
+                    match = unreleased_pattern.search(content)
+                    if match:
+                        new_content = unreleased_pattern.sub(
+                            rf"\g<1>\n{auto_body}\n",
+                            content,
+                            count=1,
+                        )
+                        changelog_path.write_text(new_content, encoding="utf-8")
+
+    # Rotate CHANGELOG.md
+    updated = rotate_changelog(
+        new_version=clean_ver,
+        date_str=date_str,
+        cwd=cwd,
+        changelog_path=changelog_path,
+        dry_run=dry_run,
+    )
+
+    release_notes = extract_release_notes(clean_ver, changelog_path=changelog_path)
+    if not release_notes and dry_run:
+        if unreleased_notes:
+            release_notes = unreleased_notes
+        else:
+            tags = get_desktop_tags(cwd=cwd)
+            if tags:
+                latest_tag = tags[-1]
+                commits = get_commits_for_range(f"{latest_tag}..HEAD", cwd=cwd)
+                categorized = categorize_commits(commits, target="desktop")
+                lines = []
+                for cat in CATEGORIES_ORDER:
+                    items = categorized.get(cat)
+                    if items:
+                        lines.append(f"### {cat}\n")
+                        for item in items:
+                            lines.append(item)
+                        lines.append("")
+                release_notes = "\n".join(lines).strip()
+        if not release_notes:
+            release_notes = "- Routine updates and maintenance."
+
+    return updated, release_notes
 
 
 def get_current_version(content: str) -> str:

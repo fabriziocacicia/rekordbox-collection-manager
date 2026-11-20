@@ -16,14 +16,21 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from scripts.desktop_version import (
     REQUIRED_TOOLS,
+    BuildArtifactInfo,
+    build_and_package_app,
     check_git_branch,
     check_git_clean,
     check_preflight_conditions,
     check_required_tools,
     check_tag_collision,
+    compute_sha256,
+    extract_release_notes,
+    extract_unreleased_notes,
+    get_expected_zip_path,
     get_git_checkpoint,
     rollback_to_checkpoint,
     run_git,
+    sync_changelog_for_release,
 )
 
 
@@ -213,3 +220,205 @@ def test_rollback_to_checkpoint_resets_commit_and_tag():
         assert calls[0] == ["git", "checkout", "--", "."]
         assert calls[1] == ["git", "reset", "--hard", "orig_sha"]
         assert calls[2] == ["git", "tag", "-d", "v0.21.0"]
+
+
+def test_compute_sha256(tmp_path):
+    test_file = tmp_path / "sample.bin"
+    test_file.write_bytes(b"hello rekordbox release")
+    expected = "8b7bc9e0c9add1b89848c6394aa04616c3eee56a38cc7bc1313596f0c986bc0e"
+    assert compute_sha256(test_file) == expected
+
+
+def test_get_expected_zip_path():
+    dist_dir = Path("/custom/dist")
+    p1 = get_expected_zip_path("0.21.0", dist_dir=dist_dir)
+    assert p1 == Path("/custom/dist/Rekordbox-Collection-Manager-v0.21.0-macOS-arm64.zip")
+
+    p2 = get_expected_zip_path("v1.0.0", dist_dir=dist_dir)
+    assert p2 == Path("/custom/dist/Rekordbox-Collection-Manager-v1.0.0-macOS-arm64.zip")
+
+
+def test_build_and_package_app_dry_run():
+    info = build_and_package_app("0.21.0", dry_run=True)
+    assert info.zip_size == "[dry-run]"
+    assert info.sha256 == "[dry-run-sha256]"
+    assert info.zip_path.name == "Rekordbox-Collection-Manager-v0.21.0-macOS-arm64.zip"
+
+
+def test_build_and_package_app_script_missing(tmp_path):
+    non_existent = tmp_path / "non_existent.sh"
+    with pytest.raises(FileNotFoundError, match="Build script not found"):
+        build_and_package_app("0.21.0", build_script=non_existent)
+
+
+def test_build_and_package_app_failure(tmp_path):
+    fake_script = tmp_path / "build_app.sh"
+    fake_script.write_text("#!/bin/sh\nexit 1\n")
+    fake_script.chmod(0o755)
+
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=1, stderr="Compilation error", stdout="")
+        with pytest.raises(RuntimeError, match="Build and packaging script failed"):
+            build_and_package_app("0.21.0", build_script=fake_script, dist_dir=tmp_path)
+
+
+def test_build_and_package_app_zip_not_created(tmp_path):
+    fake_script = tmp_path / "build_app.sh"
+    fake_script.write_text("#!/bin/sh\nexit 0\n")
+    fake_script.chmod(0o755)
+
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="Done")
+        with pytest.raises(FileNotFoundError, match="Expected release archive was not found"):
+            build_and_package_app("0.21.0", build_script=fake_script, dist_dir=tmp_path)
+
+
+def test_build_and_package_app_success(tmp_path):
+    fake_script = tmp_path / "build_app.sh"
+    fake_script.write_text("#!/bin/sh\nexit 0\n")
+    fake_script.chmod(0o755)
+
+    expected_zip = tmp_path / "Rekordbox-Collection-Manager-v0.21.0-macOS-arm64.zip"
+    expected_zip.write_bytes(b"dummy archive content")
+
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="Done")
+        info = build_and_package_app("0.21.0", build_script=fake_script, dist_dir=tmp_path)
+
+        assert info.zip_path == expected_zip
+        assert info.zip_size == "0.0 MB"
+        assert len(info.sha256) == 64
+
+
+def test_extract_unreleased_notes(tmp_path):
+    changelog = tmp_path / "CHANGELOG.md"
+    changelog.write_text(
+        "# Changelog\n\n"
+        "## [Unreleased]\n\n"
+        "### Maintenance\n\n"
+        "- **app**: Bundle standalone app\n\n"
+        "## [0.20.0] - 2026-11-18\n\n"
+        "- Some change\n\n"
+        "[Unreleased]: https://example.com\n"
+    )
+
+    notes = extract_unreleased_notes(changelog)
+    assert "### Maintenance" in notes
+    assert "- **app**: Bundle standalone app" in notes
+
+    empty_changelog = tmp_path / "EMPTY_CHANGELOG.md"
+    empty_changelog.write_text(
+        "# Changelog\n\n"
+        "## [Unreleased]\n\n"
+        "## [0.20.0] - 2026-11-18\n\n"
+        "- Some change\n"
+    )
+    assert extract_unreleased_notes(empty_changelog) == ""
+
+
+def test_extract_release_notes(tmp_path):
+    changelog = tmp_path / "CHANGELOG.md"
+    changelog.write_text(
+        "# Changelog\n\n"
+        "## [Unreleased]\n\n"
+        "## [0.21.0] - 2026-11-20\n\n"
+        "### Added\n\n"
+        "- **filters**: NOT exclusion mode\n\n"
+        "## [0.20.0] - 2026-11-18\n\n"
+        "### Fixed\n\n"
+        "- Old fix\n\n"
+        "[Unreleased]: https://example.com\n"
+    )
+
+    notes = extract_release_notes("0.21.0", changelog)
+    assert "### Added" in notes
+    assert "- **filters**: NOT exclusion mode" in notes
+    assert "Old fix" not in notes
+
+
+def test_sync_changelog_for_release_with_existing_unreleased(tmp_path):
+    changelog = tmp_path / "CHANGELOG.md"
+    changelog.write_text(
+        "# Changelog\n\n"
+        "## [Unreleased]\n\n"
+        "### Added\n\n"
+        "- **filters**: Manual curated note\n\n"
+        "## [0.20.0] - 2026-11-18\n\n"
+        "- Prior release\n\n"
+        "[Unreleased]: https://github.com/fabriziocacicia/rekordbox-collection-manager/compare/v0.20.0...HEAD\n"
+        "[0.20.0]: https://github.com/fabriziocacicia/rekordbox-collection-manager/releases/tag/v0.20.0\n"
+    )
+
+    updated, notes = sync_changelog_for_release(
+        "0.21.0",
+        date_str="2026-11-20",
+        changelog_path=changelog,
+        dry_run=False,
+    )
+
+    assert updated is True
+    assert "Manual curated note" in notes
+    content = changelog.read_text()
+    assert "## [0.21.0] - 2026-11-20" in content
+    assert "## [Unreleased]\n\n## [0.21.0]" in content
+
+
+def test_sync_changelog_for_release_auto_extracts_commits_when_empty(tmp_path):
+    changelog = tmp_path / "CHANGELOG.md"
+    changelog.write_text(
+        "# Changelog\n\n"
+        "## [Unreleased]\n\n"
+        "## [0.20.0] - 2026-11-18\n\n"
+        "- Prior release\n\n"
+        "[Unreleased]: https://github.com/fabriziocacicia/rekordbox-collection-manager/compare/v0.20.0...HEAD\n"
+        "[0.20.0]: https://github.com/fabriziocacicia/rekordbox-collection-manager/releases/tag/v0.20.0\n"
+    )
+
+    mock_commit = MagicMock()
+    mock_commit.message = "feat(gui): auto extracted feature"
+    mock_commit.commit_type = "feat"
+    mock_commit.scope = "gui"
+    mock_commit.description = "auto extracted feature"
+
+    with patch("scripts.desktop_version.get_desktop_tags", return_value=["v0.20.0"]), \
+         patch("scripts.desktop_version.get_commits_for_range", return_value=[mock_commit]), \
+         patch("scripts.desktop_version.categorize_commits", return_value={"Added": ["- **gui**: Auto extracted feature"]}):
+        updated, notes = sync_changelog_for_release(
+            "0.21.0",
+            date_str="2026-11-20",
+            changelog_path=changelog,
+            dry_run=False,
+        )
+
+        assert updated is True
+        assert "Auto extracted feature" in notes
+        content = changelog.read_text()
+        assert "## [0.21.0] - 2026-11-20" in content
+        assert "Auto extracted feature" in content
+
+
+def test_sync_changelog_for_release_dry_run(tmp_path):
+    changelog = tmp_path / "CHANGELOG.md"
+    initial_content = (
+        "# Changelog\n\n"
+        "## [Unreleased]\n\n"
+        "### Maintenance\n\n"
+        "- Pending work\n\n"
+        "## [0.20.0] - 2026-11-18\n\n"
+        "- Prior release\n\n"
+        "[Unreleased]: https://github.com/fabriziocacicia/rekordbox-collection-manager/compare/v0.20.0...HEAD\n"
+    )
+    changelog.write_text(initial_content)
+
+    updated, notes = sync_changelog_for_release(
+        "0.21.0",
+        date_str="2026-11-20",
+        changelog_path=changelog,
+        dry_run=True,
+    )
+
+    assert updated is True
+    assert "Pending work" in notes
+    # File content must remain completely unchanged in dry run
+    assert changelog.read_text() == initial_content
+
