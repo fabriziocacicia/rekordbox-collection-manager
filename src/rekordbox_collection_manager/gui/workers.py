@@ -96,7 +96,8 @@ def stop_worker(worker: Optional[Any], wait_ms: int = 50) -> None:
         if hasattr(worker, "quit"):
             worker.quit()
         if hasattr(worker, "wait"):
-            worker.wait(wait_ms)
+            if not worker.wait(wait_ms):
+                worker.wait(3000)
 
 
 def wait_for_retired_workers(timeout_ms: int = 1000) -> None:
