@@ -25,6 +25,7 @@ DerivedData/
 turso_secrets.json
 
 # Agents Local planning scratchpad & tasks
-/tasks
+/tasks/
 /docs/plans/
 /docs/tasks/
+/docs/ideas/
