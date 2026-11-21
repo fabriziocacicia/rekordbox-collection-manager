@@ -543,6 +543,44 @@ def publish_github_release(
     return release_url
 
 
+def cleanup_release_artifacts(
+    dist_dir: Path = DIST_DIR,
+    zip_path: Path | None = None,
+) -> list[Path]:
+    """Clean up release zip archives and release notes markdown files from dist/, preserving the .app bundle."""
+    removed: list[Path] = []
+    if not dist_dir.exists():
+        return removed
+
+    # 1. Clean release notes markdown files
+    for md_file in dist_dir.glob("RELEASE_NOTES_*.md"):
+        try:
+            md_file.unlink()
+            removed.append(md_file)
+        except Exception as e:
+            print(f"⚠️  Warning: Could not remove temporary notes file {md_file.name}: {e}", file=sys.stderr)
+
+    # 2. Clean zip archive(s)
+    if zip_path and zip_path.exists():
+        try:
+            zip_path.unlink()
+            removed.append(zip_path)
+        except Exception as e:
+            print(f"⚠️  Warning: Could not remove release archive {zip_path.name}: {e}", file=sys.stderr)
+    else:
+        for z in dist_dir.glob("*.zip"):
+            try:
+                z.unlink()
+                removed.append(z)
+            except Exception as e:
+                print(f"⚠️  Warning: Could not remove archive {z.name}: {e}", file=sys.stderr)
+
+    if removed:
+        print(f"🧹 Cleaned up {len(removed)} temporary release artifact(s) from dist/ (preserved .app bundle).")
+
+    return removed
+
+
 def confirm_release_prompt(summary: str) -> bool:
     """Prompt user interactively to confirm release publishing."""
     print(summary)
@@ -732,6 +770,9 @@ def run_release_pipeline(
         print(f"\n🎉 Successfully published release v{new_version}!")
         if release_url:
             print(f"🔗 {release_url}")
+
+        # Step 8: Post-release artifact cleanup (preserve .app bundle, remove .zip and release notes .md)
+        cleanup_release_artifacts(dist_dir=dist_dir, zip_path=artifact.zip_path)
     except Exception as e:
         print(f"\n❌ Error during GitHub release: {e}.", file=sys.stderr)
         print("⚠️  Git commit and tag are already pushed to origin.", file=sys.stderr)
