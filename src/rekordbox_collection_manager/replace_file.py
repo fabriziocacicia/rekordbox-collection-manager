@@ -45,6 +45,7 @@ from rekordbox_collection_manager.utils import (
 __all__ = [
     "EXTENSION_TO_FILE_TYPE",
     "FILE_TYPE_TO_NAME",
+    "build_parser",
     "inspect_audio_file",
     "fetch_track_full_info",
     "replace_track_audio_file",
@@ -1225,12 +1226,12 @@ def replace_track_audio_file(
       - TrackInfoUpdated (incremented counter)
 
     Options:
-      - old_file_action: 'keep' (default), 'trash', or 'backup'
+      - old_file_action: 'trash' (default), 'keep', or 'backup'
       - update_id3_metadata: bool = False (if True, updates Title/Artist from new file)
       - move_new_file_to_track_folder: bool = False (if True, moves new file into track's folder)
     """
     opts = options or {}
-    old_file_action = opts.get("old_file_action", "keep")
+    old_file_action = opts.get("old_file_action", "trash")
     update_id3_metadata = opts.get("update_id3_metadata", False)
     move_new_file_to_track_folder = opts.get("move_new_file_to_track_folder", False)
 
@@ -1555,9 +1556,12 @@ def merge_imported_tracks(
       - All djmdSongMyTag records from source -> target
       - All djmdCue records from source -> target (if target has none)
       - Sets rb_local_deleted = 1 on the old source track (soft delete)
+
+    Options:
+      - old_file_action: 'trash' (default), 'keep', or 'backup'
     """
     opts = options or {}
-    old_file_action = opts.get("old_file_action", "keep")
+    old_file_action = opts.get("old_file_action", "trash")
     now_utc = get_rekordbox_timestamp()
 
     with engine.begin() as conn:
@@ -1904,8 +1908,8 @@ def merge_imported_tracks(
     }
 
 
-def main() -> None:
-    """Command-line interface for the Replace File tool."""
+def build_parser() -> argparse.ArgumentParser:
+    """Construct command-line argument parser for the Replace File tool."""
     parser = argparse.ArgumentParser(
         description="Rekordbox Collection Manager - Replace Audio File Tool (MP3/AIFF to AIFF)",
     )
@@ -1915,8 +1919,8 @@ def main() -> None:
     parser.add_argument(
         "--action",
         choices=["keep", "trash", "backup"],
-        default="keep",
-        help="Action for old audio file on disk",
+        default="trash",
+        help="Action for old audio file on disk (default: trash)",
     )
     parser.add_argument(
         "--move",
@@ -1924,6 +1928,12 @@ def main() -> None:
         help="Move replacement audio file into original track's folder",
     )
     parser.add_argument("--force", action="store_true", help="Force proceed if Rekordbox is open")
+    return parser
+
+
+def main() -> None:
+    """Command-line interface for the Replace File tool."""
+    parser = build_parser()
     args = parser.parse_args()
 
     ensure_rekordbox_not_running(force=args.force)

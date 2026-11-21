@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **replace**: Default old audio file operation to macOS Trash on file replacement and track merge (#7)
+
 ### Maintenance
 
 - **release**: Clean up temporary release zip and release notes markdown post-release (#20)

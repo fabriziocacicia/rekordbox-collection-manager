@@ -1661,11 +1661,13 @@ class TrackReplacementDiffView(QWidget):
             "Move old file to macOS Trash (Clean space)",
             "Rename old file to .bak (Backup)",
         ])
-        default_idx = 0
-        if self.options.get("old_file_action") == "trash":
-            default_idx = 1
+        default_idx = 1
+        if self.options.get("old_file_action") == "keep":
+            default_idx = 0
         elif self.options.get("old_file_action") == "backup":
             default_idx = 2
+        elif self.options.get("old_file_action") == "trash":
+            default_idx = 1
         self.old_file_combo.setCurrentIndex(default_idx)
         opt_layout.addWidget(self.old_file_combo)
 
