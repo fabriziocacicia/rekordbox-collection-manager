@@ -4,6 +4,7 @@ Unit tests for desktop & monorepo changelog generator (scripts/changelog.py).
 
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
@@ -240,7 +241,8 @@ All notable changes to this project will be documented in this file.
 [0.20.0]: https://github.com/fabriziocacicia/rekordbox-collection-manager/releases/tag/v0.20.0
 """
     test_file.write_text(valid_content, encoding="utf-8")
-    assert check_changelog(changelog_path=test_file) is True
+    with patch("scripts.changelog.get_desktop_tags", return_value=["v0.20.0"]):
+        assert check_changelog(changelog_path=test_file) is True
 
 
 def test_merge_notes_with_git_commits():

@@ -23,6 +23,7 @@ from scripts.desktop_version import (
     check_preflight_conditions,
     check_required_tools,
     check_tag_collision,
+    cleanup_release_artifacts,
     compute_sha256,
     confirm_release_prompt,
     extract_release_notes,
@@ -522,6 +523,37 @@ def test_publish_github_release_draft_and_failure(tmp_path):
         assert "--draft" in cmd
 
 
+def test_cleanup_release_artifacts(tmp_path):
+    dist_dir = tmp_path / "dist"
+    dist_dir.mkdir()
+
+    # Create app bundle directory
+    app_bundle = dist_dir / "Rekordbox Collection Manager.app"
+    app_bundle.mkdir()
+    (app_bundle / "Info.plist").write_text("<plist></plist>")
+
+    # Create release notes md file
+    notes_file = dist_dir / "RELEASE_NOTES_v0.21.0.md"
+    notes_file.write_text("# Notes\n")
+
+    # Create release zip file
+    zip_file = dist_dir / "Rekordbox-Collection-Manager-v0.21.0-macOS-arm64.zip"
+    zip_file.write_bytes(b"zip content")
+
+    # Create unrelated file
+    other_file = dist_dir / "README.txt"
+    other_file.write_text("keep me")
+
+    removed = cleanup_release_artifacts(dist_dir=dist_dir, zip_path=zip_file)
+
+    assert len(removed) == 2
+    assert not notes_file.exists()
+    assert not zip_file.exists()
+    assert app_bundle.exists()
+    assert (app_bundle / "Info.plist").exists()
+    assert other_file.exists()
+
+
 def test_confirm_release_prompt():
     with patch("builtins.input", return_value=""):
         assert confirm_release_prompt("summary") is True
@@ -638,7 +670,8 @@ def test_run_release_pipeline_full_success_with_yes(tmp_path):
          patch("scripts.desktop_version.sync_changelog_for_release", return_value=(True, "Notes")), \
          patch("scripts.desktop_version.git_commit_and_tag") as mock_commit_tag, \
          patch("scripts.desktop_version.publish_git_push") as mock_push, \
-         patch("scripts.desktop_version.publish_github_release", return_value="https://github.com/release/v0.20.1") as mock_pub_gh:
+         patch("scripts.desktop_version.publish_github_release", return_value="https://github.com/release/v0.20.1") as mock_pub_gh, \
+         patch("scripts.desktop_version.cleanup_release_artifacts") as mock_cleanup:
 
         parent_mock.build_and_package_app.return_value = BuildArtifactInfo(
             app_path=tmp_path / "app",
@@ -668,6 +701,7 @@ def test_run_release_pipeline_full_success_with_yes(tmp_path):
             dist_dir=tmp_path,
             cwd=PROJECT_ROOT,
         )
+        mock_cleanup.assert_called_once_with(dist_dir=tmp_path, zip_path=tmp_path / "app.zip")
 
         # Assert update_pyproject occurred BEFORE build_and_package_app
         call_names = [call[0] for call in parent_mock.mock_calls]
