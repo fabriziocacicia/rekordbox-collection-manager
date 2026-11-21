@@ -21,6 +21,9 @@ from scripts.changelog import (
     render_compare_links,
     rotate_changelog,
     check_changelog,
+    is_bullet_present,
+    parse_markdown_categories,
+    merge_notes_with_git_commits,
 )
 
 
@@ -238,3 +241,36 @@ All notable changes to this project will be documented in this file.
 """
     test_file.write_text(valid_content, encoding="utf-8")
     assert check_changelog(changelog_path=test_file) is True
+
+
+def test_merge_notes_with_git_commits():
+    # 1. Empty existing notes: populates all from git
+    git_cats = {
+        "Added": ["- **gui**: Add stores summary view (#6)"],
+        "Maintenance": ["- **release**: Automate release pipeline (#16)"],
+    }
+    merged, added = merge_notes_with_git_commits("", git_cats)
+    assert len(added) == 2
+    assert "### Added" in merged
+    assert "- **gui**: Add stores summary view (#6)" in merged
+    assert "### Maintenance" in merged
+    assert "- **release**: Automate release pipeline (#16)" in merged
+
+    # 2. Existing notes with partial entries: merges missing entries without duplicates
+    existing = """### Maintenance
+
+- **release**: Automate release pipeline (#16)
+"""
+    merged2, added2 = merge_notes_with_git_commits(existing, git_cats)
+    assert len(added2) == 1
+    assert added2 == ["- **gui**: Add stores summary view (#6)"]
+    assert "### Added" in merged2
+    assert "- **gui**: Add stores summary view (#6)" in merged2
+    # Ensure Maintenance wasn't duplicated
+    assert merged2.count("- **release**: Automate release pipeline (#16)") == 1
+
+    # 3. All entries already present: returns unchanged
+    merged3, added3 = merge_notes_with_git_commits(merged2, git_cats)
+    assert len(added3) == 0
+    assert merged3 == merged2
+

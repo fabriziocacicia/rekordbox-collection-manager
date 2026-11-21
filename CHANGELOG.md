@@ -7,11 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **gui**: Add stores summary view and purchasable store filtering (#6)
+
 ### Maintenance
 
-- **release**: Automate desktop version bump, packaging, and GitHub release pipeline (#13)
+- **release**: Automate desktop version bump, packaging, and GitHub release pipeline (#16)
 - **app**: Bundle standalone macOS .app with embedded Python dependencies (#14)
-- **changelog**: Implement changelog generator CLI and test suite
+- **changelog**: Establish Keep a Changelog and backfill desktop releases (#15)
 
 ## [0.20.0] - 2026-11-18
 

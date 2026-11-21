@@ -59,6 +59,11 @@ A native macOS desktop application (PySide6 / Qt6), background sync daemon (`lau
    - Streaming tracks (`STREAMING_FILE_TYPES`, `STREAMING_URI_PREFIXES`) are excluded from analytics, search, and cloud sync.
    - In PySide6 GUI, changes must prompt `confirm_unsaved_changes()` before navigation or destructive actions.
 
+5. **Changelog & Release Hygiene**:
+   - Every PR introducing user-facing features (`feat`), bug fixes (`fix`), or noticeable architectural changes must update `CHANGELOG.md` under `## [Unreleased]` adhering to Keep a Changelog 1.1.0 standard (`Added`, `Changed`, `Fixed`, `Maintenance`).
+   - Run `uv run python scripts/changelog.py --check` during documentation audits.
+   - The desktop release pipeline (`scripts/desktop_version.py`) automatically validates and merges any missing conventional commits from git history (`v<latest>..HEAD`) to guarantee zero feature omission.
+
 ---
 
 ## Codebase Map & Module Boundaries

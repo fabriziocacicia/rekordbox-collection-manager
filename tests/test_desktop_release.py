@@ -407,6 +407,44 @@ def test_sync_changelog_for_release_auto_extracts_commits_when_empty(tmp_path):
         assert "Auto extracted feature" in content
 
 
+def test_sync_changelog_for_release_merges_missing_git_commits(tmp_path):
+    changelog = tmp_path / "CHANGELOG.md"
+    changelog.write_text(
+        "# Changelog\n\n"
+        "## [Unreleased]\n\n"
+        "### Maintenance\n\n"
+        "- **app**: Existing maintenance note (#14)\n\n"
+        "## [0.20.0] - 2026-11-18\n\n"
+        "- Prior release\n\n"
+        "[Unreleased]: https://github.com/fabriziocacicia/rekordbox-collection-manager/compare/v0.20.0...HEAD\n"
+        "[0.20.0]: https://github.com/fabriziocacicia/rekordbox-collection-manager/releases/tag/v0.20.0\n"
+    )
+
+    mock_commit = MagicMock()
+    mock_commit.message = "feat(gui): missing feature (#6)"
+    mock_commit.commit_type = "feat"
+    mock_commit.scope = "gui"
+    mock_commit.description = "missing feature (#6)"
+
+    with patch("scripts.desktop_version.get_desktop_tags", return_value=["v0.20.0"]), \
+         patch("scripts.desktop_version.get_commits_for_range", return_value=[mock_commit]), \
+         patch("scripts.desktop_version.categorize_commits", return_value={"Added": ["- **gui**: Missing feature (#6)"]}):
+        updated, notes = sync_changelog_for_release(
+            "0.21.0",
+            date_str="2026-11-20",
+            changelog_path=changelog,
+            dry_run=False,
+        )
+
+        assert updated is True
+        assert "Missing feature (#6)" in notes
+        assert "Existing maintenance note (#14)" in notes
+        content = changelog.read_text()
+        assert "## [0.21.0] - 2026-11-20" in content
+        assert "### Added\n\n- **gui**: Missing feature (#6)" in content
+        assert "### Maintenance\n\n- **app**: Existing maintenance note (#14)" in content
+
+
 def test_sync_changelog_for_release_dry_run(tmp_path):
     changelog = tmp_path / "CHANGELOG.md"
     initial_content = (

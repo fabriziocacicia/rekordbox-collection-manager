@@ -32,6 +32,7 @@ try:
         categorize_commits,
         get_commits_for_range,
         get_desktop_tags,
+        merge_notes_with_git_commits,
         rotate_changelog,
         run_git,
     )
@@ -43,6 +44,7 @@ except ImportError:
         categorize_commits,
         get_commits_for_range,
         get_desktop_tags,
+        merge_notes_with_git_commits,
         rotate_changelog,
         run_git,
     )
@@ -318,8 +320,9 @@ def sync_changelog_for_release(
     dry_run: bool = False,
 ) -> tuple[bool, str]:
     """
-    Ensure [Unreleased] is populated (auto-populating from desktop conventional commits if empty),
-    rotate CHANGELOG.md for new_version, and return (updated_bool, release_notes_markdown).
+    Ensure [Unreleased] is populated (auto-populating from desktop conventional commits if empty,
+    or merging missing commits from git history), rotate CHANGELOG.md for new_version,
+    and return (updated_bool, release_notes_markdown).
     """
     clean_ver = version.lstrip("v")
     if date_str is None:
@@ -327,37 +330,38 @@ def sync_changelog_for_release(
 
     unreleased_notes = extract_unreleased_notes(changelog_path=changelog_path)
 
-    # If unreleased notes are empty, auto-extract commits since last desktop tag
-    if not unreleased_notes and not dry_run and changelog_path.exists():
-        tags = get_desktop_tags(cwd=cwd)
-        if tags:
-            latest_tag = tags[-1]
-            commits = get_commits_for_range(f"{latest_tag}..HEAD", cwd=cwd)
-            categorized = categorize_commits(commits, target="desktop")
-            if categorized:
-                lines = []
-                for cat in CATEGORIES_ORDER:
-                    items = categorized.get(cat)
-                    if items:
-                        lines.append(f"### {cat}\n")
-                        for item in items:
-                            lines.append(item)
-                        lines.append("")
-                auto_body = "\n".join(lines).strip()
-                if auto_body:
-                    content = changelog_path.read_text(encoding="utf-8")
-                    unreleased_pattern = re.compile(
-                        r"(## \[Unreleased\][^\n]*\n)(?P<body>.*?)(?=\n## \[(?P<next_ver>\d+\.\d+(?:\.\d+)?)\])",
-                        re.DOTALL,
-                    )
-                    match = unreleased_pattern.search(content)
-                    if match:
-                        new_content = unreleased_pattern.sub(
-                            lambda m: f"{m.group(1)}\n{auto_body}\n",
-                            content,
-                            count=1,
-                        )
-                        changelog_path.write_text(new_content, encoding="utf-8")
+    # Query commits since last desktop tag to supplement or populate unreleased notes
+    git_categorized: dict[str, list[str]] = {}
+    tags = get_desktop_tags(cwd=cwd)
+    if tags:
+        latest_tag = tags[-1]
+        commits = get_commits_for_range(f"{latest_tag}..HEAD", cwd=cwd)
+        git_categorized = categorize_commits(commits, target="desktop")
+
+    merged_notes, added_bullets = merge_notes_with_git_commits(
+        existing_notes=unreleased_notes,
+        git_categorized=git_categorized,
+    )
+
+    if added_bullets:
+        print(f"ℹ️ Merged {len(added_bullets)} unreleased commit(s) from git history into release notes:")
+        for bullet in added_bullets:
+            print(f"   • {bullet}")
+
+    if not dry_run and changelog_path.exists() and merged_notes != unreleased_notes:
+        content = changelog_path.read_text(encoding="utf-8")
+        unreleased_pattern = re.compile(
+            r"(## \[Unreleased\][^\n]*\n)(?P<body>.*?)(?=\n## \[(?P<next_ver>\d+\.\d+(?:\.\d+)?)\])",
+            re.DOTALL,
+        )
+        match = unreleased_pattern.search(content)
+        if match:
+            new_content = unreleased_pattern.sub(
+                lambda m: f"{m.group(1)}\n{merged_notes}\n",
+                content,
+                count=1,
+            )
+            changelog_path.write_text(new_content, encoding="utf-8")
 
     # Rotate CHANGELOG.md
     updated = rotate_changelog(
@@ -370,25 +374,7 @@ def sync_changelog_for_release(
 
     release_notes = extract_release_notes(clean_ver, changelog_path=changelog_path)
     if not release_notes and dry_run:
-        if unreleased_notes:
-            release_notes = unreleased_notes
-        else:
-            tags = get_desktop_tags(cwd=cwd)
-            if tags:
-                latest_tag = tags[-1]
-                commits = get_commits_for_range(f"{latest_tag}..HEAD", cwd=cwd)
-                categorized = categorize_commits(commits, target="desktop")
-                lines = []
-                for cat in CATEGORIES_ORDER:
-                    items = categorized.get(cat)
-                    if items:
-                        lines.append(f"### {cat}\n")
-                        for item in items:
-                            lines.append(item)
-                        lines.append("")
-                release_notes = "\n".join(lines).strip()
-        if not release_notes:
-            release_notes = "- Routine updates and maintenance."
+        release_notes = merged_notes if merged_notes else "- Routine updates and maintenance."
 
     return updated, release_notes
 
