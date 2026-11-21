@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-11-21
+
 ### Added
 
 - **gui**: Add stores summary view and purchasable store filtering (#6)
@@ -16,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **release**: Automate desktop version bump, packaging, and GitHub release pipeline (#16)
 - **app**: Bundle standalone macOS .app with embedded Python dependencies (#14)
 - **changelog**: Establish Keep a Changelog and backfill desktop releases (#15)
+- **release**: Auto-merge unreleased git commits and enforce changelog hygiene (#18)
 
 ## [0.20.0] - 2026-11-18
 
@@ -362,7 +365,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Remove header sidebar toggle button and update info text font stack
 - Remove auto-extract dates feature and update tests
 
-[Unreleased]: https://github.com/fabriziocacicia/rekordbox-collection-manager/compare/v0.20.0...HEAD
+[Unreleased]: https://github.com/fabriziocacicia/rekordbox-collection-manager/compare/v0.21.0...HEAD
+[0.21.0]: https://github.com/fabriziocacicia/rekordbox-collection-manager/compare/v0.20.0...v0.21.0
 [0.20.0]: https://github.com/fabriziocacicia/rekordbox-collection-manager/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/fabriziocacicia/rekordbox-collection-manager/compare/v0.18.4...v0.19.0
 [0.18.4]: https://github.com/fabriziocacicia/rekordbox-collection-manager/compare/v0.18.3...v0.18.4
