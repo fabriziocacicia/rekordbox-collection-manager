@@ -563,6 +563,30 @@ class TestTrackReplacementDiffDialog(unittest.TestCase):
         dialog.diff_view._on_confirm_clicked()
         self.assertTrue(dialog.result() == 1 or dialog.resolved_metadata is not None)
 
+    def test_diff_dialog_defaults_to_trash_when_unspecified(self):
+        old_track = {
+            "id": "t1",
+            "title": "Old Track",
+            "artist": "Artist",
+            "file_path": "/music/old.mp3",
+        }
+        new_item = {
+            "file_path": "/music/new.aiff",
+            "file_name": "new.aiff",
+            "format_name": "AIFF",
+            "title": "New Track",
+            "artist": "Artist",
+        }
+        dialog = TrackReplacementDiffDialog(
+            engine=self.engine,
+            mode="file",
+            old_track=old_track,
+            new_item=new_item,
+            options={},
+        )
+        self.assertEqual(dialog.diff_view.old_file_combo.currentIndex(), 1)
+        self.assertEqual(dialog.get_options()["old_file_action"], "trash")
+
     def test_genre_bpm_key_not_ported_during_merge(self):
         # Target t2 initially has BPM=12400
         options = {

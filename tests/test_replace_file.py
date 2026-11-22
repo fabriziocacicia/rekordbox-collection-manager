@@ -256,6 +256,7 @@ class TestReplaceFileBackend(unittest.TestCase):
             "artwork_choice": "new",
             "artwork_source_path": art_src,
             "db_path": mock_db_path,
+            "old_file_action": "keep",
         }
         res_new = replace_track_audio_file(self.engine, "track-100", self.new_aiff_path, options=opts_new)
         with self.engine.connect() as conn:
@@ -279,6 +280,7 @@ class TestReplaceFileBackend(unittest.TestCase):
             "artwork_choice": "old",
             "artwork_source_path": art_src,
             "db_path": mock_db_path,
+            "old_file_action": "keep",
         }
         res_old = replace_track_audio_file(self.engine, "track-100", self.new_aiff_path, options=opts_old)
         with self.engine.connect() as conn:
@@ -296,6 +298,19 @@ class TestReplaceFileBackend(unittest.TestCase):
         self.assertTrue(res["success"])
         self.assertFalse(os.path.exists(self.old_mp3_path))
         self.assertTrue(os.path.exists(f"{self.old_mp3_path}.bak"))
+
+    @patch("rekordbox_collection_manager.replace_file.trash_file_macos")
+    def test_replace_track_default_action_is_trash(self, mock_trash):
+        """Verify that omitting old_file_action defaults to 'trash'."""
+        mock_trash.return_value = True
+        res = replace_track_audio_file(
+            self.engine,
+            "track-100",
+            self.new_aiff_path,
+        )
+        self.assertTrue(res["success"])
+        self.assertEqual(res["old_file"]["status"], "trashed")
+        mock_trash.assert_called_once_with(self.old_mp3_path)
 
     def test_resolve_exact_disk_path_unicode(self):
         """Verify resolve_exact_disk_path finds the exact on-disk normalization (NFC vs NFD)."""
@@ -457,6 +472,34 @@ class TestReplaceFileBackend(unittest.TestCase):
                 text("SELECT rb_local_deleted FROM djmdContent WHERE ID = 'track-100';")
             ).fetchone()
             self.assertEqual(src[0], 1)
+
+    @patch("rekordbox_collection_manager.replace_file.trash_file_macos")
+    def test_merge_imported_tracks_default_action_is_trash(self, mock_trash):
+        """Verify that merge_imported_tracks defaults old_file_action to 'trash'."""
+        mock_trash.return_value = True
+        with self.engine.begin() as conn:
+            conn.execute(
+                text("""
+                    INSERT INTO djmdContent (
+                        ID, FolderPath, FileNameL, FileNameS, Title, Length, BitRate, BitDepth,
+                        SampleRate, FileSize, FileType, DJPlayCount, StockDate, rb_local_deleted,
+                        created_at, updated_at
+                    ) VALUES (
+                        'track-201', '/path/to/imported2.aiff', 'imported2.aiff', '', 'Target Track (AIFF)',
+                        240, 1411, 16, 44100, 4096, 12, 0, '2026-09-20', 0,
+                        '2026-09-20 10:00:00', '2026-09-20 10:00:00'
+                    );
+                """)
+            )
+
+        res = merge_imported_tracks(
+            self.engine,
+            source_content_id="track-100",
+            target_content_id="track-201",
+        )
+        self.assertTrue(res["success"])
+        self.assertEqual(res["old_file_handled"], "trashed")
+        mock_trash.assert_called_once_with(self.old_mp3_path)
 
     def test_replace_track_rejects_unsupported_source(self):
         """Verify that replacing a non-MP3 and non-AIFF track (e.g. WAV or FLAC) raises ValueError."""
@@ -1017,6 +1060,19 @@ class TestReplaceFileGUI(unittest.TestCase):
 
         for attr in ("mode1_search_timer", "merge_src_search_timer", "merge_tgt_search_timer"):
             self.assertFalse(getattr(self.view, attr).isActive())
+
+    def test_replace_file_view_default_action_is_trash(self):
+        """Verify that ReplaceFileView defaults old audio file action to macOS Trash."""
+        self.assertEqual(self.view.old_file_combo.currentIndex(), 1)
+        self.assertIn("macOS Trash", self.view.old_file_combo.currentText())
+
+    def test_replace_file_cli_parser_default_action_is_trash(self):
+        """Verify that CLI parser defaults --action to 'trash'."""
+        from rekordbox_collection_manager.replace_file import build_parser
+
+        parser = build_parser()
+        args = parser.parse_args(["--track-id", "123", "--new-file", "/path/to/file.aiff"])
+        self.assertEqual(args.action, "trash")
 
 
 if __name__ == "__main__":

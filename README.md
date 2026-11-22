@@ -397,12 +397,12 @@ A specialized utility to replace or upgrade collection tracks (upgrading an MP3 
 
 ### CLI Usage
 ```bash
-# Upgrade a specific track by ID with a new lossless file:
-uv run replace-file --track-id 12345 --new-file "/path/to/track.aiff" --action keep
+# Upgrade a specific track by ID with a new lossless file (defaults to moving old file to macOS Trash):
+uv run replace-file --track-id 12345 --new-file "/path/to/track.aiff"
 
 # Actions for the old audio file:
+#   --action trash    (default: move old file to macOS Trash)
 #   --action keep     (leave old file intact)
-#   --action trash    (move old file to macOS Trash)
 #   --action backup   (rename old file in place with a .bak suffix)
 ```
 

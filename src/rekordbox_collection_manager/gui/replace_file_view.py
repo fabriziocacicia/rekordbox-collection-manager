@@ -646,6 +646,7 @@ class ReplaceFileView(QWidget):
             "Move old file to macOS Trash (Clean space)",
             "Rename old file to .bak (Backup)",
         ])
+        self.old_file_combo.setCurrentIndex(1)
         action_row.addWidget(self.old_file_combo, stretch=1)
         opt_layout.addLayout(action_row)
 
@@ -1568,7 +1569,7 @@ class ReplaceFileView(QWidget):
         full_tgt = fetch_track_full_info(self.engine, tgt_id) or self.merge_target_track
 
         options = {
-            "old_file_action": "keep",
+            "old_file_action": "trash",
         }
 
         diff_dialog = TrackReplacementDiffDialog(
