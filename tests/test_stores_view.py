@@ -10,6 +10,7 @@ from sqlalchemy import create_engine
 from rekordbox_collection_manager.gui.stores_view import (
     StoreCardWidget,
     StoreMetricBox,
+    StoreRatioBar,
     StoresView,
 )
 from rekordbox_collection_manager.gui.workers import StoresSummaryWorker
@@ -52,6 +53,9 @@ class TestStoresView(unittest.TestCase):
         self.assertEqual(card.total_badge.text(), "19 tracks")
         self.assertEqual(card.box_purchased.count_label.text(), "15")
         self.assertEqual(card.box_to_buy.count_label.text(), "4")
+        self.assertEqual(card.ratio_bar.purchased, 15)
+        self.assertEqual(card.ratio_bar.to_buy, 4)
+        self.assertIn("79%", card.ratio_bar.toolTip())
 
         # Test signals
         received = []
@@ -90,6 +94,33 @@ class TestStoresView(unittest.TestCase):
         card.set_counts(5, 0)
         card.box_purchased.mousePressEvent(press_event)
         self.assertEqual(received, ["clicked"])
+
+    def test_store_ratio_bar(self):
+        bar = StoreRatioBar()
+        self.assertEqual(bar.purchased, 0)
+        self.assertEqual(bar.to_buy, 0)
+
+        # Zero count safe handling (no division by zero)
+        bar.set_counts(0, 0)
+        self.assertEqual(bar.purchased, 0)
+        self.assertEqual(bar.to_buy, 0)
+        self.assertIn("0%", bar.toolTip())
+
+        # Proportional ratio calculation
+        bar.set_counts(10, 10)
+        self.assertEqual(bar.purchased, 10)
+        self.assertEqual(bar.to_buy, 10)
+        self.assertIn("50%", bar.toolTip())
+        self.assertIn("Purchased: 10 (50%) • To Buy: 10", bar.toolTip())
+
+        # 100% purchased
+        bar.set_counts(25, 0)
+        self.assertIn("100%", bar.toolTip())
+
+        # Negative clamping
+        bar.set_counts(-5, -3)
+        self.assertEqual(bar.purchased, 0)
+        self.assertEqual(bar.to_buy, 0)
 
     def test_stores_view_on_counts_ready(self):
         mock_counts = {
