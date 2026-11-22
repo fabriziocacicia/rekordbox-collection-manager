@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Any, Dict, Optional
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QCursor
+from PySide6.QtGui import QColor, QCursor, QPainter, QPainterPath
 from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
@@ -53,6 +53,59 @@ STORE_ICONS: Dict[str, str] = {
 }
 
 
+class StoreRatioBar(QWidget):
+    """Custom-painted ratio bar depicting purchased vs to-buy track proportion."""
+
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.setFixedHeight(6)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.purchased: int = 0
+        self.to_buy: int = 0
+
+    def set_counts(self, purchased: int, to_buy: int) -> None:
+        self.purchased = max(0, purchased)
+        self.to_buy = max(0, to_buy)
+        total = self.purchased + self.to_buy
+        pct_str = f"{int(round((self.purchased / total) * 100))}%" if total > 0 else "0%"
+        self.setToolTip(f"Purchased: {self.purchased} ({pct_str}) • To Buy: {self.to_buy}")
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        rect = self.rect()
+        total = self.purchased + self.to_buy
+        radius = rect.height() / 2.0
+
+        # Draw empty background track
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(COLOR_BORDER))
+        painter.drawRoundedRect(rect, radius, radius)
+
+        if total <= 0:
+            return
+
+        w = rect.width()
+        p_ratio = self.purchased / total
+        p_w = w * p_ratio
+
+        # Clip path so rounded caps are preserved across segments
+        path = QPainterPath()
+        path.addRoundedRect(rect, radius, radius)
+        painter.setClipPath(path)
+
+        if self.purchased > 0:
+            painter.setBrush(QColor(COLOR_BLUE))
+            painter.drawRect(0, 0, int(round(p_w)) if self.to_buy > 0 else w, rect.height())
+
+        if self.to_buy > 0:
+            painter.setBrush(QColor(COLOR_AMBER))
+            x_start = int(round(p_w)) if self.purchased > 0 else 0
+            painter.drawRect(x_start, 0, w - x_start, rect.height())
+
+
 class StoreMetricBox(QFrame):
     """Clickable metric block inside a store card (e.g. Purchased or To Buy)."""
 
@@ -76,19 +129,19 @@ class StoreMetricBox(QFrame):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 12, 14, 12)
-        layout.setSpacing(4)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(2)
 
         header_layout = QHBoxLayout()
         header_layout.setSpacing(6)
 
         self.icon_label = QLabel(icon)
-        self.icon_label.setStyleSheet("font-size: 13px;")
+        self.icon_label.setStyleSheet("font-size: 12px;")
         header_layout.addWidget(self.icon_label)
 
         self.title_label = QLabel(title.upper())
         self.title_label.setStyleSheet(
-            f"color: {COLOR_TEXT_MUTED}; font-size: 10px; font-weight: 700; letter-spacing: 0.6px;"
+            f"color: {COLOR_TEXT_MUTED}; font-size: 9px; font-weight: 700; letter-spacing: 0.5px;"
         )
         header_layout.addWidget(self.title_label)
         header_layout.addStretch()
@@ -97,13 +150,13 @@ class StoreMetricBox(QFrame):
 
         self.count_label = QLabel("0")
         self.count_label.setStyleSheet(
-            f"color: {accent_color}; font-size: 26px; font-weight: 800; padding-top: 2px;"
+            f"color: {accent_color}; font-size: 22px; font-weight: 800; padding-top: 1px;"
         )
         layout.addWidget(self.count_label)
 
         self.action_label = QLabel("Click to view tracks →")
         self.action_label.setStyleSheet(
-            f"color: {COLOR_TEXT_SECONDARY}; font-size: 11px; font-weight: 500;"
+            f"color: {COLOR_TEXT_SECONDARY}; font-size: 10px; font-weight: 500;"
         )
         layout.addWidget(self.action_label)
 
@@ -165,6 +218,7 @@ class StoreCardWidget(QFrame):
         self.purchased_count = 0
         self.to_buy_count = 0
         self.setObjectName("storeCard")
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
         self.setStyleSheet(
             f"QFrame#storeCard {{"
@@ -180,31 +234,36 @@ class StoreCardWidget(QFrame):
 
     def _init_ui(self) -> None:
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(12)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(10)
 
         # 1. Card Header
         header_layout = QHBoxLayout()
-        header_layout.setSpacing(10)
+        header_layout.setSpacing(8)
 
         title_lbl = QLabel(f"{self.icon}  {self.store_name}")
         title_lbl.setStyleSheet(
-            f"color: {COLOR_TEXT_PRIMARY}; font-size: 16px; font-weight: 700;"
+            f"color: {COLOR_TEXT_PRIMARY}; font-size: 15px; font-weight: 700;"
         )
         header_layout.addWidget(title_lbl)
         header_layout.addStretch()
 
         self.total_badge = QLabel("0 tracks")
+        self.total_badge.setFixedHeight(22)
         self.total_badge.setStyleSheet(
             f"background-color: {COLOR_BG_INPUT}; color: {COLOR_TEXT_SECONDARY}; "
-            f"border: 1px solid {COLOR_BORDER}; border-radius: 4px; padding: 2px 8px; "
+            f"border: 1px solid {COLOR_BORDER}; border-radius: 11px; padding: 2px 10px; "
             f"font-size: 11px; font-weight: 600;"
         )
         header_layout.addWidget(self.total_badge)
 
         layout.addLayout(header_layout)
 
-        # 2. Metric Boxes
+        # 2. Ratio Bar
+        self.ratio_bar = StoreRatioBar(self)
+        layout.addWidget(self.ratio_bar)
+
+        # 3. Metric Boxes
         metrics_layout = QHBoxLayout()
         metrics_layout.setSpacing(10)
 
@@ -245,6 +304,7 @@ class StoreCardWidget(QFrame):
         self.to_buy_count = max(0, to_buy)
         self.box_purchased.set_count(self.purchased_count)
         self.box_to_buy.set_count(self.to_buy_count)
+        self.ratio_bar.set_counts(self.purchased_count, self.to_buy_count)
 
         total = self.purchased_count + self.to_buy_count
         unit = "track" if total == 1 else "tracks"
@@ -284,7 +344,7 @@ class StoresView(QWidget):
         title_col.addWidget(title)
 
         subtitle = QLabel(
-            "Overview of purchased tracks and planned purchases (≥3 plays) by store. "
+            "Overview of purchased tracks and planned purchases by store. "
             "Click any counter to view and manage filtered tracks."
         )
         subtitle.setStyleSheet(
@@ -317,12 +377,16 @@ class StoresView(QWidget):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setStyleSheet(f"background-color: transparent;")
+        scroll.setStyleSheet("background-color: transparent;")
 
         container = QWidget()
         container.setStyleSheet("background-color: transparent;")
-        grid = QGridLayout(container)
-        grid.setContentsMargins(0, 8, 0, 8)
+        container_layout = QVBoxLayout(container)
+        container_layout.setContentsMargins(0, 4, 0, 4)
+        container_layout.setSpacing(16)
+
+        grid = QGridLayout()
+        grid.setContentsMargins(0, 0, 0, 0)
         grid.setSpacing(16)
 
         # Position cards in 2x2 grid
@@ -335,10 +399,11 @@ class StoresView(QWidget):
             grid.addWidget(card, row, col)
             self.cards[store_name] = card
 
-        grid.setRowStretch(0, 1)
-        grid.setRowStretch(1, 1)
         grid.setColumnStretch(0, 1)
         grid.setColumnStretch(1, 1)
+
+        container_layout.addLayout(grid)
+        container_layout.addStretch(1)
 
         scroll.setWidget(container)
         root_layout.addWidget(scroll, stretch=1)

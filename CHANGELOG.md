@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **gui**: Compact Music Stores card layout with horizontal track badges and purchase ratio bars
 - **replace**: Default old audio file operation to macOS Trash on file replacement and track merge (#7)
 
 ### Maintenance
