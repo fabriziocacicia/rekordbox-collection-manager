@@ -237,7 +237,7 @@ class CamelotWheelWidget(QWidget):
             painter.drawText(
                 QRectF(center.x() - r_center_hub, center.y() + 10, r_center_hub * 2, 15),
                 Qt.AlignmentFlag.AlignCenter,
-                f"{s_hover.catalog_count} brani",
+                f"{s_hover.catalog_count} tracks",
             )
         else:
             painter.drawText(
@@ -252,7 +252,7 @@ class CamelotWheelWidget(QWidget):
             painter.drawText(
                 QRectF(center.x() - r_center_hub, center.y() + 1, r_center_hub * 2, 14),
                 Qt.AlignmentFlag.AlignCenter,
-                f"{self.total_catalog_tracks} brani tot.",
+                f"{self.total_catalog_tracks} total tracks",
             )
 
         # 3. Draw Density Scale Legend Bar at Bottom
@@ -377,9 +377,9 @@ class CamelotWheelWidget(QWidget):
         font_leg.setPointSize(8)
         painter.setFont(font_leg)
         painter.setPen(QColor(COLOR_TEXT_MUTED))
-        painter.drawText(QRectF(leg_x - 70, leg_y - 2, 62, 14), Qt.AlignmentFlag.AlignRight, "0 brani")
+        painter.drawText(QRectF(leg_x - 70, leg_y - 2, 62, 14), Qt.AlignmentFlag.AlignRight, "0 tracks")
         painter.drawText(QRectF(leg_x + leg_w + 8, leg_y - 2, 85, 14), Qt.AlignmentFlag.AlignLeft, f"Max ({self.max_catalog_count})")
-        painter.drawText(QRectF(leg_x, leg_y - 14, leg_w, 12), Qt.AlignmentFlag.AlignCenter, "Densità Catalogo (Peso brani)")
+        painter.drawText(QRectF(leg_x, leg_y - 14, leg_w, 12), Qt.AlignmentFlag.AlignCenter, "Catalog Density (Track count)")
 
     def _get_slice_at_pos(self, pos: QPointF) -> Optional[str]:
         """Hit test polar position to identify Camelot sector."""
@@ -425,20 +425,20 @@ class CamelotWheelWidget(QWidget):
             if self.hovered_code and self.hovered_code in self.slices:
                 s = self.slices[self.hovered_code]
                 imbalance_str = (
-                    f"<font color='{COLOR_AMBER}'>+{s.imbalance_pct}% (Sovra-selezionata)</font>"
+                    f"<font color='{COLOR_AMBER}'>+{s.imbalance_pct}% (Over-selected)</font>"
                     if s.imbalance_pct > 1.5
                     else (
-                        f"<font color='{COLOR_RED}'>{s.imbalance_pct}% (Buco di catalogo)</font>"
+                        f"<font color='{COLOR_RED}'>{s.imbalance_pct}% (Catalog gap)</font>"
                         if s.imbalance_pct < -1.5
-                        else "<font color='#88ffaa'>Bilanciata</font>"
+                        else "<font color='#88ffaa'>Balanced</font>"
                     )
                 )
                 tip = (
-                    f"<b>{s.code} ({s.traditional})</b> — Tonalità {'Minore' if s.ring == 'minor' else 'Maggiore'}<br/>"
-                    f"• <b>Catalogo:</b> <b>{s.catalog_count} brani</b> ({s.catalog_share_pct}%)<br/>"
-                    f"• <b>Esecuzioni Live:</b> {s.live_plays_count} play ({s.live_share_pct}%)<br/>"
-                    f"• <b>Bilanciamento:</b> {imbalance_str}<br/>"
-                    f"<i>Clicca per filtrare i brani in questa tonalità</i>"
+                    f"<b>{s.code} ({s.traditional})</b> — {'Minor' if s.ring == 'minor' else 'Major'} Key<br/>"
+                    f"• <b>Catalog:</b> <b>{s.catalog_count} tracks</b> ({s.catalog_share_pct}%)<br/>"
+                    f"• <b>Live Plays:</b> {s.live_plays_count} plays ({s.live_share_pct}%)<br/>"
+                    f"• <b>Balance:</b> {imbalance_str}<br/>"
+                    f"<i>Click to filter tracks in this key</i>"
                 )
                 pos_pt = event.position().toPoint()
                 QToolTip.showText(self.mapToGlobal(pos_pt), tip, self)
