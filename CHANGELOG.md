@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **analytics**: Localize desktop Analytics dashboard, status bar notifications, chart widgets, tooltips, and export dialogs into English for consistency with application language standards
+
 ## [0.23.0] - 2026-11-23
 
 ### Added

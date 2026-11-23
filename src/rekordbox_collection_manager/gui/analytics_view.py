@@ -148,7 +148,7 @@ class AnalyticsView(QWidget):
         self._interactive_refresh: bool = False
 
         self.current_filtered_tracks: List[Dict[str, Any]] = []
-        self._active_filter_label: str = "Tutte le tracce"
+        self._active_filter_label: str = "All Tracks"
 
         self._init_ui()
 
@@ -170,12 +170,12 @@ class AnalyticsView(QWidget):
         title_lbl.setStyleSheet(f"color: {COLOR_TEXT_PRIMARY}; font-size: 18px; font-weight: 700; letter-spacing: -0.3px;")
         title_col.addWidget(title_lbl)
 
-        sub_lbl = QLabel("Analisi deterministica ad eventi: Crate Pruning, Distribuzione Armonica, DNA delle Serate e Sequenze")
+        sub_lbl = QLabel("Deterministic event analysis: Crate Pruning, Harmonic Distribution, Gig DNA & Transitions")
         sub_lbl.setStyleSheet(f"color: {COLOR_TEXT_MUTED}; font-size: 11px;")
         title_col.addWidget(sub_lbl)
         header_row.addLayout(title_col, stretch=1)
 
-        self.btn_refresh = QPushButton("🔄 Ricalcola Metriche")
+        self.btn_refresh = QPushButton("🔄 Recalculate Metrics")
         self.btn_refresh.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_refresh.setStyleSheet(f"""
             QPushButton {{
@@ -204,43 +204,43 @@ class AnalyticsView(QWidget):
         self.cards_row.setSpacing(10)
 
         self.card_dead_weight = KPICard(
-            "Dead Weight", "0", COLOR_RED, "Zavorra candidata all'eliminazione",
-            tooltip="Tracce mai suonate dopo 5+ set o non suonate da 6+ set consecutivi",
+            "Dead Weight", "0", COLOR_RED, "Prune candidates for removal",
+            tooltip="Tracks never played after 5+ sets or unplayed for 6+ consecutive sets",
         )
         self.card_dead_weight.clicked.connect(lambda: self._filter_by_cluster("Dead Weight (Zavorra)"))
         self.cards_row.addWidget(self.card_dead_weight)
 
         self.card_peak = KPICard(
-            "Peak Bangers", "0", COLOR_GREEN, "Cardini stabili dei set (Pick >= 60%)",
-            tooltip="Tracce cardine ad altissima frequenza di selezione",
+            "Peak Bangers", "0", COLOR_GREEN, "Reliable set staples (Pick >= 60%)",
+            tooltip="Core tracks with very high selection frequency",
         )
         self.card_peak.clicked.connect(lambda: self._filter_by_cluster("Peak Bangers"))
         self.cards_row.addWidget(self.card_peak)
 
         self.card_core = KPICard(
-            "Core Rotation", "0", COLOR_BLUE, "Repertorio affidabile (25-60%)",
-            tooltip="Tracce stabili in rotazione costante",
+            "Core Rotation", "0", COLOR_BLUE, "Reliable rotation (25-60%)",
+            tooltip="Consistent repertoire in steady rotation",
         )
         self.card_core.clicked.connect(lambda: self._filter_by_cluster("Core Rotation"))
         self.cards_row.addWidget(self.card_core)
 
         self.card_untested = KPICard(
-            "Untested", "0", COLOR_AMBER, "Novità in attesa di test (protette)",
-            tooltip="Nuovi acquisti esposti a <= 2 serate: rigorosamente da proteggere",
+            "Untested", "0", COLOR_AMBER, "New additions awaiting test (protected)",
+            tooltip="Recent additions exposed to <= 2 gigs: strictly protected",
         )
         self.card_untested.clicked.connect(lambda: self._filter_by_cluster("In Incubazione / Untested"))
         self.cards_row.addWidget(self.card_untested)
 
         self.card_burnout = KPICard(
-            "Burnout", "0", "#f97316", "Tracce sature (non suonate da 8+ set)",
-            tooltip="Tracce con alto play count storico ma trascurate negli ultimi set",
+            "Burnout", "0", "#f97316", "Saturated tracks (unplayed for 8+ sets)",
+            tooltip="Tracks with high historical play count but neglected in recent sets",
         )
         self.card_burnout.clicked.connect(lambda: self._filter_by_cluster("Burnout Tracks"))
         self.cards_row.addWidget(self.card_burnout)
 
         self.card_sessions = KPICard(
-            "Live Sets", "0", "#a855f7", "Sessioni valide analizzate",
-            tooltip="History con durata >= 20 min e >= 5 tracce",
+            "Live Sets", "0", "#a855f7", "Valid sessions analyzed",
+            tooltip="History sessions with duration >= 20 min and >= 5 tracks",
         )
         self.cards_row.addWidget(self.card_sessions)
 
@@ -270,19 +270,19 @@ class AnalyticsView(QWidget):
                 "id": 0,
                 "label": "📦 Crate Health Matrix",
                 "icon": "📦",
-                "short_desc": "Matrice di Salute: incrocia l'esposizione alle serate col Pick Rate per isolare le zavorre (Death Zone) dai pezzi cardine.",
+                "short_desc": "Health Matrix: crosses gig exposure with Pick Rate to isolate dead weight (Death Zone) from set staples.",
                 "rich_tooltip": (
                     "<div style='max-width: 420px; font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif; line-height: 1.4;'>"
-                    "<b style='font-size: 13px; color: #38bdf8;'>📦 Crate Health Matrix (Matrice di Salute & Spurgo)</b><br/><br/>"
-                    "<b>Cosa stai guardando:</b><br/>"
-                    "Distribuzione di tutti i brani della libreria incrociando due dimensioni chiave:<br/>"
-                    "• <b>Asse X (Esposizione):</b> A quante date/serate live il brano era presente in collezione.<br/>"
-                    "• <b>Asse Y (Pick Rate %):</b> In quale percentuale di quelle serate lo hai effettivamente suonato.<br/><br/>"
-                    "<b>Come interpretare le zone:</b><br/>"
-                    "• <b style='color: #ef4444;'>💀 Death Zone (in basso a destra):</b> Brani portati a 5+ serate ma mai suonati, o ignorati da oltre 6 serate consecutive. Sono le vere <i>zavorre</i> da eliminare.<br/>"
-                    "• <b style='color: #10b981;'>⭐ Top Performers (in alto a destra):</b> Cavalli di battaglia ad altissima rotazione e affidabilità.<br/>"
-                    "• <b style='color: #f59e0b;'>🌱 In Incubazione (in basso a sinistra):</b> Nuovi acquisti esposti a &le; 2 serate, protetti e da testare.<br/><br/>"
-                    "<i style='color: #94a3b8;'>💡 Clicca su una cella per caricare i brani ed esportare la Crate di Spurgo (M3U8, XML o Playlist Rekordbox).</i>"
+                    "<b style='font-size: 13px; color: #38bdf8;'>📦 Crate Health Matrix (Health & Pruning Matrix)</b><br/><br/>"
+                    "<b>What you are viewing:</b><br/>"
+                    "Distribution of all library tracks crossing two key dimensions:<br/>"
+                    "• <b>X Axis (Exposure):</b> How many live dates/gigs the track was present in your collection.<br/>"
+                    "• <b>Y Axis (Pick Rate %):</b> In what percentage of those gigs you actually played it.<br/><br/>"
+                    "<b>How to interpret the zones:</b><br/>"
+                    "• <b style='color: #ef4444;'>💀 Death Zone (bottom-right):</b> Tracks brought to 5+ gigs but never played, or ignored for over 6 consecutive gigs. These are prime <i>dead weight</i> candidates for pruning.<br/>"
+                    "• <b style='color: #10b981;'>⭐ Top Performers (top-right):</b> Core workhorses with high rotation and reliability.<br/>"
+                    "• <b style='color: #f59e0b;'>🌱 In Incubation (bottom-left):</b> New additions exposed to &le; 2 gigs, protected and awaiting test.<br/><br/>"
+                    "<i style='color: #94a3b8;'>💡 Click a cell to load its tracks and export the Prune Crate (M3U8, XML, or Rekordbox Playlist).</i>"
                     "</div>"
                 ),
             },
@@ -290,18 +290,18 @@ class AnalyticsView(QWidget):
                 "id": 1,
                 "label": "🎡 Camelot Wheel",
                 "icon": "🎡",
-                "short_desc": "Ruota Armonica: confronta la densità di tracce in archivio con l'effettivo spazio concesso nei tuoi live set.",
+                "short_desc": "Harmonic Wheel: compares catalog track density against actual airtime in your live sets.",
                 "rich_tooltip": (
                     "<div style='max-width: 420px; font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif; line-height: 1.4;'>"
-                    "<b style='font-size: 13px; color: #38bdf8;'>🎡 Camelot Wheel (Bilanciamento Armonico)</b><br/><br/>"
-                    "<b>Cosa stai guardando:</b><br/>"
-                    "Ruota armonica polare a 24 spicchi: anello interno per le tonalità Minori (1A–12A), anello esterno per le Maggiori (1B–12B).<br/><br/>"
-                    "<b>Come interpretare i dati:</b><br/>"
-                    "• <b>Colori Termici:</b> Densità dei brani posseduti (dal blu scuro = poche tracce, all'oro fino al rosso corallo = le tonalità più ricche).<br/>"
-                    "• <b>Numerino centrale:</b> Conteggio esatto dei brani presenti in collezione per quella tonalità.<br/>"
-                    "• <b>Bordo azzurro esterno:</b> Quota reale di brani suonati nei tuoi live set in quella chiave.<br/>"
-                    "• <b>Hub centrale:</b> Statistiche sul bilanciamento armonico globale e tonalità dominante.<br/><br/>"
-                    "<i style='color: #94a3b8;'>💡 Clicca su uno spicchio per filtrare ed esaminare tutte le tracce di quella tonalità.</i>"
+                    "<b style='font-size: 13px; color: #38bdf8;'>🎡 Camelot Wheel (Harmonic Balance)</b><br/><br/>"
+                    "<b>What you are viewing:</b><br/>"
+                    "24-spoke polar harmonic wheel: inner ring for Minor keys (1A–12A), outer ring for Major keys (1B–12B).<br/><br/>"
+                    "<b>How to interpret data:</b><br/>"
+                    "• <b>Thermal Colors:</b> Owned track density (from dark blue = few tracks, through gold up to coral red = richest keys).<br/>"
+                    "• <b>Center Number:</b> Exact count of tracks in collection for that key.<br/>"
+                    "• <b>Cyan Outer Rim:</b> Actual share of tracks played in your live sets in that key.<br/>"
+                    "• <b>Center Hub:</b> Statistics on global harmonic balance and dominant key.<br/><br/>"
+                    "<i style='color: #94a3b8;'>💡 Click a slice to filter and inspect all tracks in that key.</i>"
                     "</div>"
                 ),
             },
@@ -309,19 +309,19 @@ class AnalyticsView(QWidget):
                 "id": 2,
                 "label": "🧬 Set Turnover & DNA",
                 "icon": "🧬",
-                "short_desc": "Turnover & DNA: ricambio di scaletta, freschezza e classificazione automatica degli archetipi di serata.",
+                "short_desc": "Turnover & DNA: setlist rotation, freshness, and automatic gig archetype classification.",
                 "rich_tooltip": (
                     "<div style='max-width: 420px; font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif; line-height: 1.4;'>"
-                    "<b style='font-size: 13px; color: #38bdf8;'>🧬 Set Turnover & DNA (Carta d'Identità dei Set)</b><br/><br/>"
-                    "<b>Cosa stai guardando:</b><br/>"
-                    "Grafico a barre cumulative al 100% che analizza la scaletta di ogni tua serata in ordine cronologico da sinistra a destra.<br/><br/>"
-                    "<b>Come interpretare i dati:</b><br/>"
-                    "• <b>🏷️ Archetipi Automatici (Badge sopra ogni colonna):</b> Classificazione istantanea del profilo del set (es. 🚀 Prime-Time, 🧪 Testing Lab, 🔍 Digger, 🔁 Fotocopia, ⚖️ Equilibrato).<br/>"
-                    "• <b>3 Lenti di analisi:</b><br/>"
-                    "  1. <i>🧬 Cluster di Performance:</i> Scompone il set tra Hit, Rotazione, Novità assolute, Deep Cuts e brani sovraesposti a quel tempo.<br/>"
-                    "  2. <i>⏳ Turnover Temporale:</i> Misura l'ingresso di brani mai sentiti prima (New Entries), continuità recente e ripescaggi.<br/>"
-                    "  3. <i>🔁 Riciclo dal Set Precedente:</i> Quante tracce hai replicato identiche dal set subito prima.<br/><br/>"
-                    "<i style='color: #94a3b8;'>💡 Clicca su una barra o su un segmento per isolare esattamente quei brani nella tabella.</i>"
+                    "<b style='font-size: 13px; color: #38bdf8;'>🧬 Set Turnover & DNA (Set Identity Card)</b><br/><br/>"
+                    "<b>What you are viewing:</b><br/>"
+                    "100% stacked bar chart analyzing the tracklist of each gig in chronological order from left to right.<br/><br/>"
+                    "<b>How to interpret data:</b><br/>"
+                    "• <b>🏷️ Automatic Archetypes (Badge above each column):</b> Instant classification of the set profile (e.g. 🚀 Prime-Time, 🧪 Testing Lab, 🔍 Digger, 🔁 Duplicate, ⚖️ Balanced).<br/>"
+                    "• <b>3 Analysis Lenses:</b><br/>"
+                    "  1. <i>🧬 Performance Clusters:</i> Deconstructs set across Hits, Rotation, Brand-new tracks, Deep Cuts, and overexposed tracks at that time.<br/>"
+                    "  2. <i>⏳ Temporal Turnover:</i> Measures influx of brand-new tracks (New Entries), recent continuity, and catalog deep cuts.<br/>"
+                    "  3. <i>🔁 Previous Set Retention:</i> How many tracks were repeated identically from the immediate prior gig.<br/><br/>"
+                    "<i style='color: #94a3b8;'>💡 Click a bar or segment to isolate those exact tracks in the table.</i>"
                     "</div>"
                 ),
             },
@@ -329,17 +329,17 @@ class AnalyticsView(QWidget):
                 "id": 3,
                 "label": "📉 Survival Decay",
                 "icon": "📉",
-                "short_desc": "Curva di Decadimento: evidenzia la soglia di non ritorno oltre la quale i brani non suonati finiscono dimenticati.",
+                "short_desc": "Decay Curve: highlights the point of no return beyond which unplayed tracks end up forgotten.",
                 "rich_tooltip": (
                     "<div style='max-width: 420px; font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif; line-height: 1.4;'>"
-                    "<b style='font-size: 13px; color: #38bdf8;'>📉 Survival Decay (Curva di Decadimento Kaplan-Meier)</b><br/><br/>"
-                    "<b>Cosa stai guardando:</b><br/>"
-                    "Traccia cosa succede ai brani acquistati man mano che passano le serate live: quale percentuale rimane ancora a ZERO play dopo 1, 2, 3, 5, 10 set dalla data di aggiunta.<br/><br/>"
-                    "<b>Come interpretare la curva:</b><br/>"
-                    "• <b>Discesa a gradini:</b> Parte dal 100% (tutti i nuovi acquisti partono a zero play) e scende man mano che i brani vengono 'battezzati' nei tuoi set.<br/>"
-                    "• <b style='color: #f59e0b;'>⚠️ Soglia di Non Ritorno (Linea tratteggiata ambra):</b> È il punto matematico in cui la curva si appiattisce. Se un brano non viene suonato entro le prime 4 serate, la probabilità che venga mai suonato in futuro crolla vicino allo zero.<br/>"
-                    "• <b>A cosa serve:</b> Identificare gli acquisti d'impulso finiti nel dimenticatoio prima che diventino zavorre intoccabili.<br/><br/>"
-                    "<i style='color: #94a3b8;'>💡 Clicca su un gradino per visualizzare le tracce ancora a zero play a quel set.</i>"
+                    "<b style='font-size: 13px; color: #38bdf8;'>📉 Survival Decay (Kaplan-Meier Decay Curve)</b><br/><br/>"
+                    "<b>What you are viewing:</b><br/>"
+                    "Tracks what happens to purchased tracks as live gigs pass: what percentage remains at ZERO plays after 1, 2, 3, 5, 10 sets from date added.<br/><br/>"
+                    "<b>How to interpret the curve:</b><br/>"
+                    "• <b>Stepwise descent:</b> Starts at 100% (all new additions start at zero plays) and descends as tracks get 'baptized' in your sets.<br/>"
+                    "• <b style='color: #f59e0b;'>⚠️ Point of No Return (dashed amber line):</b> Mathematical point where the curve flattens out. If a track is not played within the first 4 gigs, the likelihood of ever being played plunges close to zero.<br/>"
+                    "• <b>Purpose:</b> Spot impulse purchases gathering dust before they turn into immovable dead weight.<br/><br/>"
+                    "<i style='color: #94a3b8;'>💡 Click a step to view tracks still at zero plays by that gig.</i>"
                     "</div>"
                 ),
             },
@@ -347,21 +347,21 @@ class AnalyticsView(QWidget):
                 "id": 4,
                 "label": "🕸️ Transitions & Combos",
                 "icon": "🕸️",
-                "short_desc": "Grafo delle Transizioni: sequenze suonate consecutivamente (A ➔ B) in almeno 2 serate distinte, rivelando le tue abitudini di mixaggio e combo fisse.",
+                "short_desc": "Transition Graph: sequences played consecutively (A ➔ B) across at least 2 distinct gigs, revealing mixing habits and staple combos.",
                 "rich_tooltip": (
                     "<div style='max-width: 440px; font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif; line-height: 1.45;'>"
-                    "<b style='font-size: 13px; color: #38bdf8;'>🕸️ Transitions & Combos (Grafo delle Sequenze Abituali)</b><br/><br/>"
-                    "<b>Cosa stai guardando:</b><br/>"
-                    "Mappa orientata delle transizioni e delle 'combo automatiche' tra brani emerse dalle tue serate storiche.<br/><br/>"
-                    "<b>Criteri per cui una Combo compare nel grafo:</b><br/>"
-                    "• <b>1. Successione Immediata (A ➔ B):</b> La traccia B deve essere stata suonata <i>subito dopo</i> la traccia A nella scaletta (transizione diretta, TrackNo consecutivo).<br/>"
-                    "• <b>2. Soglia di Frequenza (&ge; 2 Serate distinte):</b> La stessa identica sequenza deve ripetersi in almeno <b>2 serate live diverse</b>. I passaggi estemporanei eseguiti una sola volta per caso vengono esclusi.<br/>"
-                    "• <b>3. Sessioni Valide:</b> Vengono analizzate solo le playlist History con durata effettiva &ge; 20 minuti e almeno 5 tracce.<br/><br/>"
-                    "<b>Come interpretare la vista:</b><br/>"
-                    "• <b>I Nodi (Cerchi):</b> Singole tracce (il colore indica l'anello Camelot: azzurro = Minore, verde = Maggiore). Il testo interno mostra la chiave armonica (es. 8A).<br/>"
-                    "• <b>Le Frecce &amp; Badge numerici:</b> Direzione del passaggio (da traccia entrante a uscente) con il numero esatto di volte in cui è stato replicato.<br/>"
-                    "• <b>A cosa serve:</b> Identificare i tuoi automatismi e le 'safe zone' di mixaggio per decidere se consolidarle come punti di forza o diversificare le scalette.<br/><br/>"
-                    "<i style='color: #94a3b8;'>💡 Clicca su un arco o nodo per caricare i dettagli e le date in tabella. Usa la rotella per lo zoom e trascina lo sfondo o i nodi.</i>"
+                    "<b style='font-size: 13px; color: #38bdf8;'>🕸️ Transitions & Combos (Habitual Sequence Graph)</b><br/><br/>"
+                    "<b>What you are viewing:</b><br/>"
+                    "Directed network map of transitions and 'automatic combos' between tracks emerging from your gig histories.<br/><br/>"
+                    "<b>Criteria for a Combo to appear in graph:</b><br/>"
+                    "• <b>1. Immediate Succession (A ➔ B):</b> Track B must have been played immediately after Track A in the setlist (direct transition, consecutive TrackNo).<br/>"
+                    "• <b>2. Frequency Threshold (&ge; 2 Distinct Gigs):</b> The exact same transition must occur in at least <b>2 distinct live gigs</b>. One-off transitions are excluded.<br/>"
+                    "• <b>3. Valid Sessions:</b> Only History playlists with duration &ge; 20 minutes and at least 5 tracks are analyzed.<br/><br/>"
+                    "<b>How to interpret the view:</b><br/>"
+                    "• <b>Nodes (Circles):</b> Individual tracks (color indicates Camelot ring: cyan = Minor, green = Major). Inner text shows harmonic key (e.g. 8A).<br/>"
+                    "• <b>Arrows &amp; Numeric Badges:</b> Direction of transition (incoming to outgoing track) with exact number of times it was repeated.<br/>"
+                    "• <b>Purpose:</b> Identify mixing habits and 'safe zones' to decide whether to lean into signature transitions or diversify sets.<br/><br/>"
+                    "<i style='color: #94a3b8;'>💡 Click an edge or node to load details and dates in table. Use mouse wheel to zoom and drag background or nodes to reposition.</i>"
                     "</div>"
                 ),
             },
@@ -424,7 +424,7 @@ class AnalyticsView(QWidget):
         self.lbl_sec_desc.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY}; font-size: 11px;")
         sec_layout.addWidget(self.lbl_sec_desc, stretch=1)
 
-        self.lbl_sec_help = QLabel("ℹ️ Come interpretare")
+        self.lbl_sec_help = QLabel("ℹ️ How to interpret")
         self.lbl_sec_help.setCursor(Qt.CursorShape.PointingHandCursor)
         self.lbl_sec_help.setStyleSheet(f"""
             QLabel {{
@@ -463,16 +463,16 @@ class AnalyticsView(QWidget):
         # Cluster filter chips above matrix
         cluster_chips_layout = QHBoxLayout()
         cluster_chips_layout.setSpacing(6)
-        cluster_chips_layout.addWidget(QLabel("Filtra Cluster:"))
-        for c_name, c_col in [
-            ("Tutti", COLOR_TEXT_SECONDARY),
-            ("Dead Weight (Zavorra)", COLOR_RED),
-            ("Peak Bangers", COLOR_GREEN),
-            ("Core Rotation", COLOR_BLUE),
-            ("In Incubazione / Untested", COLOR_AMBER),
-            ("Burnout Tracks", "#f97316"),
+        cluster_chips_layout.addWidget(QLabel("Filter Cluster:"))
+        for c_label, c_key, c_col in [
+            ("All", "All", COLOR_TEXT_SECONDARY),
+            ("Dead Weight", "Dead Weight (Zavorra)", COLOR_RED),
+            ("Peak Bangers", "Peak Bangers", COLOR_GREEN),
+            ("Core Rotation", "Core Rotation", COLOR_BLUE),
+            ("Untested", "In Incubazione / Untested", COLOR_AMBER),
+            ("Burnout Tracks", "Burnout Tracks", "#f97316"),
         ]:
-            c_btn = QPushButton(c_name)
+            c_btn = QPushButton(c_label)
             c_btn.setCursor(Qt.CursorShape.PointingHandCursor)
             c_btn.setStyleSheet(f"""
                 QPushButton {{
@@ -489,7 +489,7 @@ class AnalyticsView(QWidget):
                     border-color: {c_col};
                 }}
             """)
-            c_btn.clicked.connect(lambda checked=False, cn=c_name: self._filter_by_cluster(cn))
+            c_btn.clicked.connect(lambda checked=False, ck=c_key: self._filter_by_cluster(ck))
             cluster_chips_layout.addWidget(c_btn)
         cluster_chips_layout.addStretch(1)
         v1_layout.addLayout(cluster_chips_layout)
@@ -535,11 +535,11 @@ class AnalyticsView(QWidget):
         table_bar = QHBoxLayout()
         table_bar.setSpacing(10)
 
-        self.lbl_table_title = QLabel("Tutte le tracce")
+        self.lbl_table_title = QLabel("All Tracks")
         self.lbl_table_title.setStyleSheet(f"color: {COLOR_TEXT_PRIMARY}; font-size: 13px; font-weight: 700;")
         table_bar.addWidget(self.lbl_table_title)
 
-        self.lbl_table_count = QLabel("(0 brani)")
+        self.lbl_table_count = QLabel("(0 tracks)")
         self.lbl_table_count.setStyleSheet(f"color: {COLOR_TEXT_MUTED}; font-size: 11px;")
         table_bar.addWidget(self.lbl_table_count)
 
@@ -547,7 +547,7 @@ class AnalyticsView(QWidget):
 
         # Search filter
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("🔍 Filtra brani visualizzati...")
+        self.search_input.setPlaceholderText("🔍 Filter displayed tracks...")
         self.search_input.setFixedWidth(210)
         self.search_input.setStyleSheet(f"""
             QLineEdit {{
@@ -566,7 +566,7 @@ class AnalyticsView(QWidget):
         table_bar.addWidget(self.search_input)
 
         # Export Actions Button Menu
-        self.btn_export_menu = QPushButton("📤 Esporta Crate di Spurgo ▼")
+        self.btn_export_menu = QPushButton("📤 Export Prune Crate ▼")
         self.btn_export_menu.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_export_menu.setStyleSheet(f"""
             QPushButton {{
@@ -592,7 +592,7 @@ class AnalyticsView(QWidget):
         table_config = TrackTableConfig(
             columns=list(DEFAULT_COLLECTION_COLUMNS),
             index_mode="row_number",
-            index_header_tooltip="Posizione",
+            index_header_tooltip="Position",
             sorting_mode="client",
             enable_context_menu=True,
             enable_finder_clicks=True,
@@ -630,17 +630,17 @@ class AnalyticsView(QWidget):
             }}
         """)
 
-        act_m3u = QAction("📄 Esporta Playlist M3U8...", self)
+        act_m3u = QAction("📄 Export M3U8 Playlist...", self)
         act_m3u.triggered.connect(self._export_m3u8)
         menu.addAction(act_m3u)
 
-        act_xml = QAction("📑 Esporta XML Rekordbox...", self)
+        act_xml = QAction("📑 Export Rekordbox XML...", self)
         act_xml.triggered.connect(self._export_xml)
         menu.addAction(act_xml)
 
         menu.addSeparator()
 
-        act_rekordbox = QAction("➕ Crea Playlist 'Crate di Spurgo' in Rekordbox", self)
+        act_rekordbox = QAction("➕ Create 'Prune Crate' Playlist in Rekordbox", self)
         act_rekordbox.triggered.connect(self._create_rekordbox_playlist)
         menu.addAction(act_rekordbox)
 
@@ -659,8 +659,8 @@ class AnalyticsView(QWidget):
 
         self._interactive_refresh = interactive
         self.btn_refresh.setEnabled(False)
-        self.btn_refresh.setText("⏳ Calcolo in corso...")
-        self.notify_status.emit("Calcolo analytics e metriche avanzate...")
+        self.btn_refresh.setText("⏳ Calculating...")
+        self.notify_status.emit("Calculating analytics and advanced metrics...")
 
         if self._worker:
             stop_worker(self._worker)
@@ -685,7 +685,7 @@ class AnalyticsView(QWidget):
     def _on_analytics_loaded(self, snapshot: AnalyticsSnapshot) -> None:
         self.snapshot = snapshot
         self.btn_refresh.setEnabled(True)
-        self.btn_refresh.setText("🔄 Ricalcola Metriche")
+        self.btn_refresh.setText("🔄 Recalculate Metrics")
 
         # Update KPI Cards
         self.card_dead_weight.set_value(str(snapshot.dead_weight_count))
@@ -707,19 +707,19 @@ class AnalyticsView(QWidget):
             self._filter_by_cluster("Dead Weight (Zavorra)")
         else:
             all_records = [t.to_dict() for t in snapshot.tracks_by_id.values()]
-            self._display_tracks(all_records, "Tutte le tracce a catalogo")
+            self._display_tracks(all_records, "All catalog tracks")
 
         self.notify_status.emit(
-            f"Analytics aggiornate: {snapshot.total_valid_sessions} set analizzati, "
-            f"{snapshot.dead_weight_count} tracce zavorra identificate."
+            f"Analytics updated: {snapshot.total_valid_sessions} sets analyzed, "
+            f"{snapshot.dead_weight_count} dead weight tracks identified."
         )
 
     def _on_analytics_error(self, err_msg: str) -> None:
         self.btn_refresh.setEnabled(True)
-        self.btn_refresh.setText("🔄 Ricalcola Metriche")
-        self.notify_status.emit(f"Errore calcolo analytics: {err_msg}")
+        self.btn_refresh.setText("🔄 Recalculate Metrics")
+        self.notify_status.emit(f"Analytics calculation error: {err_msg}")
         if self._interactive_refresh:
-            QMessageBox.warning(self, "Errore Analytics", f"Impossibile calcolare le analytics:\n{err_msg}")
+            QMessageBox.warning(self, "Analytics Error", f"Unable to calculate analytics:\n{err_msg}")
 
     def _on_tab_switched(self, tab_id: int) -> None:
         self.chart_stack.setCurrentIndex(tab_id)
@@ -741,22 +741,28 @@ class AnalyticsView(QWidget):
     def _filter_by_cluster(self, cluster_name: str) -> None:
         if not self.snapshot:
             return
-        if cluster_name == "Tutti":
+        if cluster_name in ("All", "Tutti"):
             records = [t.to_dict() for t in self.snapshot.tracks_by_id.values()]
-            self._display_tracks(records, "Tutte le tracce")
+            self._display_tracks(records, "All Tracks")
             return
 
-        c_ids = self.snapshot.cluster_track_ids.get(cluster_name, [])
+        cluster_map = {
+            "Dead Weight": "Dead Weight (Zavorra)",
+            "Untested": "In Incubazione / Untested",
+        }
+        target_key = cluster_map.get(cluster_name, cluster_name)
+        c_ids = self.snapshot.cluster_track_ids.get(target_key, [])
         records = [self.snapshot.tracks_by_id[cid].to_dict() for cid in c_ids if cid in self.snapshot.tracks_by_id]
-        self._display_tracks(records, f"Cluster: {cluster_name}")
+        clean_name = "Dead Weight" if "Dead Weight" in cluster_name else ("Untested" if "Untested" in cluster_name else cluster_name)
+        self._display_tracks(records, f"Cluster: {clean_name}")
 
     def _on_matrix_cell_clicked(self, exposure: str, pick_rate: str, track_ids: List[str]) -> None:
         if not self.snapshot:
             return
         records = [self.snapshot.tracks_by_id[cid].to_dict() for cid in track_ids if cid in self.snapshot.tracks_by_id]
         is_death = (pick_rate == "0% (Mai suonata)") and (exposure in (">10 Set (Veterano)", "6-10 Set (Avanzato)"))
-        hazard_prefix = "💀 [ZAVORRA] " if is_death else ""
-        self._display_tracks(records, f"{hazard_prefix}Matrice: {exposure} / Pick Rate {pick_rate}")
+        hazard_prefix = "💀 [DEAD WEIGHT] " if is_death else ""
+        self._display_tracks(records, f"{hazard_prefix}Matrix: {exposure} / Pick Rate {pick_rate}")
 
     def _on_camelot_slice_clicked(self, camelot_code: str, track_ids: List[str]) -> None:
         if not self.snapshot:
@@ -764,7 +770,7 @@ class AnalyticsView(QWidget):
         records = [self.snapshot.tracks_by_id[cid].to_dict() for cid in track_ids if cid in self.snapshot.tracks_by_id]
         trad = self.snapshot.camelot_slices.get(camelot_code)
         trad_str = f" ({trad.traditional})" if trad and trad.traditional else ""
-        self._display_tracks(records, f"Tonalità Camelot: {camelot_code}{trad_str}")
+        self._display_tracks(records, f"Camelot Key: {camelot_code}{trad_str}")
 
     def _on_turnover_session_clicked(self, session_id: str, category_name: str, track_ids: List[str]) -> None:
         if not self.snapshot:
@@ -780,7 +786,7 @@ class AnalyticsView(QWidget):
             t.to_dict() for t in self.snapshot.tracks_by_id.values()
             if t.exposure_gigs >= set_number and (t.adoption_latency is None or t.adoption_latency >= set_number)
         ]
-        self._display_tracks(unplayed, f"Tracce a zero play dopo {set_number} set ({unplayed_pct}%)")
+        self._display_tracks(unplayed, f"Zero-play tracks after {set_number} sets ({unplayed_pct}%)")
 
     def _on_transition_edge_clicked(self, src_id: str, tgt_id: str, count: int) -> None:
         if not self.snapshot:
@@ -789,27 +795,27 @@ class AnalyticsView(QWidget):
         for cid in (src_id, tgt_id):
             if cid in self.snapshot.tracks_by_id:
                 records.append(self.snapshot.tracks_by_id[cid].to_dict())
-        self._display_tracks(records, f"Combo Automatica: {count} esecuzioni consecutive")
+        self._display_tracks(records, f"Automatic Combo: {count} consecutive transitions")
 
     def _on_transition_node_clicked(self, track_id: str) -> None:
         if not self.snapshot:
             return
         if track_id in self.snapshot.tracks_by_id:
             t_obj = self.snapshot.tracks_by_id[track_id]
-            self._display_tracks([t_obj.to_dict()], f"Traccia: {t_obj.title} ({t_obj.artist})")
+            self._display_tracks([t_obj.to_dict()], f"Track: {t_obj.title} ({t_obj.artist})")
 
     def _display_tracks(self, records: List[Dict[str, Any]], title_desc: str) -> None:
         self.current_filtered_tracks = records
         self._active_filter_label = title_desc
         self.lbl_table_title.setText(title_desc)
-        self.lbl_table_count.setText(f"({len(records)} brani)")
+        self.lbl_table_count.setText(f"({len(records)} tracks)")
         self.search_input.clear()
         self.table.set_tracks(records)
 
     def _apply_table_search(self, query: str) -> None:
         if not query.strip():
             self.table.set_tracks(self.current_filtered_tracks)
-            self.lbl_table_count.setText(f"({len(self.current_filtered_tracks)} brani)")
+            self.lbl_table_count.setText(f"({len(self.current_filtered_tracks)} tracks)")
             return
 
         q = query.strip().lower()
@@ -821,7 +827,7 @@ class AnalyticsView(QWidget):
             or q in (r.get("cluster") or "").lower()
         ]
         self.table.set_tracks(filtered)
-        self.lbl_table_count.setText(f"({len(filtered)} di {len(self.current_filtered_tracks)} brani)")
+        self.lbl_table_count.setText(f"({len(filtered)} of {len(self.current_filtered_tracks)} tracks)")
 
     def _on_track_detail_requested(self, track_record: Dict[str, Any]) -> None:
         # Open detailed track inspector if needed
@@ -833,13 +839,13 @@ class AnalyticsView(QWidget):
 
     def _export_m3u8(self) -> None:
         if not self.current_filtered_tracks:
-            QMessageBox.information(self, "Esporta Crate", "Nessuna traccia attualmente selezionata da esportare.")
+            QMessageBox.information(self, "Export Prune Crate", "No tracks currently selected to export.")
             return
 
-        default_name = f"Crate_Spurgo_{datetime.now().strftime('%Y%m%d')}.m3u8"
+        default_name = f"Prune_Crate_{datetime.now().strftime('%Y%m%d')}.m3u8"
         file_path, _ = QFileDialog.getSaveFileName(
             self,
-            "Salva Crate di Spurgo (M3U8)",
+            "Save Prune Crate (M3U8)",
             default_name,
             "M3U8 Playlist (*.m3u8);;M3U Playlist (*.m3u)",
         )
@@ -850,23 +856,23 @@ class AnalyticsView(QWidget):
             cnt = export_tracks_to_m3u8(file_path, self.current_filtered_tracks)
             QMessageBox.information(
                 self,
-                "Esportazione Completata",
-                f"Esportati {cnt} brani con successo nel file:\n{file_path}\n\n"
-                "Puoi trascinare questo file nella tua chiavetta USB o in Rekordbox per rimuovere le tracce zavorra.",
+                "Export Complete",
+                f"Successfully exported {cnt} tracks to file:\n{file_path}\n\n"
+                "You can drag this file into Rekordbox or onto a USB drive to review and prune dead weight tracks.",
             )
-            self.notify_status.emit(f"Esportate {cnt} tracce in {os.path.basename(file_path)}")
+            self.notify_status.emit(f"Exported {cnt} tracks to {os.path.basename(file_path)}")
         except Exception as e:
-            QMessageBox.critical(self, "Errore Esportazione", f"Impossibile esportare il file M3U8:\n{e}")
+            QMessageBox.critical(self, "Export Error", f"Unable to export M3U8 file:\n{e}")
 
     def _export_xml(self) -> None:
         if not self.current_filtered_tracks:
-            QMessageBox.information(self, "Esporta Crate", "Nessuna traccia attualmente selezionata da esportare.")
+            QMessageBox.information(self, "Export Prune Crate", "No tracks currently selected to export.")
             return
 
-        default_name = f"Crate_Spurgo_{datetime.now().strftime('%Y%m%d')}.xml"
+        default_name = f"Prune_Crate_{datetime.now().strftime('%Y%m%d')}.xml"
         file_path, _ = QFileDialog.getSaveFileName(
             self,
-            "Salva Crate di Spurgo (Rekordbox XML)",
+            "Save Prune Crate (Rekordbox XML)",
             default_name,
             "Rekordbox XML (*.xml)",
         )
@@ -874,39 +880,39 @@ class AnalyticsView(QWidget):
             return
 
         try:
-            cnt = export_tracks_to_rekordbox_xml(file_path, "Crate di Spurgo", self.current_filtered_tracks)
+            cnt = export_tracks_to_rekordbox_xml(file_path, "Prune Crate", self.current_filtered_tracks)
             QMessageBox.information(
                 self,
-                "Esportazione Completata",
-                f"Esportati {cnt} brani nel file Rekordbox XML:\n{file_path}",
+                "Export Complete",
+                f"Exported {cnt} tracks to Rekordbox XML file:\n{file_path}",
             )
-            self.notify_status.emit(f"Esportate {cnt} tracce in {os.path.basename(file_path)}")
+            self.notify_status.emit(f"Exported {cnt} tracks to {os.path.basename(file_path)}")
         except Exception as e:
-            QMessageBox.critical(self, "Errore Esportazione", f"Impossibile esportare il file XML:\n{e}")
+            QMessageBox.critical(self, "Export Error", f"Unable to export XML file:\n{e}")
 
     def _create_rekordbox_playlist(self) -> None:
         if not self.engine:
             return
         if not self.current_filtered_tracks:
-            QMessageBox.information(self, "Crea Playlist", "Nessuna traccia attualmente selezionata da aggiungere alla playlist.")
+            QMessageBox.information(self, "Create Playlist", "No tracks currently selected to add to playlist.")
             return
 
         if is_rekordbox_running():
             QMessageBox.warning(
                 self,
-                "Rekordbox Aperto",
-                "Rekordbox è attualmente in esecuzione.\n"
-                "Per creare la playlist in sicurezza ed evitare conflitti, chiudi Rekordbox (Cmd+Q) e riprova.",
+                "Rekordbox Running",
+                "Rekordbox is currently running.\n"
+                "To create the playlist safely and avoid database conflicts, please quit Rekordbox (Cmd+Q) and try again.",
             )
             return
 
-        default_name = f"Crate di Spurgo ({len(self.current_filtered_tracks)})"
+        default_name = f"Prune Crate ({len(self.current_filtered_tracks)})"
         track_ids = [str(t["id"]) for t in self.current_filtered_tracks if t.get("id")]
 
         reply = QMessageBox.question(
             self,
-            "Crea Playlist in Rekordbox",
-            f"Desideri creare la playlist '{default_name}' direttamente in Rekordbox con {len(track_ids)} tracce?",
+            "Create Playlist in Rekordbox",
+            f"Do you want to create playlist '{default_name}' directly in Rekordbox with {len(track_ids)} tracks?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if reply != QMessageBox.StandardButton.Yes:
@@ -916,11 +922,11 @@ class AnalyticsView(QWidget):
             res = create_purge_playlist_in_rekordbox(self.engine, default_name, track_ids)
             QMessageBox.information(
                 self,
-                "Playlist Creata",
-                f"La playlist '{default_name}' con {len(track_ids)} brani è stata creata con successo in Rekordbox!",
+                "Playlist Created",
+                f"Playlist '{default_name}' with {len(track_ids)} tracks was successfully created in Rekordbox!",
             )
             self.db_saved.emit()
-            self.notify_status.emit(f"Creata playlist '{default_name}' in Rekordbox.")
+            self.notify_status.emit(f"Created playlist '{default_name}' in Rekordbox.")
         except Exception as e:
-            QMessageBox.critical(self, "Errore Creazione Playlist", f"Impossibile creare la playlist in Rekordbox:\n{e}")
+            QMessageBox.critical(self, "Playlist Creation Error", f"Unable to create playlist in Rekordbox:\n{e}")
 

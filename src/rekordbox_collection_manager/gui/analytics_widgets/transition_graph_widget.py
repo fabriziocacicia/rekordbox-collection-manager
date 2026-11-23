@@ -300,8 +300,8 @@ class TransitionGraphWidget(QWidget):
             painter.drawText(
                 QRectF(0, 0, w, h),
                 Qt.AlignmentFlag.AlignCenter,
-                "Nessuna combinazione frequente di tracce rilevata con la soglia attuale.\n"
-                "(Le transizioni compaiono solo se suonate in sequenza in almeno 2 serate)",
+                "No frequent track transitions detected with current threshold.\n"
+                "(Transitions appear only when played in sequence across at least 2 distinct gigs)",
             )
             return
 
@@ -480,7 +480,7 @@ class TransitionGraphWidget(QWidget):
         painter.drawText(
             QRectF(14, 12, max(200.0, bar_x - 24), btn_h),
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-            "🔗 Criterio Combo: passaggi diretti (A ➔ B) ripetuti in almeno 2 serate distinte",
+            "🔗 Combo Criterion: direct transitions (A ➔ B) repeated in at least 2 distinct gigs",
         )
 
         font_btn = QFont()
@@ -518,7 +518,7 @@ class TransitionGraphWidget(QWidget):
         painter.drawText(
             QRectF(14, h - 22, w - 28, 16),
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-            "🖱️ Trascina lo sfondo per spostarti • Rotella mouse per zoom • Trascina i nodi per disporli • Doppio clic per centrare",
+            "🖱️ Drag background to pan • Mouse wheel to zoom • Drag nodes to reposition • Double-click to center",
         )
 
     # --------------------------------------------------------------------------
@@ -654,10 +654,10 @@ class TransitionGraphWidget(QWidget):
                 nd = self.nodes[self.hovered_node_id]
                 tip = (
                     f"🎵 <b>{nd.get('title')}</b><br/>"
-                    f"• Artista: <b>{nd.get('artist')}</b><br/>"
-                    f"• Tonalità: <b>{nd.get('key')}</b> | BPM: <b>{nd.get('bpm')}</b><br/>"
-                    f"• Esecuzioni live totali: <b>{nd.get('plays')}</b><br/><br/>"
-                    f"<i>(Trascina per spostare il nodo • Clicca per filtrare)</i>"
+                    f"• Artist: <b>{nd.get('artist')}</b><br/>"
+                    f"• Key: <b>{nd.get('key')}</b> | BPM: <b>{nd.get('bpm')}</b><br/>"
+                    f"• Total live plays: <b>{nd.get('plays')}</b><br/><br/>"
+                    f"<i>(Drag to move node • Click to filter)</i>"
                 )
                 QToolTip.showText(self.mapToGlobal(pos_pt), tip, self)
             elif self.hovered_edge:
@@ -666,13 +666,13 @@ class TransitionGraphWidget(QWidget):
                 if edge:
                     sessions_str = "<br/>• ".join(edge.session_names[:4])
                     if len(edge.session_names) > 4:
-                        sessions_str += f"<br/>• ...e altri {len(edge.session_names) - 4} set"
+                        sessions_str += f"<br/>• ...and {len(edge.session_names) - 4} more sets"
                     tip = (
-                        f"<b>Combo Automatica Rilevata:</b><br/>"
+                        f"<b>Automatic Combo Detected:</b><br/>"
                         f"🎵 <b>{edge.source_title}</b><br/>"
                         f"&nbsp;&nbsp;&nbsp;&nbsp;➔ <b>{edge.target_title}</b><br/>"
-                        f"• Suonata insieme: <b>{edge.count} volte</b> in:<br/>• {sessions_str}<br/><br/>"
-                        f"<i>Clicca per visualizzare la coppia</i>"
+                        f"• Played together: <b>{edge.count} times</b> in:<br/>• {sessions_str}<br/><br/>"
+                        f"<i>Click to view pair</i>"
                     )
                     QToolTip.showText(self.mapToGlobal(pos_pt), tip, self)
             else:

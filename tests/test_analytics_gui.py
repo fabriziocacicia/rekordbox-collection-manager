@@ -209,7 +209,7 @@ class TestAnalyticsGUI(unittest.TestCase):
         view._on_tab_switched(3)  # Survival Decay
         self.assertEqual(view.chart_stack.currentIndex(), 3)
         self.assertEqual(view.lbl_sec_icon.text(), "📉")
-        self.assertIn("Curva di Decadimento", view.lbl_sec_desc.text())
+        self.assertIn("Decay Curve", view.lbl_sec_desc.text())
         self.assertTrue(len(view.lbl_sec_help.toolTip()) > 50)
 
         view._on_tab_switched(1)

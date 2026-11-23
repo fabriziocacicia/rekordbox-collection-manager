@@ -256,21 +256,21 @@ class _TurnoverCanvas(QWidget):
             legend_items = [
                 ("⚡ Peak Bangers", COLOR_PEAK),
                 ("🔄 Core Rotation", COLOR_CORE),
-                ("🌱 Novità / Debutto", COLOR_UNTESTED),
+                ("🌱 New / Debut", COLOR_UNTESTED),
                 ("🔍 Deep Cuts", COLOR_DEEP_CUTS),
-                ("⏳ Sovraesposte / Burnout", COLOR_BURNOUT),
+                ("⏳ Overexposed / Burnout", COLOR_BURNOUT),
             ]
         elif self.active_mode == "turnover":
             legend_items = [
                 ("🌱 New Entries", COLOR_GREEN),
-                ("🔄 In Rotazione (ultime 3)", COLOR_BLUE),
-                ("✨ Deep Cuts / Storiche", COLOR_DEEP_CUTS),
+                ("🔄 In Rotation (last 3)", COLOR_BLUE),
+                ("✨ Deep Cuts / Catalog", COLOR_DEEP_CUTS),
                 ("🎯 One-Shot", COLOR_ONE_SHOT),
             ]
         else:
             legend_items = [
-                ("🆕 Tracce Nuove / Fresche", COLOR_GREEN),
-                ("🔁 Ripetute dal Set Precedente", COLOR_AMBER),
+                ("🆕 Fresh / New Tracks", COLOR_GREEN),
+                ("🔁 Repeated from Prev Set", COLOR_AMBER),
             ]
 
         font_leg = QFont()
@@ -359,12 +359,12 @@ class _TurnoverCanvas(QWidget):
             if self.hovered_session_idx is not None:
                 s = self.series[self.hovered_session_idx]
                 stagnation_tip = (
-                    f"<br/><font color='{COLOR_RED}'>⚠️ New entries < 15%: rischio stagnazione!</font>"
+                    f"<br/><font color='{COLOR_RED}'>⚠️ New entries < 15%: risk of set stagnation!</font>"
                     if s.new_entries_pct < 15.0
                     else ""
                 )
                 retention_tip = (
-                    f"• <b>Riciclo dal set prima:</b> {s.repeated_prev_count} brani ({s.repeated_prev_pct}%)<br/>"
+                    f"• <b>Repeated from prev set:</b> {s.repeated_prev_count} tracks ({s.repeated_prev_pct}%)<br/>"
                     if s.session_index > 1
                     else ""
                 )
@@ -375,21 +375,21 @@ class _TurnoverCanvas(QWidget):
 
                 tip = (
                     f"<b>Set #{s.session_index}: {s.name}</b> ({s.date_str})<br/>"
-                    f"🏷️ <b>Profilo DNA:</b> {s.archetype_icon} <b>{s.archetype}</b>{tags_html}<br/>"
+                    f"🏷️ <b>DNA Profile:</b> {s.archetype_icon} <b>{s.archetype}</b>{tags_html}<br/>"
                     f"<i>«{s.archetype_desc}»</i><br/><br/>"
-                    f"Totale brani: <b>{s.total_tracks}</b><br/><br/>"
-                    f"<b>🧬 CLUSTER DI PERFORMANCE (a quel tempo):</b><br/>"
+                    f"Total tracks: <b>{s.total_tracks}</b><br/><br/>"
+                    f"<b>🧬 PERFORMANCE CLUSTERS (at that time):</b><br/>"
                     f"• <b>Peak Bangers:</b> {s.peak_bangers_count} ({s.peak_bangers_pct}%)<br/>"
                     f"• <b>Core Rotation:</b> {s.core_rotation_count} ({s.core_rotation_pct}%)<br/>"
-                    f"• <b>Novità / Debutto:</b> {s.untested_count} ({s.untested_pct}%)<br/>"
-                    f"• <b>Deep Cuts / Ripescaggi:</b> {s.deep_cuts_cluster_count} ({s.deep_cuts_cluster_pct}%)<br/>"
-                    f"• <b>Sovraesposte / Burnout:</b> {s.burnout_count} ({s.burnout_pct}%)<br/><br/>"
-                    f"<b>⏳ TURNOVER & RICAMBIO:</b><br/>"
+                    f"• <b>New / Debut:</b> {s.untested_count} ({s.untested_pct}%)<br/>"
+                    f"• <b>Deep Cuts / Rediscoveries:</b> {s.deep_cuts_cluster_count} ({s.deep_cuts_cluster_pct}%)<br/>"
+                    f"• <b>Overexposed / Burnout:</b> {s.burnout_count} ({s.burnout_pct}%)<br/><br/>"
+                    f"<b>⏳ TURNOVER & ROTATION:</b><br/>"
                     f"• <b>New Entries:</b> {s.new_entries_count} ({s.new_entries_pct}%)<br/>"
-                    f"• <b>In Rotazione (ultime 3):</b> {s.in_rotation_count} ({s.in_rotation_pct}%)<br/>"
+                    f"• <b>In Rotation (last 3):</b> {s.in_rotation_count} ({s.in_rotation_pct}%)<br/>"
                     f"{retention_tip}"
                     f"{stagnation_tip}<br/>"
-                    f"<i>Clicca per filtrare i brani del set nella tabella</i>"
+                    f"<i>Click to filter set tracks in table</i>"
                 )
                 pos_pt = event.position().toPoint()
                 QToolTip.showText(self.mapToGlobal(pos_pt), tip, self)
@@ -416,45 +416,45 @@ class _TurnoverCanvas(QWidget):
                     c_name = f"Set #{s.session_index} [{arch_prefix}]: Core Rotation"
                 elif seg == "untested":
                     t_ids = s.untested_ids
-                    c_name = f"Set #{s.session_index} [{arch_prefix}]: Novità / Debutto"
+                    c_name = f"Set #{s.session_index} [{arch_prefix}]: New / Debut"
                 elif seg == "deep_cluster":
                     t_ids = s.deep_cuts_cluster_ids
-                    c_name = f"Set #{s.session_index} [{arch_prefix}]: Deep Cuts / Ripescaggi"
+                    c_name = f"Set #{s.session_index} [{arch_prefix}]: Deep Cuts / Rediscoveries"
                 elif seg == "burnout":
                     t_ids = s.burnout_ids
-                    c_name = f"Set #{s.session_index} [{arch_prefix}]: Sovraesposte / Burnout"
+                    c_name = f"Set #{s.session_index} [{arch_prefix}]: Overexposed / Burnout"
                 elif seg == "standard":
                     t_ids = s.standard_ids
                     c_name = f"Set #{s.session_index} [{arch_prefix}]: Standard"
                 else:
                     t_ids = s.new_entries_ids + s.in_rotation_ids + s.deep_cuts_ids + s.one_shot_ids
-                    c_name = f"Set #{s.session_index} [{arch_prefix}]: Tutte le tracce"
+                    c_name = f"Set #{s.session_index} [{arch_prefix}]: All Tracks"
             elif self.active_mode == "turnover":
                 if seg == "new":
                     t_ids = s.new_entries_ids
                     c_name = f"Set #{s.session_index} [{arch_prefix}]: New Entries"
                 elif seg == "rotation":
                     t_ids = s.in_rotation_ids
-                    c_name = f"Set #{s.session_index} [{arch_prefix}]: In Rotazione"
+                    c_name = f"Set #{s.session_index} [{arch_prefix}]: In Rotation"
                 elif seg == "deep":
                     t_ids = s.deep_cuts_ids
-                    c_name = f"Set #{s.session_index} [{arch_prefix}]: Deep Cuts Storici"
+                    c_name = f"Set #{s.session_index} [{arch_prefix}]: Catalog Deep Cuts"
                 elif seg == "one_shot":
                     t_ids = s.one_shot_ids
                     c_name = f"Set #{s.session_index} [{arch_prefix}]: One-Shot"
                 else:
                     t_ids = s.new_entries_ids + s.in_rotation_ids + s.deep_cuts_ids + s.one_shot_ids
-                    c_name = f"Set #{s.session_index} [{arch_prefix}]: Tutte le tracce"
+                    c_name = f"Set #{s.session_index} [{arch_prefix}]: All Tracks"
             else:
                 if seg == "fresh":
                     t_ids = s.fresh_tracks_ids
-                    c_name = f"Set #{s.session_index} [{arch_prefix}]: Tracce Fresche"
+                    c_name = f"Set #{s.session_index} [{arch_prefix}]: Fresh Tracks"
                 elif seg == "repeated":
                     t_ids = s.repeated_prev_ids
-                    c_name = f"Set #{s.session_index} [{arch_prefix}]: Tracce Ripetute dal Set Precedente"
+                    c_name = f"Set #{s.session_index} [{arch_prefix}]: Repeated from Prev Set"
                 else:
                     t_ids = s.fresh_tracks_ids + s.repeated_prev_ids
-                    c_name = f"Set #{s.session_index} [{arch_prefix}]: Tutte le tracce"
+                    c_name = f"Set #{s.session_index} [{arch_prefix}]: All Tracks"
 
             self.session_clicked.emit(s.session_id, c_name, t_ids)
 
@@ -477,16 +477,16 @@ class SetTurnoverWidget(QWidget):
         header_row.setContentsMargins(8, 4, 8, 0)
         header_row.setSpacing(8)
 
-        lbl_mode = QLabel("SCOMPOSIZIONE DNA:")
+        lbl_mode = QLabel("DNA DECOMPOSITION:")
         lbl_mode.setStyleSheet(f"color: {COLOR_TEXT_MUTED}; font-size: 10px; font-weight: 700; letter-spacing: 0.5px;")
         header_row.addWidget(lbl_mode)
 
         self.btn_group = QButtonGroup(self)
         self.btn_group.setExclusive(True)
 
-        self.btn_mode_cluster = QPushButton("🧬 Cluster di Performance")
-        self.btn_mode_turnover = QPushButton("⏳ Turnover Temporale")
-        self.btn_mode_retention = QPushButton("🔁 Riciclo dal Set Precedente")
+        self.btn_mode_cluster = QPushButton("🧬 Performance Clusters")
+        self.btn_mode_turnover = QPushButton("⏳ Set Turnover")
+        self.btn_mode_retention = QPushButton("🔁 Previous Set Retention")
 
         for idx, (btn, mode_key) in enumerate([
             (self.btn_mode_cluster, "cluster"),
@@ -522,16 +522,16 @@ class SetTurnoverWidget(QWidget):
 
         header_row.addStretch(1)
 
-        lbl_arch_hint = QLabel("🏷️ Archetipi: 🚀 Prime-Time | 🧪 Testing | 🔍 Digger | 🔁 Fotocopia | ⚖️ Equilibrato")
+        lbl_arch_hint = QLabel("🏷️ Archetypes: 🚀 Prime-Time | 🧪 Testing | 🔍 Digger | 🔁 Duplicate | ⚖️ Balanced")
         lbl_arch_hint.setStyleSheet(f"color: {COLOR_TEXT_MUTED}; font-size: 11px;")
         lbl_arch_hint.setToolTip(
-            "Classificazione descrittiva automatica del set:\n"
-            "• 🚀 Prime-Time / Festival: >= 65% hit collaudate e rotazione fissa\n"
-            "• 🧪 Testing Lab / Rodaggio: >= 35% musica nuova mai testata prima\n"
-            "• 🔍 Digger's Set / Ricerca: >= 25% ripescaggi dal catalogo storico\n"
-            "• 🔁 Twin / Fotocopia: >= 55% tracce riproposte dal set precedente\n"
-            "• ⚖️ Signature Flow / Equilibrato: flusso armonioso ed equilibrato\n"
-            "• 🌱 Genesis / Battesimo: debutto dello storico o rinnovo quasi totale"
+            "Automatic descriptive set profile:\n"
+            "• 🚀 Prime-Time / Festival: >= 65% proven hits and core rotation\n"
+            "• 🧪 Testing Lab / Burn-in: >= 35% brand-new music never tested before\n"
+            "• 🔍 Digger's Set / Deep Dive: >= 25% catalog rediscoveries\n"
+            "• 🔁 Twin / Duplicate: >= 55% tracks repeated from previous set\n"
+            "• ⚖️ Signature Flow / Balanced: smooth and balanced flow\n"
+            "• 🌱 Genesis / Debut: collection debut or near-total overhaul"
         )
         header_row.addWidget(lbl_arch_hint)
         layout.addLayout(header_row)

@@ -214,13 +214,13 @@ class CrateHealthMatrixWidget(QWidget):
                     painter.setFont(font_sub)
                     if is_death_zone:
                         painter.setPen(QColor("#ff8888"))
-                        sub_text = "💀 ZAVORRA"
+                        sub_text = "💀 DEAD WEIGHT"
                     elif is_peak_zone:
                         painter.setPen(QColor("#88ffaa"))
                         sub_text = "⚡ PEAK"
                     else:
                         painter.setPen(QColor(COLOR_TEXT_MUTED))
-                        sub_text = "brani"
+                        sub_text = "tracks"
 
                     painter.drawText(
                         QRectF(cell_rect.x(), cell_rect.y() + cell_rect.height() * 0.52, cell_rect.width(), cell_rect.height() * 0.4),
@@ -249,7 +249,7 @@ class CrateHealthMatrixWidget(QWidget):
                 e_b = self.exposure_brackets[c_idx]
                 p_b = self.pick_rate_brackets[r_idx]
                 tracks = self.matrix_data.get((e_b, p_b), [])
-                tip = f"<b>{e_b}</b> | <b>Pick Rate: {p_b}</b><br/>{len(tracks)} brani in questa cella.<br/><i>Clicca per visualizzare la lista</i>"
+                tip = f"<b>{e_b}</b> | <b>Pick Rate: {p_b}</b><br/>{len(tracks)} tracks in this cell.<br/><i>Click to view tracklist</i>"
                 pos_pt = event.position().toPoint()
                 QToolTip.showText(self.mapToGlobal(pos_pt), tip, self)
             else:

@@ -86,7 +86,7 @@ class SurvivalDecayWidget(QWidget):
             painter.drawText(
                 QRectF(left_margin, top_margin, grid_w, grid_h),
                 Qt.AlignmentFlag.AlignCenter,
-                "Dati insufficienti per generare la curva di decadimento Kaplan-Meier.",
+                "Insufficient data to generate Kaplan-Meier decay curve.",
             )
             return
 
@@ -117,7 +117,7 @@ class SurvivalDecayWidget(QWidget):
             font_badge.setBold(True)
             painter.setFont(font_badge)
             painter.setPen(QColor(COLOR_AMBER))
-            painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, f"Soglia Non Ritorno (Set {self.point_of_no_return})")
+            painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, f"Point of No Return (Set {self.point_of_no_return})")
 
         # Build Step Line and Fill Area Path
         step_path = QPainterPath()
@@ -188,7 +188,7 @@ class SurvivalDecayWidget(QWidget):
         painter.drawText(
             QRectF(left_margin, top_margin + grid_h + 24, grid_w, 18),
             Qt.AlignmentFlag.AlignCenter,
-            "NUMERO DI SET TRASCORSI DALL'ACQUISTO / DOWNLOAD",
+            "NUMBER OF SETS ELAPSED SINCE PURCHASE / DATE ADDED",
         )
 
     def mouseMoveEvent(self, event) -> None:
@@ -221,16 +221,16 @@ class SurvivalDecayWidget(QWidget):
             if self.hovered_step_idx is not None:
                 s = self.steps[self.hovered_step_idx]
                 asymptote_note = (
-                    f"<br/><font color='{COLOR_AMBER}'>★ Soglia di Non Ritorno: oltre questo set la probabilità di suonare il brano scende drasticamente a zero!</font>"
+                    f"<br/><font color='{COLOR_AMBER}'>★ Point of No Return: beyond this set, probability of playing the track drops to near zero!</font>"
                     if s.set_number == self.point_of_no_return
                     else ""
                 )
                 tip = (
-                    f"<b>📉 Dopo {s.set_number} live set dall'importazione del brano:</b><br/>"
-                    f"• Brani ancora <b>MAI suonati</b>: <font color='{COLOR_RED}'><b>{s.unplayed_pct}%</b></font> ({s.unplayed_count} su {s.total_exposed})<br/>"
-                    f"• Brani adottati e suonati nei set: <b>{round(100.0 - s.unplayed_pct, 1)}%</b>"
+                    f"<b>📉 After {s.set_number} live sets from track import:</b><br/>"
+                    f"• Tracks still <b>NEVER played</b>: <font color='{COLOR_RED}'><b>{s.unplayed_pct}%</b></font> ({s.unplayed_count} of {s.total_exposed})<br/>"
+                    f"• Tracks adopted and played in sets: <b>{round(100.0 - s.unplayed_pct, 1)}%</b>"
                     f"{asymptote_note}<br/><br/>"
-                    f"<i>💡 Clicca per caricare nella tabella le {s.unplayed_count} tracce rimaste a zero play</i>"
+                    f"<i>💡 Click to load the {s.unplayed_count} unplayed tracks into the table</i>"
                 )
                 pos_pt = event.position().toPoint()
                 QToolTip.showText(self.mapToGlobal(pos_pt), tip, self)
