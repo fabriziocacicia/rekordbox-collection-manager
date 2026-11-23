@@ -284,6 +284,22 @@ ios/RekordboxCompanion/
 
 ### Building & Installing on iPhone
 
+**Option A: SideStore Sideloading (Recommended — Permanent Zero-Cable Refresh)**
+With a free Apple Developer account, sideloaded apps expire after 7 days unless refreshed. Using [SideStore](https://sidestore.io), you can install the standalone `.ipa` package and have certificates automatically refreshed in the background over local Wi-Fi without needing a USB cable or a paid Apple Developer membership.
+
+1. **Build the Standalone `.ipa` Archive**:
+   ```bash
+   # Compile and package dist/RekordboxCompanion-v<version>.ipa
+   ./scripts/build_ios.sh --package
+   ```
+2. **Transfer to iPhone**:
+   - AirDrop `dist/RekordboxCompanion-v<version>.ipa` to your iPhone, or save it to iCloud Drive / Files.
+3. **Install & Pair in SideStore**:
+   - In SideStore on your iPhone, tap **+** in the Apps tab, select the `.ipa`, and install.
+   - SideStore uses an on-device local WireGuard loopback VPN (`SideStore.vpn`) to talk to local developer services over Wi-Fi.
+   - Set up an automated overnight iOS Shortcut (`SideStore Refresh`) while connected to your home Wi-Fi to keep the companion app permanently active. Detailed setup steps are available in [`ios/RekordboxCompanion/README.md`](ios/RekordboxCompanion/README.md#sidestore-setup--permanent-on-device-refresh).
+
+**Option B: Direct Deployment via Xcode**
 1. **Open the project in Xcode**:
    ```bash
    open ios/RekordboxCompanion/RekordboxCompanion.xcodeproj
@@ -295,9 +311,10 @@ ios/RekordboxCompanion/
 3. **Run on Physical iPhone or Simulator**:
    - Connect your iPhone via USB or select an iOS 17+ Simulator from the scheme dropdown.
    - Press **Cmd + R** (or click the Play button) to build and install.
-4. **Cloud Credentials**:
-   - The app comes pre-configured with your default Turso database URL and auth token compiled into `TursoConfig.swift`.
-   - Inside **Sync & Queue > Settings** (gear icon), you can view or override the Database URL, replace the masked Auth Token (`SecureField`), or tap **Reset to .env Defaults** to restore the `TursoConfig.swift` defaults.
+
+**Cloud Credentials Configuration**:
+- The app comes pre-configured with your default Turso database URL and auth token compiled into `TursoConfig.swift`.
+- Inside **Sync & Queue > Settings** (gear icon), you can view or override the Database URL, replace the masked Auth Token (`SecureField`), or tap **Reset to .env Defaults** to restore the `TursoConfig.swift` defaults.
 
 ### App Versioning & SemVer CLI
 
@@ -334,10 +351,37 @@ A dedicated CLI script at [`scripts/ios_version.py`](scripts/ios_version.py) man
 
 # Bump version, auto-commit to git, and create annotated tag 'ios-v0.1.1'
 ./scripts/ios_version.py patch --commit --tag
+
+# Automated 7-step iOS companion release pipeline (pre-flights -> build .ipa -> changelog -> preview prompt -> push & GitHub release)
+./scripts/ios_version.py patch --release
+
+# One-shot unattended release without prompt
+./scripts/ios_version.py minor --release -y
+
+# Publish staged release as private draft on GitHub
+./scripts/ios_version.py patch --release --draft
+
+# Preview release pipeline without mutations or network calls
+./scripts/ios_version.py patch --release --dry-run
 ```
 
 > **Why a dedicated CLI instead of Apple's `agvtool`?**
 > Apple's built-in `agvtool` (from 2001/2017) has known parsing bugs with modern Xcode projects that use `GENERATE_INFOPLIST_FILE = YES`. It fails searching for `.../../YES` and silently leaves `MARKETING_VERSION` untouched in `project.pbxproj`. The `scripts/ios_version.py` script replaces it with a fast, safe, atomic SemVer manager.
+
+### iOS Changelog Management
+
+Historical iOS companion releases and active unreleased changes are tracked in [`ios/CHANGELOG.md`](ios/CHANGELOG.md) adhering to [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/). A dedicated CLI script at [`scripts/changelog.py`](scripts/changelog.py) with `--target ios` manages backfilling, verification, and rotation:
+
+```bash
+# Check integrity of ios/CHANGELOG.md and compare links
+./scripts/changelog.py --target ios --check
+
+# Preview unreleased iOS changes since the latest tag
+./scripts/changelog.py --target ios --unreleased
+
+# Backfill or regenerate ios/CHANGELOG.md from git history
+./scripts/changelog.py --target ios --backfill
+```
 
 ---
 
