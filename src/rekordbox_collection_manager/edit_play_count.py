@@ -15,6 +15,7 @@ from rekordbox_collection_manager.utils import (
     EXTENSION_TO_FILE_TYPE,
     _resolve_tag_matching_ids,
     build_exclude_streaming_clause,
+    build_exclude_system_playlists_clause,
     build_track_record,
     detect_content_table,
     ensure_rekordbox_not_running,
@@ -209,6 +210,7 @@ def search_tracks(
                     if "Attribute" in p_cols
                     else ""
                 )
+                sys_pl_filter = build_exclude_system_playlists_clause(table_alias="p")
                 playlist_expr = f"""(
                     SELECT GROUP_CONCAT(Name, '|||')
                     FROM (
@@ -219,6 +221,7 @@ def search_tracks(
                           {p_attr}
                           {p_del}
                           {sp_del}
+                          {sys_pl_filter}
                         ORDER BY lower(p.Name) ASC
                     )
                 ) AS PlaylistNames"""
@@ -532,12 +535,14 @@ def search_tracks(
                           AND (t.rb_local_deleted = 0 OR t.rb_local_deleted IS NULL)
                     )""")
                 if has_playlist:
-                    search_parts.append("""c.ID IN (
+                    sys_pl_filter = build_exclude_system_playlists_clause(table_alias="p")
+                    search_parts.append(f"""c.ID IN (
                         SELECT sp.ContentID FROM djmdSongPlaylist sp
                         JOIN djmdPlaylist p ON sp.PlaylistID = p.ID
                         WHERE p.Attribute = 0 AND p.Name LIKE :pattern
                           AND (p.rb_local_deleted = 0 OR p.rb_local_deleted IS NULL)
                           AND (sp.rb_local_deleted = 0 OR sp.rb_local_deleted IS NULL)
+                          {sys_pl_filter}
                     )""")
                 search_condition = "AND (" + " OR ".join(search_parts) + ")"
 
@@ -781,12 +786,13 @@ def fetch_all_playlists(engine: Engine) -> List[Dict[str, Any]]:
             if "rb_local_deleted" in cols
             else ""
         )
+        sys_pl_filter = build_exclude_system_playlists_clause(table_alias=None)
         parent_col = "ParentID" if "ParentID" in cols else "NULL AS ParentID"
 
         sql = f"""
             SELECT ID, Name, {parent_col}
             FROM djmdPlaylist
-            WHERE 1=1 {attr_clause} {del_clause}
+            WHERE 1=1 {attr_clause} {del_clause} {sys_pl_filter}
               AND Name IS NOT NULL AND TRIM(Name) != ''
             ORDER BY lower(Name) ASC;
         """

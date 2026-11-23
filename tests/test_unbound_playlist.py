@@ -370,6 +370,26 @@ class TestUnboundPlaylistBackend(unittest.TestCase):
             ).scalar()
             self.assertEqual(track_count, 2)
 
+    def test_cue_analysis_playlist_does_not_bind_tracks(self):
+        """Verify that presence in CUE Analysis Playlist does not disqualify a tagged track from unbound targets."""
+        with self.engine.begin() as conn:
+            # Add CUE Analysis Playlist
+            conn.exec_driver_sql("""
+                INSERT INTO djmdPlaylist (ID, Seq, Name, Attribute, ParentID, rb_local_deleted)
+                VALUES ('200000', 99, 'CUE Analysis Playlist', 0, 'root', 0);
+            """)
+            # Put t2 into CUE Analysis Playlist
+            conn.exec_driver_sql("""
+                INSERT INTO djmdSongPlaylist (ID, PlaylistID, ContentID, TrackNo, rb_local_deleted)
+                VALUES ('sp_cue_t2', '200000', 't2', 1, 0);
+            """)
+
+        with self.engine.connect() as conn:
+            targets = get_unbound_target_track_ids(conn, unbound_playlist_id="dummy_unbound")
+            # t2 should STILL be considered unbound
+            self.assertIn("t2", targets)
+            self.assertEqual(targets, {"t2", "t4"})
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -57,7 +57,7 @@ A native macOS desktop application (PySide6 / Qt6), background sync daemon (`lau
 
 4. **Data Consistency & Clamping**:
    - Play count mutations must clamp `DJPlayCount >= 0`.
-   - Streaming tracks (`STREAMING_FILE_TYPES`, `STREAMING_URI_PREFIXES`) are excluded from analytics, search, and cloud sync.
+   - Streaming tracks (`STREAMING_FILE_TYPES`, `STREAMING_URI_PREFIXES`) and Rekordbox system utility playlists (`SYSTEM_PLAYLIST_NAMES`, `SYSTEM_PLAYLIST_IDS`, e.g. `CUE Analysis Playlist`) are excluded from analytics, search, playlists view, track badges, unbound reconciliation, and cloud sync.
    - In PySide6 GUI, changes must prompt `confirm_unsaved_changes()` before navigation or destructive actions.
 
 5. **Changelog & Release Hygiene**:

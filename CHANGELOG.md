@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **playlists**: Hide Rekordbox 7 system-internal 'CUE Analysis Playlist' across playlists view, search filters, track badges, unbound playlist reconciliation, and Turso cloud sync (#27)
 - **playlists**: Add `πagged-Unbound` dynamic catch-all playlist for tagged tracks without a regular user playlist (#9)
 - **cli**: Add standalone `sync-unbound` CLI command for local playlist reconciliation (#9)
 - **daemon**: Trigger local `πagged-Unbound` reconciliation on Rekordbox termination, mobile change ingestion, and daemon startup (#9)

@@ -24,6 +24,7 @@ from rekordbox_collection_manager.utils import (
     EXTENSION_TO_FILE_TYPE,
     FILE_TYPE_TO_NAME,
     _resolve_tag_matching_ids,
+    build_exclude_system_playlists_clause,
     ensure_rekordbox_not_running,
     extract_embedded_artwork,
     format_duration,
@@ -507,13 +508,14 @@ def fetch_track_full_info(engine: Engine, content_id: str) -> Dict[str, Any]:
                     p_cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(djmdPlaylist);").fetchall()}
                     p_del = "AND (p.rb_local_deleted = 0 OR p.rb_local_deleted IS NULL)" if "rb_local_deleted" in p_cols else ""
                     p_attr = "AND (p.Attribute = 0 OR p.Attribute IS NULL)" if "Attribute" in p_cols else ""
+                    sys_pl_filter = build_exclude_system_playlists_clause(table_alias="p")
                     rows_p = conn.execute(
                         text(f"""
                             SELECT DISTINCT p.Name
                             FROM djmdSongPlaylist sp
                             JOIN djmdPlaylist p ON sp.PlaylistID = p.ID
                             WHERE (sp.ContentID = :cid OR sp.ContentID = CAST(:cid AS INTEGER) OR CAST(sp.ContentID AS TEXT) = :cid)
-                              {p_attr} {p_del} {sp_del}
+                              {p_attr} {p_del} {sp_del} {sys_pl_filter}
                             ORDER BY lower(p.Name) ASC;
                         """),
                         cid_params,

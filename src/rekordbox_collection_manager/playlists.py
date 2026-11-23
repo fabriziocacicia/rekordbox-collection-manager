@@ -13,8 +13,10 @@ from sqlalchemy.engine import Engine
 
 from rekordbox_collection_manager.utils import (
     build_exclude_streaming_clause,
+    build_exclude_system_playlists_clause,
     build_track_record,
     get_rekordbox_timestamp,
+    is_system_playlist,
 )
 
 
@@ -272,6 +274,7 @@ def fetch_playlists_tree(
         rb_del_col = (
             "rb_local_deleted" if "rb_local_deleted" in pl_cols else "0 AS rb_local_deleted"
         )
+        system_filter = build_exclude_system_playlists_clause(table_alias=None)
 
         query = f"""
             SELECT 
@@ -283,7 +286,7 @@ def fetch_playlists_tree(
                 {smart_col},
                 {rb_del_col}
             FROM djmdPlaylist
-            WHERE 1=1 {del_filter}
+            WHERE 1=1 {del_filter} {system_filter}
               AND Name IS NOT NULL AND TRIM(Name) != ''
             ORDER BY Seq ASC, lower(Name) ASC;
         """
@@ -529,6 +532,7 @@ def fetch_playlist_tracks(
                 else ""
             )
             p_attr = "AND p.Attribute = 0" if "Attribute" in p_cols else ""
+            sys_pl_filter = build_exclude_system_playlists_clause(table_alias="p")
             playlist_expr = f"""(
                 SELECT GROUP_CONCAT(Name, '|||')
                 FROM (
@@ -539,6 +543,7 @@ def fetch_playlist_tracks(
                       {p_attr}
                       {p_del}
                       {osp_del}
+                      {sys_pl_filter}
                     ORDER BY lower(p.Name) ASC
                 )
             ) AS PlaylistNames"""
@@ -759,12 +764,13 @@ def fetch_playlist_folders(engine: Engine) -> List[Dict[str, Any]]:
             else ""
         )
         seq_col = "Seq" if "Seq" in pl_cols else "0 AS Seq"
+        system_filter = build_exclude_system_playlists_clause(table_alias=None)
 
         query = f"""
             SELECT ID, Name, ParentID, {seq_col}
             FROM djmdPlaylist
             WHERE Attribute = 1
-              {del_filter}
+              {del_filter} {system_filter}
             ORDER BY Seq ASC, lower(Name) ASC;
         """
         rows = conn.execute(text(query)).fetchall()
@@ -1028,11 +1034,14 @@ def delete_playlist(engine: Engine, playlist_id: str) -> bool:
         if not pl_row:
             raise ValueError(f"Playlist with ID '{playlist_id}' not found.")
 
+        name = pl_row.get("Name") or "Untitled"
+        if is_system_playlist(name=name, playlist_id=playlist_id):
+            raise ValueError(f"System playlist '{name}' cannot be deleted.")
+
         # If already deleted, return True
         if "rb_local_deleted" in pl_cols and pl_row.get("rb_local_deleted") == 1:
             return True
 
-        name = pl_row.get("Name") or "Untitled"
         attr = int(pl_row.get("Attribute") or 0)
         smart_list = pl_row.get("SmartList") if "SmartList" in pl_cols else None
         is_folder = (attr == 1)

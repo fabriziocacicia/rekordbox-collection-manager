@@ -544,3 +544,86 @@ def test_export_prunes_unbound_playlist_tracks_in_turso(tmp_path):
     prune_stmt = "DELETE FROM playlist_tracks WHERE playlist_id = 'pl_unbound_99';"
     assert any(prune_stmt in stmt for stmt in executed_statements)
 
+
+def test_export_excludes_cue_analysis_playlist():
+    """Verify that export_collection_to_turso filters out Rekordbox 7 CUE Analysis Playlist."""
+    from rekordbox_collection_manager.turso_sync import export_collection_to_turso
+
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(
+            text("""
+                CREATE TABLE djmdContent (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    Title VARCHAR(255),
+                    SrcArtistName VARCHAR(255),
+                    rb_local_deleted INTEGER DEFAULT 0
+                );
+            """)
+        )
+        conn.execute(
+            text("""
+                CREATE TABLE djmdPlaylist (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    Seq INTEGER,
+                    Name VARCHAR(255),
+                    Attribute INTEGER DEFAULT 0,
+                    ParentID VARCHAR(255),
+                    rb_local_deleted INTEGER DEFAULT 0
+                );
+            """)
+        )
+        conn.execute(
+            text("""
+                CREATE TABLE djmdSongPlaylist (
+                    ID VARCHAR(255) PRIMARY KEY,
+                    PlaylistID VARCHAR(255),
+                    ContentID VARCHAR(255),
+                    TrackNo INTEGER,
+                    rb_local_deleted INTEGER DEFAULT 0
+                );
+            """)
+        )
+        conn.execute(
+            text("INSERT INTO djmdContent (ID, Title, SrcArtistName, rb_local_deleted) VALUES ('c1', 'Track 1', 'Artist 1', 0);")
+        )
+        conn.execute(
+            text("""
+                INSERT INTO djmdPlaylist (ID, Seq, Name, Attribute, ParentID, rb_local_deleted)
+                VALUES 
+                    ('pl_real', 1, 'Real Playlist', 0, 'root', 0),
+                    ('200000', 99, 'CUE Analysis Playlist', 0, 'root', 0);
+            """)
+        )
+        conn.execute(
+            text("""
+                INSERT INTO djmdSongPlaylist (ID, PlaylistID, ContentID, TrackNo, rb_local_deleted)
+                VALUES 
+                    ('sp_real', 'pl_real', 'c1', 1, 0),
+                    ('sp_cue', '200000', 'c1', 1, 0);
+            """)
+        )
+
+    mock_client = MagicMock()
+    executed_statements = []
+
+    def fake_execute(stmt, params=None):
+        executed_statements.append((stmt, params))
+        return TursoQueryResult(cols=[], rows=[])
+
+    mock_client.execute.side_effect = fake_execute
+
+    export_collection_to_turso(engine, mock_client)
+
+    # Check all executed statements and parameters
+    for stmt, params in executed_statements:
+        assert "200000" not in stmt
+        assert "CUE Analysis Playlist" not in stmt
+        if params:
+            for p in params:
+                assert p != "200000"
+                assert p != "CUE Analysis Playlist"
+
+    # Verify that Real Playlist WAS exported
+    assert any("pl_real" in stmt or (params and "pl_real" in params) for stmt, params in executed_statements)
+

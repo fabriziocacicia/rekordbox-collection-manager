@@ -950,6 +950,31 @@ def build_exclude_streaming_clause(cols: Set[str], table_alias: Optional[str] = 
     return "AND " + " AND ".join(parts)
 
 
+# Rekordbox internal system playlists (e.g. Rekordbox 7 Intelligent Cue Creation utility playlist)
+SYSTEM_PLAYLIST_NAMES: Set[str] = {"cue analysis playlist"}
+SYSTEM_PLAYLIST_IDS: Set[str] = {"200000"}
+
+
+def is_system_playlist(name: Optional[str] = None, playlist_id: Optional[str] = None) -> bool:
+    """Check if a playlist is a Rekordbox system utility playlist (e.g., CUE Analysis Playlist)."""
+    if playlist_id is not None and str(playlist_id).strip() in SYSTEM_PLAYLIST_IDS:
+        return True
+    if name is not None and name.strip().lower() in SYSTEM_PLAYLIST_NAMES:
+        return True
+    return False
+
+
+def build_exclude_system_playlists_clause(table_alias: Optional[str] = "p") -> str:
+    """Build SQL WHERE conditions to exclude system utility playlists (e.g., CUE Analysis Playlist).
+
+    Excludes playlists matching known system names (case-insensitive) or known system IDs.
+    """
+    prefix = f"{table_alias}." if table_alias else ""
+    names_in = ", ".join(f"'{n}'" for n in sorted(SYSTEM_PLAYLIST_NAMES))
+    ids_in = ", ".join(f"'{i}'" for i in sorted(SYSTEM_PLAYLIST_IDS))
+    return f"AND (lower({prefix}Name) NOT IN ({names_in}) OR {prefix}Name IS NULL) AND (CAST({prefix}ID AS TEXT) NOT IN ({ids_in}) OR {prefix}ID IS NULL)"
+
+
 # Rekordbox FileType mappings
 EXTENSION_TO_FILE_TYPE: Dict[str, int] = {
     "MP3": 1,

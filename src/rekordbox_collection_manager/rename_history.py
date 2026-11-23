@@ -18,6 +18,7 @@ from sqlcipher3 import dbapi2 as sqlcipher_driver
 from rekordbox_collection_manager.utils import (
     DEVICE_LIBRARY_PLUS_KEY,
     MONTH_NAME_TO_INT,
+    build_exclude_system_playlists_clause,
     build_track_record,
     clean_session_name,
     compose_history_name,
@@ -872,6 +873,7 @@ def fetch_session_tracks(engine: Engine, history_id: str) -> Dict[str, Any]:
                     if "Attribute" in p_cols
                     else ""
                 )
+                sys_pl_filter = build_exclude_system_playlists_clause(table_alias="p")
                 playlist_expr = f"""(
                     SELECT GROUP_CONCAT(Name, '|||')
                     FROM (
@@ -882,6 +884,7 @@ def fetch_session_tracks(engine: Engine, history_id: str) -> Dict[str, Any]:
                           {p_attr}
                           {p_del}
                           {sp_del}
+                          {sys_pl_filter}
                         ORDER BY lower(p.Name) ASC
                     )
                 ) AS PlaylistNames"""

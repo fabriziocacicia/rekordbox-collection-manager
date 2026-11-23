@@ -236,6 +236,62 @@ class TestPlaylistsBackend(unittest.TestCase):
         with self.assertRaises(ValueError):
             delete_playlist(self.engine, "invalid_id_999999")
 
+    def test_fetch_playlists_tree_excludes_cue_analysis_playlist(self):
+        """Verify fetch_playlists_tree hides Rekordbox 7 CUE Analysis Playlist (ID 200000)."""
+        with self.engine.begin() as conn:
+            conn.exec_driver_sql("""
+                INSERT INTO djmdPlaylist (ID, Seq, Name, Attribute, ParentID, SmartList, rb_local_deleted)
+                VALUES ('200000', 99, 'CUE Analysis Playlist', 0, 'root', NULL, 0);
+            """)
+
+        tree = fetch_playlists_tree(self.engine, include_deleted=False)
+        all_ids = []
+        def _collect_ids(nodes):
+            for n in nodes:
+                all_ids.append(n["id"])
+                all_ids.append(n["name"].lower())
+                _collect_ids(n.get("children", []))
+        _collect_ids(tree)
+
+        self.assertNotIn("200000", all_ids)
+        self.assertNotIn("cue analysis playlist", all_ids)
+
+        # Also when include_deleted=True
+        tree_all = fetch_playlists_tree(self.engine, include_deleted=True)
+        all_ids_del = []
+        _collect_ids(tree_all)
+        self.assertNotIn("200000", all_ids_del)
+        self.assertNotIn("cue analysis playlist", all_ids_del)
+
+    def test_delete_system_playlist_rejected(self):
+        """Verify delete_playlist rejects deleting system utility playlists."""
+        with self.engine.begin() as conn:
+            conn.exec_driver_sql("""
+                INSERT INTO djmdPlaylist (ID, Seq, Name, Attribute, ParentID, SmartList, rb_local_deleted)
+                VALUES ('200000', 99, 'CUE Analysis Playlist', 0, 'root', NULL, 0);
+            """)
+
+        with self.assertRaises(ValueError) as ctx:
+            delete_playlist(self.engine, "200000")
+        self.assertIn("System playlist", str(ctx.exception))
+
+    def test_fetch_playlist_tracks_excludes_cue_analysis_from_playlists_list(self):
+        """Verify fetch_playlist_tracks does not expose CUE Analysis Playlist in track playlist badges."""
+        with self.engine.begin() as conn:
+            conn.exec_driver_sql("""
+                INSERT INTO djmdPlaylist (ID, Seq, Name, Attribute, ParentID, SmartList, rb_local_deleted)
+                VALUES ('200000', 99, 'CUE Analysis Playlist', 0, 'root', NULL, 0);
+            """)
+            conn.exec_driver_sql("""
+                INSERT INTO djmdSongPlaylist (ID, PlaylistID, ContentID, TrackNo, rb_local_deleted)
+                VALUES ('sp_cue', '200000', 't1', 1, 0);
+            """)
+
+        res = fetch_playlist_tracks(self.engine, "pl_afro")
+        t1 = next(t for t in res if t["id"] == "t1")
+        self.assertIn("Afro House", t1["playlists"])
+        self.assertNotIn("CUE Analysis Playlist", t1["playlists"])
+
 
 class TestPlaylistsGUI(unittest.TestCase):
     """Test suite for PlaylistsView and Chip click navigation."""
