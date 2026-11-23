@@ -24,6 +24,7 @@ A native macOS desktop application (PySide6 / Qt6), background sync daemon (`lau
 - Modify track play counts: `uv run edit-play-count`
 - Lossless audio replacement: `uv run replace-file`
 - Background daemon: `uv run rekordbox-daemon status` (or `run`, `sync`, `install`, `uninstall`)
+- Reconcile unbound tagged playlist: `uv run sync-unbound` [--dry-run] [--force]
 
 ### Operational & Release Scripts
 - Build standalone `.app` bundle: `./scripts/build_app.sh` (or `./scripts/build_app.sh --package` to include `.zip`)
@@ -78,6 +79,7 @@ A native macOS desktop application (PySide6 / Qt6), background sync daemon (`lau
   - `tags.py`: MyTag tree CRUD, tag category normalization.
   - `analytics.py`: Gig session analytics, Camelot key distribution, turnover, survival curve, XML/M3U8 exports.
   - `backup_restore.py`: Snapshot creation, directory sync via `rsync`, restore verification.
+  - `unbound_playlist.py`: Dynamic catch-all playlist (`πagged-Unbound`) reconciliation for playlistless tagged tracks.
   - `turso_sync.py`: HTTP client for Turso `/v2/pipeline`, changelog event synchronization.
   - `daemon.py`: Cocoa `NSWorkspace` app observer + periodic mobile changelog poll.
 - `src/rekordbox_collection_manager/gui/`:

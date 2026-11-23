@@ -46,6 +46,32 @@ except ImportError:
     HAS_PYOBJC = False
 
 
+def run_full_session_sync(force: bool = False) -> None:
+    """Run full session synchronization across local and cloud targets.
+
+    Executes:
+    1. Local πagged-Unbound playlist reconciliation (fault-isolated, zero cloud dependency).
+    2. Turso cloud sync cycle (ingests pending mobile changelog events and exports snapshot).
+    """
+    logger.info("Executing session synchronization...")
+    try:
+        from rekordbox_collection_manager.unbound_playlist import reconcile_unbound_playlist
+        reconcile_stats = reconcile_unbound_playlist(force=force)
+        logger.info(
+            "Local πagged-Unbound playlist reconciled: added=%d, removed=%d, total=%d",
+            reconcile_stats.get("added", 0),
+            reconcile_stats.get("removed", 0),
+            reconcile_stats.get("total", 0),
+        )
+    except Exception as e:
+        logger.warning("Local unbound playlist reconciliation warning: %s", e)
+
+    try:
+        run_sync_cycle(force=force)
+    except Exception as e:
+        logger.warning("Cloud sync cycle warning: %s", e)
+
+
 if HAS_PYOBJC:
     class RekordboxAppObserver(NSObject):
         """Native macOS Cocoa observer listening for Rekordbox launch and quit events."""
@@ -61,7 +87,7 @@ if HAS_PYOBJC:
             name = (app.localizedName() or "").lower() if app else ""
             if "rekordbox" in name and "rekordbox-collection" not in name:
                 logger.info("Rekordbox was CLOSED ⚪ (received macOS NSWorkspace quit event)! Triggering sync...")
-                run_sync_cycle()
+                run_full_session_sync()
 
 
 def run_daemon_loop(poll_interval: int = 2) -> None:
@@ -70,14 +96,20 @@ def run_daemon_loop(poll_interval: int = 2) -> None:
     currently_running = is_rekordbox_running()
     logger.info("Initial Rekordbox state: %s", "RUNNING 🟢" if currently_running else "CLOSED ⚪")
 
-    # On startup: only process pending changelog events if closed, avoiding redundant full export
+    # On startup: reconcile local unbound playlist and check pending mobile events if closed
     if not currently_running:
+        try:
+            from rekordbox_collection_manager.unbound_playlist import reconcile_unbound_playlist
+            reconcile_unbound_playlist()
+        except Exception as e:
+            logger.debug("Startup local unbound reconciliation: %s", e)
+
         try:
             client = create_turso_client()
             pending = client.execute("SELECT COUNT(*) FROM changelog_events WHERE status = 'PENDING';").rows[0][0]
             if pending > 0:
                 logger.info("Found %d pending changelog events on startup. Processing...", pending)
-                run_sync_cycle()
+                run_full_session_sync()
             else:
                 logger.info("Daemon ready and listening for Rekordbox events.")
         except Exception as e:
@@ -125,7 +157,7 @@ def run_daemon_loop(poll_interval: int = 2) -> None:
                         ).rows[0][0]
                         if pending > 0:
                             logger.info("Detected %d pending events from mobile. Processing...", pending)
-                            run_sync_cycle()
+                            run_full_session_sync()
                     except Exception as e:
                         logger.debug("Check pending events error: %s", e)
 
@@ -152,7 +184,7 @@ def run_daemon_loop(poll_interval: int = 2) -> None:
 
             elif was_running and not currently_running:
                 logger.info("Rekordbox was CLOSED ⚪! Triggering post-session sync...")
-                run_sync_cycle()
+                run_full_session_sync()
 
             elif not currently_running and (time.time() - last_turso_check) >= turso_check_interval:
                 last_turso_check = time.time()
@@ -163,7 +195,7 @@ def run_daemon_loop(poll_interval: int = 2) -> None:
                     ).rows[0][0]
                     if pending > 0:
                         logger.info("Detected %d pending events from mobile. Processing...", pending)
-                        run_sync_cycle()
+                        run_full_session_sync()
                 except Exception as e:
                     logger.debug("Check pending events error: %s", e)
 
@@ -268,8 +300,8 @@ def main():
     args = parser.parse_args()
 
     if args.command == "sync":
-        success = run_sync_cycle(force=False)
-        sys.exit(0 if success else 1)
+        run_full_session_sync(force=False)
+        sys.exit(0)
     elif args.command == "run":
         run_daemon_loop(poll_interval=args.interval)
     elif args.command == "status":

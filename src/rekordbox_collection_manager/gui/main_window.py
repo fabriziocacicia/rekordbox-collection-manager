@@ -935,6 +935,14 @@ class MainWindow(QMainWindow):
         force: bool = False,
     ) -> None:
         """Trigger a Turso cloud sync cycle using the unified sync engine."""
+        # Always reconcile πagged-Unbound on sync trigger if Rekordbox is closed
+        if not is_rekordbox_running() and self.engine:
+            try:
+                from rekordbox_collection_manager.unbound_playlist import reconcile_unbound_playlist
+                reconcile_unbound_playlist(engine=self.engine, force=force, create_backup=False)
+            except Exception:
+                pass
+
         if not is_turso_configured():
             return
 
@@ -1079,6 +1087,15 @@ class MainWindow(QMainWindow):
         if self._sync_worker:
             stop_worker(self._sync_worker, wait_ms=50)
             self._sync_worker = None
+
+        # Auto-reconcile πagged-Unbound on close if Rekordbox is not running
+        try:
+            from rekordbox_collection_manager.utils import is_rekordbox_running
+            if not is_rekordbox_running() and self.engine:
+                from rekordbox_collection_manager.unbound_playlist import reconcile_unbound_playlist
+                reconcile_unbound_playlist(engine=self.engine, force=True, create_backup=False)
+        except Exception:
+            pass
 
         wait_for_retired_workers(timeout_ms=500)
         super().closeEvent(event)

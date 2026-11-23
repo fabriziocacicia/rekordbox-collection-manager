@@ -695,6 +695,15 @@ def export_collection_to_turso(
                 progress_cb("playlists", stats["playlists"], total_pl)
 
     # 3. Export Playlist Tracks
+    # Prune existing playlist_tracks for πagged-Unbound in Turso so locally removed tracks do not linger
+    try:
+        from rekordbox_collection_manager.unbound_playlist import UNBOUND_PLAYLIST_NAME
+        unbound_ids = [str(r[0]) for r in pl_rows if str(r[1]) == UNBOUND_PLAYLIST_NAME]
+        for u_id in unbound_ids:
+            client.execute(f"DELETE FROM playlist_tracks WHERE playlist_id = '{u_id}';")
+    except Exception as e:
+        logger.warning("Could not prune unbound playlist tracks in Turso: %s", e)
+
     if all_pt_rows:
         total_pt = len(all_pt_rows)
         logger.info("Exporting %d playlist tracks (including smart playlists) to Turso...", total_pt)
@@ -1285,6 +1294,13 @@ def run_sync_cycle(
 
     if cancel_fn and cancel_fn():
         return SyncResult(success=False, message="Cloud sync cancelled")
+
+    # 6b. Reconcile πagged-Unbound playlist so local master.db and exported snapshot reflect latest state
+    try:
+        from rekordbox_collection_manager.unbound_playlist import reconcile_unbound_playlist
+        reconcile_unbound_playlist(engine=engine, force=True, create_backup=False)
+    except Exception as e:
+        logger.warning("Decoupled unbound playlist reconciliation skipped/failed: %s", e)
 
     # 7. Export fresh snapshot to Turso
     try:
