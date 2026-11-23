@@ -23,6 +23,7 @@ from scripts.desktop_version import (
     check_preflight_conditions,
     check_required_tools,
     check_tag_collision,
+    check_unreleased_notes,
     cleanup_release_artifacts,
     compute_sha256,
     confirm_release_prompt,
@@ -187,7 +188,8 @@ def test_check_preflight_conditions_all_clean():
     with patch("scripts.desktop_version.check_required_tools", return_value=[]), \
          patch("scripts.desktop_version.check_git_clean", return_value=[]), \
          patch("scripts.desktop_version.check_git_branch", return_value=[]), \
-         patch("scripts.desktop_version.check_tag_collision", return_value=[]):
+         patch("scripts.desktop_version.check_tag_collision", return_value=[]), \
+         patch("scripts.desktop_version.check_unreleased_notes", return_value=[]):
         errors = check_preflight_conditions("0.21.0")
         assert errors == []
 
@@ -196,10 +198,32 @@ def test_check_preflight_conditions_accumulates_errors():
     with patch("scripts.desktop_version.check_required_tools", return_value=["tool error"]), \
          patch("scripts.desktop_version.check_git_clean", return_value=["dirty error"]), \
          patch("scripts.desktop_version.check_git_branch", return_value=["branch error"]), \
-         patch("scripts.desktop_version.check_tag_collision", return_value=["tag collision error"]):
+         patch("scripts.desktop_version.check_tag_collision", return_value=["tag collision error"]), \
+         patch("scripts.desktop_version.check_unreleased_notes", return_value=["unreleased error"]):
         errors = check_preflight_conditions("0.21.0")
-        assert len(errors) == 4
-        assert errors == ["tool error", "dirty error", "branch error", "tag collision error"]
+        assert len(errors) == 5
+        assert errors == ["tool error", "dirty error", "branch error", "tag collision error", "unreleased error"]
+
+
+def test_check_unreleased_notes_populated(tmp_path):
+    changelog = tmp_path / "CHANGELOG.md"
+    changelog.write_text("# Changelog\n\n## [Unreleased]\n\n- Feature note\n\n## [0.20.0]\n")
+    assert check_unreleased_notes(changelog_path=changelog) == []
+
+
+def test_check_unreleased_notes_empty(tmp_path):
+    changelog = tmp_path / "CHANGELOG.md"
+    changelog.write_text("# Changelog\n\n## [Unreleased]\n\n## [0.20.0]\n")
+    errors = check_unreleased_notes(changelog_path=changelog)
+    assert len(errors) == 1
+    assert "is empty" in errors[0]
+
+
+def test_check_unreleased_notes_missing_file(tmp_path):
+    changelog = tmp_path / "NONEXISTENT.md"
+    errors = check_unreleased_notes(changelog_path=changelog)
+    assert len(errors) == 1
+    assert "not found" in errors[0]
 
 
 def test_get_git_checkpoint():
@@ -374,7 +398,7 @@ def test_sync_changelog_for_release_with_existing_unreleased(tmp_path):
     assert "## [Unreleased]\n\n## [0.21.0]" in content
 
 
-def test_sync_changelog_for_release_auto_extracts_commits_when_empty(tmp_path):
+def test_sync_changelog_for_release_raises_when_unreleased_empty(tmp_path):
     changelog = tmp_path / "CHANGELOG.md"
     changelog.write_text(
         "# Changelog\n\n"
@@ -385,34 +409,22 @@ def test_sync_changelog_for_release_auto_extracts_commits_when_empty(tmp_path):
         "[0.20.0]: https://github.com/fabriziocacicia/rekordbox-collection-manager/releases/tag/v0.20.0\n"
     )
 
-    mock_commit = MagicMock()
-    mock_commit.message = "feat(gui): auto extracted feature"
-    mock_commit.commit_type = "feat"
-    mock_commit.scope = "gui"
-    mock_commit.description = "auto extracted feature"
-
-    with patch("scripts.desktop_version.get_desktop_tags", return_value=["v0.20.0"]), \
-         patch("scripts.desktop_version.get_commits_for_range", return_value=[mock_commit]), \
-         patch("scripts.desktop_version.categorize_commits", return_value={"Added": ["- **gui**: Auto extracted feature"]}):
-        updated, notes = sync_changelog_for_release(
+    with pytest.raises(ValueError, match="is empty"):
+        sync_changelog_for_release(
             "0.21.0",
             date_str="2026-11-20",
             changelog_path=changelog,
             dry_run=False,
         )
 
-        assert updated is True
-        assert "Auto extracted feature" in notes
-        content = changelog.read_text()
-        assert "## [0.21.0] - 2026-11-20" in content
-        assert "Auto extracted feature" in content
 
-
-def test_sync_changelog_for_release_merges_missing_git_commits(tmp_path):
+def test_sync_changelog_for_release_preserves_curated_notes_without_mutation(tmp_path):
     changelog = tmp_path / "CHANGELOG.md"
     changelog.write_text(
         "# Changelog\n\n"
         "## [Unreleased]\n\n"
+        "### Changed\n\n"
+        "- **gui**: Curated changed entry\n\n"
         "### Maintenance\n\n"
         "- **app**: Existing maintenance note (#14)\n\n"
         "## [0.20.0] - 2026-11-18\n\n"
@@ -421,29 +433,21 @@ def test_sync_changelog_for_release_merges_missing_git_commits(tmp_path):
         "[0.20.0]: https://github.com/fabriziocacicia/rekordbox-collection-manager/releases/tag/v0.20.0\n"
     )
 
-    mock_commit = MagicMock()
-    mock_commit.message = "feat(gui): missing feature (#6)"
-    mock_commit.commit_type = "feat"
-    mock_commit.scope = "gui"
-    mock_commit.description = "missing feature (#6)"
+    updated, notes = sync_changelog_for_release(
+        "0.21.0",
+        date_str="2026-11-20",
+        changelog_path=changelog,
+        dry_run=False,
+    )
 
-    with patch("scripts.desktop_version.get_desktop_tags", return_value=["v0.20.0"]), \
-         patch("scripts.desktop_version.get_commits_for_range", return_value=[mock_commit]), \
-         patch("scripts.desktop_version.categorize_commits", return_value={"Added": ["- **gui**: Missing feature (#6)"]}):
-        updated, notes = sync_changelog_for_release(
-            "0.21.0",
-            date_str="2026-11-20",
-            changelog_path=changelog,
-            dry_run=False,
-        )
-
-        assert updated is True
-        assert "Missing feature (#6)" in notes
-        assert "Existing maintenance note (#14)" in notes
-        content = changelog.read_text()
-        assert "## [0.21.0] - 2026-11-20" in content
-        assert "### Added\n\n- **gui**: Missing feature (#6)" in content
-        assert "### Maintenance\n\n- **app**: Existing maintenance note (#14)" in content
+    assert updated is True
+    assert "Curated changed entry" in notes
+    assert "Existing maintenance note (#14)" in notes
+    assert "### Added" not in notes
+    content = changelog.read_text()
+    assert "## [0.21.0] - 2026-11-20" in content
+    assert "### Changed\n\n- **gui**: Curated changed entry" in content
+    assert "### Maintenance\n\n- **app**: Existing maintenance note (#14)" in content
 
 
 def test_sync_changelog_for_release_dry_run(tmp_path):
