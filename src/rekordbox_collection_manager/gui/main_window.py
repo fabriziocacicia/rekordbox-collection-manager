@@ -765,6 +765,34 @@ class MainWindow(QMainWindow):
         if not self._initial_sync_done:
             self._initial_sync_done = True
             self.trigger_sync(background=True, create_backup=True)
+            self._reconcile_unbound_on_open()
+
+    def _reconcile_unbound_on_open(self) -> None:
+        """Automatically reconcile πagged-Unbound playlist in background on collection load."""
+        if is_rekordbox_running():
+            return
+        if not self.engine or not self.db_path:
+            return
+
+        from rekordbox_collection_manager.gui.workers import UnboundPlaylistReconcileWorker
+
+        worker = UnboundPlaylistReconcileWorker(
+            engine=self.engine,
+            db_path=self.db_path,
+            parent=self,
+        )
+
+        def _on_reconcile_success(stats: Dict[str, Any]) -> None:
+            if stats.get("added", 0) > 0 or stats.get("removed", 0) > 0:
+                self.status_bar.showMessage(
+                    f"Reconciled πagged-Unbound: +{stats['added']} added, -{stats['removed']} removed ({stats.get('total', 0)} total).",
+                    5000,
+                )
+                if hasattr(self, "playlists_view") and self.playlists_view:
+                    self.playlists_view._load_playlists_tree(force_reload_selected=True)
+
+        worker.success.connect(_on_reconcile_success)
+        worker.start()
 
     def _on_db_error(self, err_msg: str) -> None:
         self.setWindowTitle("Rekordbox Collection Manager")
