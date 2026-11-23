@@ -158,6 +158,15 @@ class DatabaseLoaderWorker(QThread):
             except Exception:
                 pass
 
+            # Auto-reconcile πagged-Unbound playlist on collection load if Rekordbox is not running
+            try:
+                from rekordbox_collection_manager.utils import is_rekordbox_running
+                if not is_rekordbox_running():
+                    from rekordbox_collection_manager.unbound_playlist import reconcile_unbound_playlist
+                    reconcile_unbound_playlist(engine=engine, force=True, create_backup=False)
+            except Exception:
+                pass
+
             history_table = detect_history_table(engine)
             history_records = fetch_history_records(engine, history_table, include_deleted=True)
             if self.isInterruptionRequested():

@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **playlists**: Add `πagged-Unbound` dynamic catch-all playlist for tagged tracks without a regular user playlist (#9)
 - **cli**: Add standalone `sync-unbound` CLI command for local playlist reconciliation (#9)
 - **daemon**: Trigger local `πagged-Unbound` reconciliation on Rekordbox termination, mobile change ingestion, and daemon startup (#9)
-- **gui**: Add `π` button and context menu action to PlaylistsView for on-demand reconciliation (#9)
+- **gui**: Automate `πagged-Unbound` reconciliation on collection load, app exit, and sync cycle (#9)
 
 
 ## [0.22.0] - 2026-11-23

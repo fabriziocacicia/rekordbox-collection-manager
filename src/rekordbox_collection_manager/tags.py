@@ -605,9 +605,10 @@ def cleanup_duplicate_song_tags(engine: Engine) -> int:
             if has_rb_del
             else ""
         )
+        order_by = "ORDER BY created_at ASC, ID ASC" if "created_at" in smt_cols else "ORDER BY ID ASC"
 
         rows = conn.exec_driver_sql(
-            f"SELECT ID, ContentID, MyTagID FROM djmdSongMyTag {del_filter} ORDER BY created_at ASC, ID ASC;"
+            f"SELECT ID, ContentID, MyTagID FROM djmdSongMyTag {del_filter} {order_by};"
         ).fetchall()
 
         seen_track_tags: Set[Tuple[str, str]] = set()

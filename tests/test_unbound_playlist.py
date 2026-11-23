@@ -342,6 +342,33 @@ class TestUnboundPlaylistBackend(unittest.TestCase):
             sync_unbound_cli()
         self.assertEqual(cm.exception.code, 0)
 
+    @patch("rekordbox_collection_manager.utils.is_rekordbox_running", return_value=False)
+    @patch("rekordbox_collection_manager.gui.workers.open_database")
+    @patch("rekordbox_collection_manager.gui.workers.resolve_db_path", return_value="/tmp/fake_master.db")
+    def test_database_loader_worker_auto_reconciles_unbound(self, mock_resolve, mock_open, mock_rb_running):
+        """Verify DatabaseLoaderWorker auto-reconciles πagged-Unbound on database load."""
+        from PySide6.QtWidgets import QApplication
+        from rekordbox_collection_manager.gui.workers import DatabaseLoaderWorker
+        from rekordbox_collection_manager.unbound_playlist import UNBOUND_PLAYLIST_NAME
+
+        _app = QApplication.instance() or QApplication([])
+        mock_open.return_value = (self.engine, None)
+
+        loader = DatabaseLoaderWorker(db_path="/tmp/fake_master.db")
+        loader.run()
+
+        with self.engine.connect() as conn:
+            row = conn.execute(
+                text("SELECT ID FROM djmdPlaylist WHERE Name = :name;"),
+                {"name": UNBOUND_PLAYLIST_NAME},
+            ).fetchone()
+            self.assertIsNotNone(row)
+            pl_id = row[0]
+            track_count = conn.execute(
+                text("SELECT count(*) FROM djmdSongPlaylist WHERE PlaylistID = :pl_id;"),
+                {"pl_id": pl_id},
+            ).scalar()
+            self.assertEqual(track_count, 2)
 
 
 if __name__ == "__main__":
