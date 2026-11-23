@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-11-23
+
 ### Added
 
 - **playlists**: Hide Rekordbox 7 system-internal 'CUE Analysis Playlist' across playlists view, search filters, track badges, unbound playlist reconciliation, and Turso cloud sync (#27)
@@ -14,7 +16,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **cli**: Add standalone `sync-unbound` CLI command for local playlist reconciliation (#9)
 - **daemon**: Trigger local `πagged-Unbound` reconciliation on Rekordbox termination, mobile change ingestion, and daemon startup (#9)
 - **gui**: Automate `πagged-Unbound` reconciliation on collection load, app exit, and sync cycle (#9)
-
 
 ## [0.22.0] - 2026-11-23
 
@@ -385,7 +386,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Remove header sidebar toggle button and update info text font stack
 - Remove auto-extract dates feature and update tests
 
-[Unreleased]: https://github.com/fabriziocacicia/rekordbox-collection-manager/compare/v0.22.0...HEAD
+[Unreleased]: https://github.com/fabriziocacicia/rekordbox-collection-manager/compare/v0.23.0...HEAD
+[0.23.0]: https://github.com/fabriziocacicia/rekordbox-collection-manager/compare/v0.22.0...v0.23.0
 [0.22.0]: https://github.com/fabriziocacicia/rekordbox-collection-manager/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/fabriziocacicia/rekordbox-collection-manager/compare/v0.20.0...v0.21.0
 [0.20.0]: https://github.com/fabriziocacicia/rekordbox-collection-manager/compare/v0.19.0...v0.20.0
