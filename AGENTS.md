@@ -62,7 +62,7 @@ A native macOS desktop application (PySide6 / Qt6), background sync daemon (`lau
 5. **Changelog & Release Hygiene**:
    - Every PR introducing user-facing features (`feat`), bug fixes (`fix`), or noticeable architectural changes must update `CHANGELOG.md` under `## [Unreleased]` adhering to Keep a Changelog 1.1.0 standard (`Added`, `Changed`, `Fixed`, `Maintenance`).
    - Run `uv run python scripts/changelog.py --check` during documentation audits.
-   - The desktop release pipeline (`scripts/desktop_version.py`) automatically validates and merges any missing conventional commits from git history (`v<latest>..HEAD`) to guarantee zero feature omission.
+   - The desktop release pipeline (`scripts/desktop_version.py`) validates that `## [Unreleased]` is documented in `CHANGELOG.md` before releasing, rotating curated notes cleanly into the release version.
 
 ---
 

@@ -28,11 +28,7 @@ DIST_DIR = PROJECT_ROOT / "dist"
 
 try:
     from scripts.changelog import (
-        CATEGORIES_ORDER,
-        categorize_commits,
-        get_commits_for_range,
         get_desktop_tags,
-        merge_notes_with_git_commits,
         rotate_changelog,
         run_git,
     )
@@ -40,11 +36,7 @@ except ImportError:
     if str(PROJECT_ROOT) not in sys.path:
         sys.path.insert(0, str(PROJECT_ROOT))
     from scripts.changelog import (
-        CATEGORIES_ORDER,
-        categorize_commits,
-        get_commits_for_range,
         get_desktop_tags,
-        merge_notes_with_git_commits,
         rotate_changelog,
         run_git,
     )
@@ -148,11 +140,25 @@ def check_tag_collision(
     return errors
 
 
+def check_unreleased_notes(changelog_path: Path = CHANGELOG_PATH) -> list[str]:
+    """Verify that CHANGELOG.md exists and has non-empty ## [Unreleased] notes."""
+    if not changelog_path.exists():
+        return [f"Changelog file not found at {changelog_path}"]
+    notes = extract_unreleased_notes(changelog_path=changelog_path)
+    if not notes:
+        return [
+            f"The '## [Unreleased]' section in {changelog_path.name} is empty. "
+            f"Please document release changes under '## [Unreleased]' before releasing."
+        ]
+    return []
+
+
 def check_preflight_conditions(
     version: str,
     expected_branch: str = "main",
     check_remote: bool = True,
     cwd: Path = PROJECT_ROOT,
+    changelog_path: Path = CHANGELOG_PATH,
 ) -> list[str]:
     """Run all pre-flight release checks and return consolidated list of errors."""
     errors: list[str] = []
@@ -160,6 +166,7 @@ def check_preflight_conditions(
     errors.extend(check_git_clean(cwd=cwd))
     errors.extend(check_git_branch(expected_branch=expected_branch, check_remote=check_remote, cwd=cwd))
     errors.extend(check_tag_collision(version=version, check_remote=check_remote, cwd=cwd))
+    errors.extend(check_unreleased_notes(changelog_path=changelog_path))
     return errors
 
 
@@ -320,8 +327,7 @@ def sync_changelog_for_release(
     dry_run: bool = False,
 ) -> tuple[bool, str]:
     """
-    Ensure [Unreleased] is populated (auto-populating from desktop conventional commits if empty,
-    or merging missing commits from git history), rotate CHANGELOG.md for new_version,
+    Ensure [Unreleased] is populated in CHANGELOG.md, rotate CHANGELOG.md for new_version,
     and return (updated_bool, release_notes_markdown).
     """
     clean_ver = version.lstrip("v")
@@ -329,39 +335,11 @@ def sync_changelog_for_release(
         date_str = datetime.date.today().isoformat()
 
     unreleased_notes = extract_unreleased_notes(changelog_path=changelog_path)
-
-    # Query commits since last desktop tag to supplement or populate unreleased notes
-    git_categorized: dict[str, list[str]] = {}
-    tags = get_desktop_tags(cwd=cwd)
-    if tags:
-        latest_tag = tags[-1]
-        commits = get_commits_for_range(f"{latest_tag}..HEAD", cwd=cwd)
-        git_categorized = categorize_commits(commits, target="desktop")
-
-    merged_notes, added_bullets = merge_notes_with_git_commits(
-        existing_notes=unreleased_notes,
-        git_categorized=git_categorized,
-    )
-
-    if added_bullets:
-        print(f"ℹ️ Merged {len(added_bullets)} unreleased commit(s) from git history into release notes:")
-        for bullet in added_bullets:
-            print(f"   • {bullet}")
-
-    if not dry_run and changelog_path.exists() and merged_notes != unreleased_notes:
-        content = changelog_path.read_text(encoding="utf-8")
-        unreleased_pattern = re.compile(
-            r"(## \[Unreleased\][^\n]*\n)(?P<body>.*?)(?=\n## \[(?P<next_ver>\d+\.\d+(?:\.\d+)?)\])",
-            re.DOTALL,
+    if not unreleased_notes:
+        raise ValueError(
+            f"The '## [Unreleased]' section in {changelog_path.name} is empty. "
+            f"Please document release changes under '## [Unreleased]' before releasing."
         )
-        match = unreleased_pattern.search(content)
-        if match:
-            new_content = unreleased_pattern.sub(
-                lambda m: f"{m.group(1)}\n{merged_notes}\n",
-                content,
-                count=1,
-            )
-            changelog_path.write_text(new_content, encoding="utf-8")
 
     # Rotate CHANGELOG.md
     updated = rotate_changelog(
@@ -374,7 +352,7 @@ def sync_changelog_for_release(
 
     release_notes = extract_release_notes(clean_ver, changelog_path=changelog_path)
     if not release_notes and dry_run:
-        release_notes = merged_notes if merged_notes else "- Routine updates and maintenance."
+        release_notes = unreleased_notes
 
     return updated, release_notes
 
@@ -638,6 +616,7 @@ def run_release_pipeline(
         expected_branch="main",
         check_remote=not dry_run,
         cwd=cwd,
+        changelog_path=changelog_path,
     )
     if errors:
         print("❌ Pre-flight checks failed:", file=sys.stderr)
@@ -899,7 +878,7 @@ def main() -> None:
     changelog_updated = False
     if not args.no_changelog and CHANGELOG_PATH.exists():
         try:
-            changelog_updated = rotate_changelog(
+            changelog_updated, _ = sync_changelog_for_release(
                 new_version,
                 cwd=PROJECT_ROOT,
                 changelog_path=CHANGELOG_PATH,
