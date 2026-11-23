@@ -23,6 +23,7 @@ rename-history = "rekordbox_collection_manager.rename_history:main"
 edit-play-count = "rekordbox_collection_manager.edit_play_count:main"
 replace-file = "rekordbox_collection_manager.replace_file:main"
 rekordbox-daemon = "rekordbox_collection_manager.daemon:main"
+sync-unbound = "rekordbox_collection_manager.unbound_playlist:sync_unbound_cli"
 
 [build-system]
 requires = ["uv_build>=0.12.5,<0.13.0"]

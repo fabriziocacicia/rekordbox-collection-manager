@@ -82,7 +82,8 @@ flowchart TD
 - [4. Replace / Upgrade Audio File (`replace-file`)](#4-replace--upgrade-audio-file-replace-file)
 - [5. Rename History (`rename-history`)](#5-rename-history-rename-history)
 - [6. Edit Play Count (`edit-play-count`)](#6-edit-play-count-edit-play-count)
-- [7. Backup & Restore Operations](#7-backup--restore-operations)
+- [7. Dynamic Unbound Playlist Sync (`sync-unbound`)](#7-dynamic-unbound-playlist-sync-sync-unbound)
+- [8. Backup & Restore Operations](#8-backup--restore-operations)
 - [Development & Testing](#development--testing)
 
 ---
@@ -461,7 +462,33 @@ uv run edit-play-count -d /Volumes/USB/PIONEER/exportLibrary.db
 
 ---
 
-## 7. Backup & Restore Operations
+## 7. Dynamic Unbound Playlist Sync (`sync-unbound`)
+
+Automatically maintains a root-level catch-all playlist named `πagged-Unbound` (alphabetically sorting last via `π`) containing all tracks that have at least one MyTag but do not belong to any regular user playlist.
+
+This solves the Rekordbox Sync Manager limitation where tagged tracks in your collection that haven't yet been assigned to a specific playlist are omitted from USB exports. Checking `πagged-Unbound` in Sync Manager guarantees that all tagged tracks are transferred to your USB drives for CDJ/XDJ MyTag filtering.
+
+### Features
+- **Automatic Daemon Execution**: Reconciles when Rekordbox closes and when mobile changes arrive.
+- **Local-First & Decoupled**: Operates 100% offline against local `master.db` with zero cloud requirements.
+- **Smart Filtering**: Ignores history sessions and smart playlists (membership in them does not disqualify a track); excludes streaming tracks.
+- **Automatic Pruning**: Tracks assigned to any user playlist are automatically removed from `πagged-Unbound`.
+
+### CLI Usage
+```bash
+# Reconcile πagged-Unbound playlist
+uv run sync-unbound
+
+# Preview changes without modifying database
+uv run sync-unbound --dry-run
+
+# Bypass Rekordbox process check
+uv run sync-unbound --force
+```
+
+---
+
+## 8. Backup & Restore Operations
 
 Safeguard and restore your entire macOS Rekordbox collection (`master.db`, playlists, sync caches, and configs) both inside the GUI application and via standalone CLI scripts:
 

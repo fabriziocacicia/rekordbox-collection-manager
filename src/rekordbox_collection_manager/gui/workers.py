@@ -1157,4 +1157,42 @@ class StoresSummaryWorker(QThread):
                 self.error.emit(str(e))
 
 
+class UnboundPlaylistReconcileWorker(QThread):
+    """Worker to reconcile πagged-Unbound catch-all playlist asynchronously."""
+
+    success = Signal(dict)
+    error = Signal(str)
+
+    def __init__(
+        self,
+        engine: Optional[Engine] = None,
+        db_path: Optional[str] = None,
+        force: bool = False,
+        parent: Optional[Any] = None,
+    ):
+        super().__init__(parent)
+        self.engine = engine
+        self.db_path = db_path
+        self.force = force
+
+    def run(self) -> None:
+        try:
+            if self.isInterruptionRequested():
+                return
+            from rekordbox_collection_manager.unbound_playlist import reconcile_unbound_playlist
+
+            stats = reconcile_unbound_playlist(
+                engine=self.engine,
+                db_path=self.db_path,
+                force=self.force,
+            )
+            if self.isInterruptionRequested():
+                return
+            self.success.emit(stats)
+        except Exception as e:
+            if not self.isInterruptionRequested():
+                self.error.emit(str(e))
+
+
+
 

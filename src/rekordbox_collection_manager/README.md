@@ -36,6 +36,9 @@ Core Python package for inspecting, curating, backing up, syncing, and analyzing
   - CLI entry point: `[replace_file.py:main]` (`--db-path`, `--track-id`, `--new-file`, `--action` [default: `trash`], `--move`, `--force`).
 - **MyTag curation (`tags.py`)**:
   - `[tags.py:fetch_tags_tree]`, `[tags.py:fetch_tag_tracks]`, `[tags.py:sort_tags_in_folder]`, `[tags.py:cleanup_duplicate_song_tags]`, `[tags.py:fetch_tag_categories]`, `[tags.py:create_tag]`, `[tags.py:delete_tag]`.
+- **Dynamic catch-all playlist (`unbound_playlist.py`)**:
+  - Constants & functions: `[unbound_playlist.py:UNBOUND_PLAYLIST_NAME]`, `[unbound_playlist.py:ensure_unbound_playlist_exists]`, `[unbound_playlist.py:get_unbound_target_track_ids]`, `[unbound_playlist.py:reconcile_unbound_playlist]`.
+  - CLI entry point: `[unbound_playlist.py:sync_unbound_cli]` (`--force`, `--db`, `--no-backup`, `--dry-run`).
 - **Turso cloud sync (`turso_sync.py`)**:
   - Config & state: `[turso_sync.py:is_turso_configured]`, `[turso_sync.py:get_turso_credentials]`, `[turso_sync.py:get_last_sync_state]`, `[turso_sync.py:save_sync_state]`.
   - HTTP client & sync cycle: `[turso_sync.py:TursoQueryResult]`, `[turso_sync.py:TursoHttpClient]` (`.execute`, `.batch`), `[turso_sync.py:create_turso_client]`, `[turso_sync.py:init_turso_schema]`, `[turso_sync.py:export_collection_to_turso]`, `[turso_sync.py:apply_changelog_events]`, `[turso_sync.py:SyncResult]`, `[turso_sync.py:run_sync_cycle]`.

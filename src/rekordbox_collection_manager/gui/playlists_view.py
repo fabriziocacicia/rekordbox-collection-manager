@@ -124,6 +124,13 @@ class PlaylistsView(QWidget):
         self.btn_new_playlist.clicked.connect(self._on_new_playlist_clicked)
         left_header.addWidget(self.btn_new_playlist)
 
+        self.btn_sync_unbound = QPushButton("π")
+        self.btn_sync_unbound.setToolTip("Reconcile πagged-Unbound catch-all playlist...")
+        self.btn_sync_unbound.setFixedSize(24, 24)
+        self.btn_sync_unbound.setStyleSheet("font-size: 12px; font-weight: bold; padding: 0;")
+        self.btn_sync_unbound.clicked.connect(self._on_sync_unbound_clicked)
+        left_header.addWidget(self.btn_sync_unbound)
+
         self.btn_expand_all = QPushButton("▼")
         self.btn_expand_all.setToolTip("Expand all folders")
         self.btn_expand_all.setFixedSize(24, 24)
@@ -400,13 +407,56 @@ class PlaylistsView(QWidget):
             target_pl_id = pl_id
             target_pl_name = pl_name
 
+        menu.addSeparator()
+        act_sync_unbound = menu.addAction("🔄 Reconcile πagged-Unbound")
+
         chosen = menu.exec(global_pos)
         if chosen == act_new_pl:
             self._open_create_playlist_dialog(default_parent=target_parent, is_folder=False)
         elif chosen == act_new_folder:
             self._open_create_playlist_dialog(default_parent=target_parent, is_folder=True)
+        elif chosen == act_sync_unbound:
+            self._on_sync_unbound_clicked()
         elif act_delete and chosen == act_delete and target_pl_id:
             self._delete_playlist_item(target_pl_id, target_pl_name, target_kind)
+
+    def _on_sync_unbound_clicked(self) -> None:
+        """Trigger asynchronous reconciliation of the πagged-Unbound catch-all playlist."""
+        if is_rekordbox_running():
+            QMessageBox.warning(
+                self,
+                "Rekordbox is Running",
+                "Please close Pioneer Rekordbox before reconciling the πagged-Unbound playlist.",
+            )
+            return
+
+        if not self.engine:
+            QMessageBox.warning(self, "Database Error", "No active database connection.")
+            return
+
+        self.btn_sync_unbound.setEnabled(False)
+        self.notify_status.emit("Reconciling πagged-Unbound playlist...")
+
+        from rekordbox_collection_manager.gui.workers import UnboundPlaylistReconcileWorker
+
+        self._reconcile_worker = UnboundPlaylistReconcileWorker(
+            engine=self.engine, db_path=self.db_path, parent=self
+        )
+        self._reconcile_worker.success.connect(self._on_sync_unbound_success)
+        self._reconcile_worker.error.connect(self._on_sync_unbound_error)
+        self._reconcile_worker.start()
+
+    def _on_sync_unbound_success(self, stats: Dict[str, Any]) -> None:
+        self.btn_sync_unbound.setEnabled(True)
+        msg = f"Reconciled πagged-Unbound: +{stats.get('added', 0)} added, -{stats.get('removed', 0)} removed ({stats.get('total', 0)} total)"
+        self.notify_status.emit(msg)
+        self.db_saved.emit()
+        self._load_playlists_tree(force_reload_selected=True)
+
+    def _on_sync_unbound_error(self, err_msg: str) -> None:
+        self.btn_sync_unbound.setEnabled(True)
+        self.notify_status.emit(f"Failed to reconcile πagged-Unbound: {err_msg}")
+        QMessageBox.warning(self, "Reconciliation Error", f"Failed to reconcile πagged-Unbound:\n{err_msg}")
 
     def _delete_playlist_item(
         self, playlist_id: str, playlist_name: str, kind: str = "playlist"
