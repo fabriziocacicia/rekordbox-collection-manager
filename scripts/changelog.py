@@ -20,6 +20,7 @@ from typing import NamedTuple
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
 CHANGELOG_PATH = PROJECT_ROOT / "CHANGELOG.md"
+IOS_CHANGELOG_PATH = PROJECT_ROOT / "ios" / "CHANGELOG.md"
 GITHUB_REPO_URL = "https://github.com/fabriziocacicia/rekordbox-collection-manager"
 
 # Keep a Changelog 1.1.0 standard headers
@@ -109,18 +110,22 @@ def is_ios_commit(commit: CommitInfo) -> bool:
     Detect if a commit belongs exclusively or primarily to the iOS companion app.
 
     - Scope explicitly targeting 'ios' (e.g., feat(ios): ..., chore(ios): ...).
-    - Touches only files under 'ios/' (excluding root files like .gitignore or README.md).
+    - Touches only files under 'ios/' or iOS release scripts.
     - Explicitly announces adding or modifying the iOS companion app with ios/ files touched.
     """
-    if commit.scope and commit.scope.lower() == "ios":
+    if commit.scope and commit.scope.lower() in ("ios", "companion"):
         return True
 
+    ios_related_scripts = ("scripts/build_ios.sh", "scripts/ios_version.py")
     if commit.files:
-        has_ios_files = any(f.startswith("ios/") for f in commit.files)
+        has_ios_files = any(
+            f.startswith("ios/") or f in ios_related_scripts
+            for f in commit.files
+        )
         if has_ios_files:
             non_ios = [
                 f for f in commit.files
-                if not f.startswith("ios/") and f not in (".gitignore", "README.md")
+                if not f.startswith("ios/") and f not in ios_related_scripts and f not in (".gitignore", "README.md")
             ]
             if not non_ios:
                 return True
@@ -163,6 +168,26 @@ def get_desktop_tags(cwd: Path = PROJECT_ROOT) -> list[str]:
             return (0, 0, 0)
 
     tags = [t.strip() for t in raw_tags.splitlines() if re.match(r"^v\d+\.\d+(\.\d+)?$", t.strip())]
+    return sorted(tags, key=semver_key)
+
+
+def get_ios_tags(cwd: Path = PROJECT_ROOT) -> list[str]:
+    """
+    Get all iOS tags matching 'ios-vX.Y.Z' in ascending Semantic Version order.
+    """
+    raw_tags = run_git(["tag", "-l", "ios-v*"], cwd=cwd)
+    if not raw_tags:
+        return []
+
+    def semver_key(tag: str) -> tuple[int, ...]:
+        clean = tag.replace("ios-v", "")
+        parts = clean.split(".")
+        try:
+            return tuple(int(p) for p in parts)
+        except ValueError:
+            return (0, 0, 0)
+
+    tags = [t.strip() for t in raw_tags.splitlines() if re.match(r"^ios-v\d+\.\d+(\.\d+)?$", t.strip())]
     return sorted(tags, key=semver_key)
 
 
@@ -228,6 +253,8 @@ def categorize_commits(commits: list[CommitInfo], target: str = "desktop") -> di
 
         if target == "desktop" and is_ios_commit(commit):
             continue
+        elif target == "ios" and not is_ios_commit(commit):
+            continue
 
         category = CATEGORY_MAPPING.get(commit.commit_type or "", "Other Changes")
         categories[category].append(format_bullet(commit))
@@ -278,38 +305,53 @@ def render_unreleased_section(categorized: dict[str, list[str]]) -> str:
     return "\n".join(lines)
 
 
-def render_compare_links(tags: list[str], repo_url: str = GITHUB_REPO_URL) -> str:
+def render_compare_links(tags: list[str], target: str = "desktop", repo_url: str = GITHUB_REPO_URL) -> str:
     """
     Render bottom reference links for GitHub compare and tags.
     """
     if not tags:
         return ""
 
+    tag_prefix = "ios-v" if target == "ios" else "v"
     latest_tag = tags[-1]
     lines = [f"[Unreleased]: {repo_url}/compare/{latest_tag}...HEAD"]
 
     for i in range(len(tags) - 1, 0, -1):
-        curr_ver = tags[i].lstrip("v")
+        curr_ver = tags[i].replace(tag_prefix, "")
         prev_tag = tags[i - 1]
         curr_tag = tags[i]
         lines.append(f"[{curr_ver}]: {repo_url}/compare/{prev_tag}...{curr_tag}")
 
-    first_ver = tags[0].lstrip("v")
+    first_ver = tags[0].replace(tag_prefix, "")
     lines.append(f"[{first_ver}]: {repo_url}/releases/tag/{tags[0]}")
 
     return "\n".join(lines)
 
 
 def generate_backfill(cwd: Path = PROJECT_ROOT, target: str = "desktop") -> str:
-    """Generate complete CHANGELOG.md content backfilling all tags up to HEAD."""
-    tags = get_desktop_tags(cwd=cwd)
+    """Generate complete CHANGELOG content backfilling all tags up to HEAD."""
+    tags = get_ios_tags(cwd=cwd) if target == "ios" else get_desktop_tags(cwd=cwd)
+    tag_prefix = "ios-v" if target == "ios" else "v"
     if not tags:
-        raise RuntimeError("No desktop tags (v*) found in git repository.")
+        app_desc = "to this project" if target == "desktop" else "to the Rekordbox Companion iOS application"
+        content_parts = [
+            "# Changelog",
+            "",
+            f"All notable changes {app_desc} will be documented in this file.",
+            "",
+            "The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),",
+            "and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).",
+            "",
+            "## [Unreleased]",
+            "",
+        ]
+        return "\n".join(content_parts)
 
+    app_desc = "to this project" if target == "desktop" else "to the Rekordbox Companion iOS application"
     content_parts = [
         "# Changelog",
         "",
-        "All notable changes to this project will be documented in this file.",
+        f"All notable changes {app_desc} will be documented in this file.",
         "",
         "The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),",
         "and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).",
@@ -325,7 +367,7 @@ def generate_backfill(cwd: Path = PROJECT_ROOT, target: str = "desktop") -> str:
     # 2. Releases in reverse chronological order
     for i in range(len(tags) - 1, -1, -1):
         tag = tags[i]
-        version = tag.lstrip("v")
+        version = tag.replace(tag_prefix, "")
         date_str = run_git(["log", "-1", "--format=%cs", tag], cwd=cwd)
 
         if i == 0:
@@ -340,7 +382,7 @@ def generate_backfill(cwd: Path = PROJECT_ROOT, target: str = "desktop") -> str:
         content_parts.append(section)
 
     # 3. Compare links
-    compare_links = render_compare_links(tags)
+    compare_links = render_compare_links(tags, target=target)
     content_parts.append(compare_links)
     content_parts.append("")
 
@@ -350,17 +392,21 @@ def generate_backfill(cwd: Path = PROJECT_ROOT, target: str = "desktop") -> str:
 def rotate_changelog(
     new_version: str,
     date_str: str | None = None,
+    target: str = "desktop",
     cwd: Path = PROJECT_ROOT,
-    changelog_path: Path = CHANGELOG_PATH,
+    changelog_path: Path | None = None,
     dry_run: bool = False,
 ) -> bool:
     """
     Rotate [Unreleased] section into [new_version] - YYYY-MM-DD.
     Re-creates an empty [Unreleased] section and updates compare links.
     """
+    if changelog_path is None:
+        changelog_path = IOS_CHANGELOG_PATH if target == "ios" else CHANGELOG_PATH
+
     if not changelog_path.exists():
-        print(f"⚠️  CHANGELOG.md not found at {changelog_path}. Generating backfill first...")
-        full_content = generate_backfill(cwd=cwd)
+        print(f"⚠️  CHANGELOG not found at {changelog_path}. Generating backfill first...")
+        full_content = generate_backfill(cwd=cwd, target=target)
         if not dry_run:
             changelog_path.write_text(full_content, encoding="utf-8")
         return True
@@ -369,7 +415,8 @@ def rotate_changelog(
     if date_str is None:
         date_str = datetime.date.today().isoformat()
 
-    clean_version = new_version.lstrip("v")
+    clean_version = new_version.replace("ios-v", "").lstrip("v")
+    tag_prefix = "ios-v" if target == "ios" else "v"
 
     # Match Unreleased section
     unreleased_pattern = re.compile(
@@ -378,7 +425,7 @@ def rotate_changelog(
     )
     match = unreleased_pattern.search(text)
     if not match:
-        raise ValueError("Could not find '## [Unreleased]' section before release headers in CHANGELOG.md")
+        raise ValueError(f"Could not find '## [Unreleased]' section before release headers in {changelog_path}")
 
     def _replace_unreleased(m: re.Match[str]) -> str:
         body = m.group("body").strip()
@@ -393,16 +440,16 @@ def rotate_changelog(
     new_text = unreleased_pattern.sub(_replace_unreleased, text, count=1)
 
     # Update compare links at bottom
-    # Replace [Unreleased]: .../compare/vPREV...HEAD
-    # with [Unreleased]: .../compare/vNEW...HEAD\n[clean_version]: .../compare/vPREV...vNEW
+    # Replace [Unreleased]: .../compare/<prev_tag>...HEAD
+    # with [Unreleased]: .../compare/<new_tag>...HEAD\n[clean_version]: .../compare/<prev_tag>...<new_tag>
     compare_unreleased_pattern = re.compile(
-        r"\[Unreleased\]:\s*(?P<url>https://github\.com/[^/]+/[^/]+/compare/)(?P<prev_tag>v[^\.]+[\d\.]+)\.\.\.HEAD",
+        r"\[Unreleased\]:\s*(?P<url>\S+?/compare/)(?P<prev_tag>(?:ios-)?v[^\.]+[\d\.]+)\.\.\.HEAD",
     )
     unreleased_link_match = compare_unreleased_pattern.search(new_text)
     if unreleased_link_match:
         url_prefix = unreleased_link_match.group("url")
         prev_tag = unreleased_link_match.group("prev_tag")
-        new_tag = f"v{clean_version}"
+        new_tag = f"{tag_prefix}{clean_version}"
         new_links = (
             f"[Unreleased]: {url_prefix}{new_tag}...HEAD\n"
             f"[{clean_version}]: {url_prefix}{prev_tag}...{new_tag}"
@@ -410,16 +457,23 @@ def rotate_changelog(
         new_text = compare_unreleased_pattern.sub(new_links, new_text, count=1)
 
     if dry_run:
-        print(f"[dry-run] Would rotate CHANGELOG.md for version {clean_version} ({date_str}).")
+        print(f"[dry-run] Would rotate {changelog_path.name} for version {clean_version} ({date_str}).")
         return True
 
     changelog_path.write_text(new_text, encoding="utf-8")
-    print(f"📝 Rotated CHANGELOG.md for version {clean_version} ({date_str}).")
+    print(f"📝 Rotated {changelog_path.name} for version {clean_version} ({date_str}).")
     return True
 
 
-def check_changelog(cwd: Path = PROJECT_ROOT, changelog_path: Path = CHANGELOG_PATH) -> bool:
-    """Validate CHANGELOG.md existence, standard headers, and compare links."""
+def check_changelog(
+    target: str = "desktop",
+    cwd: Path = PROJECT_ROOT,
+    changelog_path: Path | None = None,
+) -> bool:
+    """Validate CHANGELOG existence, standard headers, and compare links."""
+    if changelog_path is None:
+        changelog_path = IOS_CHANGELOG_PATH if target == "ios" else CHANGELOG_PATH
+
     if not changelog_path.exists():
         print(f"❌ Error: {changelog_path} does not exist. Run with --backfill to generate.", file=sys.stderr)
         return False
@@ -432,23 +486,24 @@ def check_changelog(cwd: Path = PROJECT_ROOT, changelog_path: Path = CHANGELOG_P
     if "## [Unreleased]" not in content:
         errors.append("Missing '## [Unreleased]' section header")
 
-    tags = get_desktop_tags(cwd=cwd)
+    tags = get_ios_tags(cwd=cwd) if target == "ios" else get_desktop_tags(cwd=cwd)
+    tag_prefix = "ios-v" if target == "ios" else "v"
     if tags:
-        latest = tags[-1].lstrip("v")
+        latest = tags[-1].replace(tag_prefix, "")
         if f"## [{latest}]" not in content:
-            errors.append(f"Latest tag 'v{latest}' not found in release headers")
+            errors.append(f"Latest tag '{tags[-1]}' not found in release headers")
 
         expected_unreleased_link = f"[Unreleased]: {GITHUB_REPO_URL}/compare/{tags[-1]}...HEAD"
         if expected_unreleased_link not in content:
             errors.append(f"Missing or mismatched unreleased compare link: {expected_unreleased_link}")
 
     if errors:
-        print("❌ CHANGELOG.md validation failed:", file=sys.stderr)
+        print(f"❌ {changelog_path.name} validation failed:", file=sys.stderr)
         for err in errors:
             print(f"   - {err}", file=sys.stderr)
         return False
 
-    print("✅ CHANGELOG.md is valid and adheres to Keep a Changelog 1.1.0.")
+    print(f"✅ {changelog_path.name} is valid and adheres to Keep a Changelog 1.1.0.")
     return True
 
 
@@ -461,6 +516,7 @@ def main() -> None:
   %(prog)s --unreleased         # Print unreleased changes since latest tag
   %(prog)s --rotate 0.21.0      # Rotate [Unreleased] section into release 0.21.0
   %(prog)s --check              # Validate CHANGELOG.md structure and links
+  %(prog)s --target ios --check # Validate ios/CHANGELOG.md
 """,
     )
 
@@ -504,19 +560,20 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.backfill:
-        print("⏳ Generating changelog backfill from git history...")
+        print(f"⏳ Generating {args.target} changelog backfill from git history...")
         content = generate_backfill(target=args.target)
+        out_path = IOS_CHANGELOG_PATH if args.target == "ios" else CHANGELOG_PATH
         if args.dry_run:
             print(content)
         else:
-            CHANGELOG_PATH.write_text(content, encoding="utf-8")
-            print(f"✅ Generated {CHANGELOG_PATH} successfully.")
+            out_path.write_text(content, encoding="utf-8")
+            print(f"✅ Generated {out_path} successfully.")
         return
 
     if args.unreleased:
-        tags = get_desktop_tags()
+        tags = get_ios_tags() if args.target == "ios" else get_desktop_tags()
         if not tags:
-            print("No tags found.")
+            print(f"No {args.target} tags found.")
             return
         commits = get_commits_for_range(f"{tags[-1]}..HEAD")
         categorized = categorize_commits(commits, target=args.target)
@@ -528,12 +585,13 @@ def main() -> None:
         rotate_changelog(
             new_version=args.rotate,
             date_str=args.date,
+            target=args.target,
             dry_run=args.dry_run,
         )
         return
 
     if args.check:
-        valid = check_changelog()
+        valid = check_changelog(target=args.target)
         sys.exit(0 if valid else 1)
 
     parser.print_help()

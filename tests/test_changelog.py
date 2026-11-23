@@ -22,6 +22,8 @@ from scripts.changelog import (
     render_compare_links,
     rotate_changelog,
     check_changelog,
+    get_desktop_tags,
+    get_ios_tags,
 )
 
 
@@ -240,4 +242,83 @@ All notable changes to this project will be documented in this file.
     test_file.write_text(valid_content, encoding="utf-8")
     with patch("scripts.changelog.get_desktop_tags", return_value=["v0.20.0"]):
         assert check_changelog(changelog_path=test_file) is True
+
+
+def test_categorize_commits_ios_target():
+    commits = [
+        parse_commit_line("1", "2026-11-18", "Dev", "feat(ui): add dark mode", ["src/ui.py"]),
+        parse_commit_line("2", "2026-11-18", "Dev", "fix(ios): resolve layout in landscape", ["ios/View.swift"]),
+        parse_commit_line("3", "2026-11-18", "Dev", "build(ios): packaging script", ["scripts/build_ios.sh"]),
+        parse_commit_line("4", "2026-11-18", "Dev", "chore(desktop): bump version to 0.20.0", ["pyproject.toml"]),
+    ]
+
+    categorized = categorize_commits(commits, target="ios")
+    assert "Fixed" in categorized
+    assert categorized["Fixed"] == ["- **ios**: Resolve layout in landscape"]
+    assert "Maintenance" in categorized
+    assert categorized["Maintenance"] == ["- **ios**: Packaging script"]
+    assert "Added" not in categorized
+
+
+def test_render_compare_links_ios():
+    tags = ["ios-v0.1.0", "ios-v0.1.1"]
+    links = render_compare_links(tags, target="ios", repo_url="https://github.com/example/repo")
+    expected = (
+        "[Unreleased]: https://github.com/example/repo/compare/ios-v0.1.1...HEAD\n"
+        "[0.1.1]: https://github.com/example/repo/compare/ios-v0.1.0...ios-v0.1.1\n"
+        "[0.1.0]: https://github.com/example/repo/releases/tag/ios-v0.1.0"
+    )
+    assert links == expected
+
+
+def test_rotate_changelog_ios(tmp_path: Path):
+    sample_changelog = """# Changelog
+
+All notable changes to the Rekordbox Companion iOS application will be documented in this file.
+
+## [Unreleased]
+
+### Added
+
+- **ios**: Mobile live set logging
+
+## [0.1.0] - 2026-11-20
+
+[Unreleased]: https://github.com/example/repo/compare/ios-v0.1.0...HEAD
+[0.1.0]: https://github.com/example/repo/releases/tag/ios-v0.1.0
+"""
+    test_file = tmp_path / "CHANGELOG.md"
+    test_file.write_text(sample_changelog, encoding="utf-8")
+
+    rotated = rotate_changelog(
+        new_version="0.1.1",
+        date_str="2026-11-23",
+        target="ios",
+        changelog_path=test_file,
+    )
+    assert rotated is True
+
+    content = test_file.read_text(encoding="utf-8")
+    assert "## [Unreleased]\n\n## [0.1.1] - 2026-11-23" in content
+    assert "### Added\n\n- **ios**: Mobile live set logging" in content
+    assert "[Unreleased]: https://github.com/example/repo/compare/ios-v0.1.1...HEAD" in content
+    assert "[0.1.1]: https://github.com/example/repo/compare/ios-v0.1.0...ios-v0.1.1" in content
+
+
+def test_check_changelog_ios(tmp_path: Path):
+    test_file = tmp_path / "CHANGELOG.md"
+    valid_content = """# Changelog
+All notable changes to the Rekordbox Companion iOS application will be documented in this file.
+
+## [Unreleased]
+
+## [0.1.1] - 2026-11-23
+
+[Unreleased]: https://github.com/fabriziocacicia/rekordbox-collection-manager/compare/ios-v0.1.1...HEAD
+[0.1.1]: https://github.com/fabriziocacicia/rekordbox-collection-manager/releases/tag/ios-v0.1.1
+"""
+    test_file.write_text(valid_content, encoding="utf-8")
+    with patch("scripts.changelog.get_ios_tags", return_value=["ios-v0.1.1"]):
+        assert check_changelog(target="ios", changelog_path=test_file) is True
+
 

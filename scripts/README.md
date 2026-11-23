@@ -30,20 +30,30 @@ Operational and release-engineering utilities for `rekordbox-collection-manager`
 - `[build_app.sh:APP_VERSION]`: Version parsed from the first `^version = ` line in `$PROJECT_ROOT/pyproject.toml` (defaults to `'0.20.0'` if empty).
 - `[build_app.sh:ZIP_NAME]` / `[build_app.sh:ZIP_PATH]`: Target archive path (`Rekordbox-Collection-Manager-v${APP_VERSION}-macOS-arm64.zip`) created via `ditto` when `--package` is passed.
 
+### `build_ios.sh`
+- `[build_ios.sh:SCRIPT_DIR]` / `[build_ios.sh:PROJECT_ROOT]`: Directory containing `build_ios.sh` and its parent repository root.
+- `[build_ios.sh:XCODE_PROJ]` / `[build_ios.sh:PBXPROJ_PATH]`: Resolved Xcode project container (`ios/RekordboxCompanion/RekordboxCompanion.xcodeproj`) and project file.
+- `[build_ios.sh:PACKAGE_IPA]`: Flag toggled by `--package` or `--ipa` to package the compiled `.app` into an `.ipa` archive in `dist/`.
+- `[build_ios.sh:CLEAN_BUILD]`: Flag toggled by `--clean` to remove previous build intermediates (`build/ios/`, `build/DerivedData/`, and `dist/RekordboxCompanion*.ipa`).
+- `[build_ios.sh:OUTPUT_DIR]`: Destination directory passed via `--output <dir>` (defaults to `dist/`).
+- `[build_ios.sh:APP_BUNDLE]`: Built application bundle at `build/DerivedData/Build/Products/Release-iphoneos/RekordboxCompanion.app`.
+- `[build_ios.sh:IPA_NAME]` / `[build_ios.sh:IPA_PATH]`: Packaged iOS archive (`RekordboxCompanion-v${APP_VERSION}.ipa`) created via `ditto --norsrc --keepParent Payload` for SideStore sideloading.
+
 ### `rekordbox_manager.spec`
 - `[rekordbox_manager.spec:Analysis]`: PyInstaller entry point (`src/rekordbox_collection_manager/gui/app.py`), bundled assets (`assets/icon.png`, `assets/icon.icns`), and explicit hidden imports for SQLCipher drivers (`sqlcipher3`, `sqlalchemy.dialects.sqlite.pysqlcipher`), `pyrekordbox`, `mutagen`, and `libsql_client`.
 - `[rekordbox_manager.spec:BUNDLE]`: Apple Silicon `arm64` application bundle configuration containing Info.plist metadata, high-resolution rendering settings, and dock icon binding.
 
 ### `changelog.py`
-- `[changelog.py:SCRIPT_DIR]`, `[changelog.py:PROJECT_ROOT]`, `[changelog.py:CHANGELOG_PATH]`: Resolved paths for repository root and root `CHANGELOG.md`.
-- `[changelog.py:get_desktop_tags]`: Discovers SemVer tags (`vX.Y.Z`) in ascending order, filtering out iOS tags (`ios-v*`).
+- `[changelog.py:SCRIPT_DIR]`, `[changelog.py:PROJECT_ROOT]`, `[changelog.py:CHANGELOG_PATH]`, `[changelog.py:IOS_CHANGELOG_PATH]`: Resolved paths for repository root, desktop `CHANGELOG.md`, and iOS `ios/CHANGELOG.md`.
+- `[changelog.py:get_desktop_tags]`: Discovers desktop SemVer tags (`vX.Y.Z`) in ascending order, filtering out iOS tags (`ios-v*`).
+- `[changelog.py:get_ios_tags]`: Discovers iOS companion SemVer tags (`ios-vX.Y.Z`) in ascending order.
 - `[changelog.py:get_commits_for_range]`: Fetches commits and touched files using ASCII record separators (`%x1e`).
-- `[changelog.py:is_ios_commit]`: Filters out commits scoped to `(ios)` or touching exclusively `ios/` files to maintain clean monorepo boundary.
+- `[changelog.py:is_ios_commit]`: Detects commits scoped to `(ios)`, touching `ios/`, or touching iOS release scripts (`build_ios.sh`, `ios_version.py`).
 - `[changelog.py:is_noise_commit]`: Filters out version bump commits (`chore(...): bump version...`) and merge commits.
-- `[changelog.py:categorize_commits]`: Groups entries into Keep a Changelog categories (`Added`, `Changed`, `Fixed`, `Maintenance`, `Other Changes`).
-- `[changelog.py:generate_backfill]`: Reconstructs entire `CHANGELOG.md` with active `## [Unreleased]`, historical release sections, and GitHub compare links.
+- `[changelog.py:categorize_commits]`: Groups entries into Keep a Changelog categories (`Added`, `Changed`, `Fixed`, `Maintenance`, `Other Changes`), filtering exclusions based on `--target <desktop|ios>`.
+- `[changelog.py:generate_backfill]`: Reconstructs changelog content with active `## [Unreleased]`, historical release sections, and target-aware GitHub compare links.
 - `[changelog.py:rotate_changelog]`: Rotates `## [Unreleased]` into `## [X.Y.Z] - YYYY-MM-DD`, resets unreleased template, and updates comparison links.
-- `[changelog.py:check_changelog]`: Validates `CHANGELOG.md` formatting, release headers, and compare URLs.
+- `[changelog.py:check_changelog]`: Validates changelog formatting, release headers, and compare URLs for desktop or iOS.
 - `[changelog.py:main]`: CLI entry point accepting `--backfill`, `--unreleased`, `--rotate <version>`, `--date <YYYY-MM-DD>`, `--check`, `--target <desktop|ios>`, and `--dry-run`.
 
 ### `desktop_version.py`
@@ -58,10 +68,14 @@ Operational and release-engineering utilities for `rekordbox-collection-manager`
 - `[desktop_version.py:main]`: CLI entry point accepting positional `[desktop_version.py:action]` (`current`, `show`, `patch`, `minor`, `major`, `set`; default `current`), positional `[desktop_version.py:version]`, `[desktop_version.py:--release]`, `[desktop_version.py:-y]`/`[desktop_version.py:--yes]`, `[desktop_version.py:--draft]`, `[desktop_version.py:--commit]`, `[desktop_version.py:--tag]`, `[desktop_version.py:--no-uv-lock]`, `[desktop_version.py:--no-changelog]`, and `[desktop_version.py:--dry-run]`.
 
 ### `ios_version.py`
-- `[ios_version.py:SCRIPT_DIR]`, `[ios_version.py:PROJECT_ROOT]`, `[ios_version.py:PBXPROJ_PATH]` (`ios/RekordboxCompanion/RekordboxCompanion.xcodeproj/project.pbxproj`): Resolved Xcode project manifest path.
-- `[ios_version.py:get_current_versions]`, `[ios_version.py:validate_semver]`, `[ios_version.py:bump_semver]`: Xcode `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION` parsing, SemVer validation, and incrementing helpers.
-- `[ios_version.py:update_pbxproj]`, `[ios_version.py:git_commit_and_tag]`: Xcode project updater and git commit/tag helper.
-- `[ios_version.py:main]`: CLI entry point accepting positional `[ios_version.py:action]` (`current`, `show`, `patch`, `minor`, `major`, `build`, `set`; default `current`), positional `[ios_version.py:version]`, `[ios_version.py:--build]`, `[ios_version.py:--reset-build]`, `[ios_version.py:--commit]`, `[ios_version.py:--tag]`, and `[ios_version.py:--dry-run]`.
+- `[ios_version.py:SCRIPT_DIR]`, `[ios_version.py:PROJECT_ROOT]`, `[ios_version.py:PBXPROJ_PATH]` (`ios/RekordboxCompanion/RekordboxCompanion.xcodeproj/project.pbxproj`), `[ios_version.py:IOS_CHANGELOG_PATH]`, `[ios_version.py:BUILD_IOS_SCRIPT_PATH]`, `[ios_version.py:DIST_DIR]`: Resolved Xcode project manifest, iOS changelog, build script, and distribution directory paths.
+- `[ios_version.py:REQUIRED_TOOLS]`, `[ios_version.py:check_required_tools]`, `[ios_version.py:check_git_clean]`, `[ios_version.py:check_git_branch]`, `[ios_version.py:check_tag_collision]`, `[ios_version.py:check_unreleased_notes]`, `[ios_version.py:check_preflight_conditions]`: Pre-flight verification suite auditing CLI tools (`xcodebuild`, `ditto`, `gh`), clean working tree, `main` branch sync with origin, tag non-collision on `ios-v<version>`, and populated `ios/CHANGELOG.md` notes.
+- `[ios_version.py:get_git_checkpoint]`, `[ios_version.py:rollback_to_checkpoint]`: Checkpoint capture (`git rev-parse HEAD`) and rollback mechanism (reverting uncommitted files and deleting local tags).
+- `[ios_version.py:IpaArtifact]`, `[ios_version.py:build_and_package_ios]`: Compiles and packages `dist/RekordboxCompanion-v<version>.ipa` via `build_ios.sh --clean --package`.
+- `[ios_version.py:extract_unreleased_notes]`, `[ios_version.py:extract_release_notes]`, `[ios_version.py:sync_changelog_for_release]`: iOS changelog validation, rotation, and notes extraction for GitHub Release publishing.
+- `[ios_version.py:get_current_versions]`, `[ios_version.py:validate_semver]`, `[ios_version.py:bump_semver]`, `[ios_version.py:update_pbxproj]`: Xcode `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION` parsing, validation, incrementing, and atomic rewriting.
+- `[ios_version.py:publish_git_push]`, `[ios_version.py:publish_github_release]`, `[ios_version.py:cleanup_release_artifacts]`, `[ios_version.py:run_release_pipeline]`: 7-step release orchestration pipeline with interactive confirmation gate (`[Y/n]`), draft staging, tag creation `ios-v<version>`, remote push, and GitHub Release asset upload.
+- `[ios_version.py:main]`: CLI entry point accepting positional `[ios_version.py:action]` (`current`, `show`, `patch`, `minor`, `major`, `build`, `set`; default `current`), positional `[ios_version.py:version]`, `[ios_version.py:--release]`, `[ios_version.py:-y]`/`[ios_version.py:--yes]`, `[ios_version.py:--draft]`, `[ios_version.py:--build]`, `[ios_version.py:--reset-build]`, `[ios_version.py:--commit]`, `[ios_version.py:--tag]`, and `[ios_version.py:--dry-run]`.
 
 ### Subdirectories
 - None (leaf component package).
