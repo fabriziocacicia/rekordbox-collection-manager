@@ -19,6 +19,7 @@ from sqlalchemy.engine import Connection, Engine
 from rekordbox_collection_manager.backup_restore import create_database_backup
 from rekordbox_collection_manager.utils import (
     build_exclude_streaming_clause,
+    build_exclude_system_playlists_clause,
     get_default_master_db_path,
     get_rekordbox_timestamp,
     is_rekordbox_running,
@@ -212,6 +213,7 @@ def get_unbound_target_track_ids(
         sp_del = "AND (sp.rb_local_deleted = 0 OR sp.rb_local_deleted IS NULL)" if "rb_local_deleted" in sp_cols else ""
         p_del = "AND (p.rb_local_deleted = 0 OR p.rb_local_deleted IS NULL)" if "rb_local_deleted" in p_cols else ""
         attr_filter = "AND (p.Attribute = 0 OR p.Attribute IS NULL)" if "Attribute" in p_cols else ""
+        sys_pl_filter = build_exclude_system_playlists_clause(table_alias="p")
 
         exclude_pl_id = ""
         if unbound_playlist_id:
@@ -229,6 +231,7 @@ def get_unbound_target_track_ids(
                   {exclude_pl_id}
                   {p_del}
                   {sp_del}
+                  {sys_pl_filter}
             )
         """
 

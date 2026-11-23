@@ -210,12 +210,18 @@ class TestTrackDetailsBackend(unittest.TestCase):
             """)
 
     def test_fetch_all_playlists(self):
-        """Verify fetch_all_playlists retrieves active standard playlists sorted by name."""
+        """Verify fetch_all_playlists retrieves active standard playlists sorted by name and excludes system playlists."""
+        with self.engine.begin() as conn:
+            conn.exec_driver_sql("""
+                INSERT INTO djmdPlaylist (ID, Name, Attribute, ParentID, rb_local_deleted)
+                VALUES ('200000', 'CUE Analysis Playlist', 0, 'root', 0);
+            """)
         pls = fetch_all_playlists(self.engine)
         names = [p["name"] for p in pls]
         self.assertEqual(names, ["Afro House", "Deep Tech", "Melodic Techno"])
         self.assertNotIn("Smart Playlist", names)
         self.assertNotIn("Deleted Playlist", names)
+        self.assertNotIn("CUE Analysis Playlist", names)
 
     def test_add_track_to_playlist_new_and_reactivate(self):
         """Verify adding track to playlist creates row or reactivates soft-deleted row."""

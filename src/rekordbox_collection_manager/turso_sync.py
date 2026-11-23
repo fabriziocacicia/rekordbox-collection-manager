@@ -19,6 +19,7 @@ from sqlalchemy.engine import Engine
 from rekordbox_collection_manager.backup_restore import create_database_backup
 from rekordbox_collection_manager.utils import (
     build_exclude_streaming_clause,
+    build_exclude_system_playlists_clause,
     get_default_master_db_path,
     get_rekordbox_timestamp,
     is_rekordbox_running,
@@ -470,11 +471,13 @@ def export_collection_to_turso(
             seq_col = "Seq" if "Seq" in pl_cols else "0"
             attr_col = "Attribute" if "Attribute" in pl_cols else "0"
             updated_col = "updated_at" if "updated_at" in pl_cols else "''"
+            sys_pl_filter = build_exclude_system_playlists_clause(table_alias=None)
+            where_clause = f"{del_clause} {sys_pl_filter}" if del_clause else f"WHERE 1=1 {sys_pl_filter}"
 
             sql = f"""
                 SELECT ID, Name, {parent_col}, {seq_col}, {attr_col}, {updated_col}
                 FROM djmdPlaylist
-                {del_clause};
+                {where_clause};
             """
             pl_rows = conn.exec_driver_sql(sql).fetchall()
 
@@ -493,13 +496,21 @@ def export_collection_to_turso(
                 if "djmdContent" in existing_tables
                 else ""
             )
+            p_join = "JOIN djmdPlaylist p ON sp.PlaylistID = p.ID" if "djmdPlaylist" in existing_tables else ""
+            p_filter = (
+                f"AND (p.rb_local_deleted = 0 OR p.rb_local_deleted IS NULL) {build_exclude_system_playlists_clause(table_alias='p')}"
+                if "djmdPlaylist" in existing_tables
+                else ""
+            )
 
             sql = f"""
                 SELECT sp.ID, sp.PlaylistID, sp.ContentID, {track_no_col}
                 FROM djmdSongPlaylist sp
                 JOIN djmdContent c ON sp.ContentID = c.ID
+                {p_join}
                 WHERE (sp.rb_local_deleted = 0 OR sp.rb_local_deleted IS NULL)
                   AND (c.rb_local_deleted = 0 OR c.rb_local_deleted IS NULL)
+                  {p_filter}
                   {sp_streaming};
             """
             sp_rows = conn.exec_driver_sql(sql).fetchall()
@@ -507,10 +518,11 @@ def export_collection_to_turso(
                 all_pt_rows.append([str(r[0]), str(r[1]), str(r[2]), int(r[3] or 0)])
 
             # Also resolve and export tracks for dynamic Smart Playlists (Attribute == 4)
-            if "djmdPlaylist" in existing_tables and "djmdContent" in existing_tables:
+            if "djmdPlaylist" in existing_tables and "djmdContent" in existing_tables and "SmartList" in pl_cols:
                 from rekordbox_collection_manager.playlists import parse_smartlist_to_sql
+                sys_pl_filter_p = build_exclude_system_playlists_clause(table_alias=None)
                 smart_pl_rows = conn.exec_driver_sql(
-                    "SELECT ID, SmartList FROM djmdPlaylist WHERE Attribute = 4 AND (rb_local_deleted = 0 OR rb_local_deleted IS NULL);"
+                    f"SELECT ID, SmartList FROM djmdPlaylist WHERE Attribute = 4 AND (rb_local_deleted = 0 OR rb_local_deleted IS NULL) {sys_pl_filter_p};"
                 ).fetchall()
                 for spl in smart_pl_rows:
                     pl_id, smart_xml = str(spl[0]), str(spl[1]) if spl[1] else None

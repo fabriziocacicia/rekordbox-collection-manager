@@ -769,7 +769,24 @@ class TestUtils(unittest.TestCase):
         for store in ("Beatport", "Bandcamp", "Qobuz", "Traxsource"):
             self.assertEqual(counts[store], {"purchased": 0, "to_buy": 0})
 
+    def test_system_playlist_detection(self):
+        from rekordbox_collection_manager.utils import is_system_playlist
+        self.assertTrue(is_system_playlist("CUE Analysis Playlist"))
+        self.assertTrue(is_system_playlist("cue analysis playlist"))
+        self.assertTrue(is_system_playlist(name=None, playlist_id="200000"))
+        self.assertTrue(is_system_playlist("Other Name", playlist_id="200000"))
+        self.assertFalse(is_system_playlist("My Regular Playlist", playlist_id="12345"))
+        self.assertFalse(is_system_playlist(None, None))
 
+    def test_build_exclude_system_playlists_clause(self):
+        from rekordbox_collection_manager.utils import build_exclude_system_playlists_clause
+        clause_p = build_exclude_system_playlists_clause(table_alias="p")
+        self.assertIn("lower(p.Name) NOT IN ('cue analysis playlist')", clause_p)
+        self.assertIn("CAST(p.ID AS TEXT) NOT IN ('200000')", clause_p)
+
+        clause_none = build_exclude_system_playlists_clause(table_alias=None)
+        self.assertIn("lower(Name) NOT IN ('cue analysis playlist')", clause_none)
+        self.assertIn("CAST(ID AS TEXT) NOT IN ('200000')", clause_none)
 
 
 if __name__ == "__main__":

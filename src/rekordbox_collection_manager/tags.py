@@ -13,6 +13,7 @@ from sqlalchemy.engine import Engine
 from rekordbox_collection_manager.utils import (
     _resolve_tag_matching_ids,
     build_exclude_streaming_clause,
+    build_exclude_system_playlists_clause,
     build_track_record,
     get_rekordbox_timestamp,
     resolve_tag_matching_ids,
@@ -336,6 +337,7 @@ def fetch_tag_tracks(
                 else ""
             )
             p_attr = "AND p.Attribute = 0" if "Attribute" in p_cols else ""
+            sys_pl_filter = build_exclude_system_playlists_clause(table_alias="p")
             playlist_expr = f"""(
                 SELECT GROUP_CONCAT(Name, '|||')
                 FROM (
@@ -346,6 +348,7 @@ def fetch_tag_tracks(
                       {p_attr}
                       {p_del}
                       {osp_del}
+                      {sys_pl_filter}
                     ORDER BY lower(p.Name) ASC
                 )
             ) AS PlaylistNames"""
