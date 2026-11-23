@@ -165,7 +165,7 @@ def extract_unreleased_notes(changelog_path: Path = IOS_CHANGELOG_PATH) -> str:
         return ""
     text = changelog_path.read_text(encoding="utf-8")
     unreleased_pattern = re.compile(
-        r"## \[Unreleased\]\s*\n(?P<body>.*?)(?=\n## \[\d|\Z)",
+        r"## \[Unreleased\][^\n]*\n(?P<body>.*?)(?=\n## \[\d|\n\[Unreleased\]:|\Z)",
         re.DOTALL,
     )
     match = unreleased_pattern.search(text)

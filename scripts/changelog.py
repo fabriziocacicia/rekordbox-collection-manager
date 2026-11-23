@@ -443,7 +443,7 @@ def rotate_changelog(
     # Replace [Unreleased]: .../compare/<prev_tag>...HEAD
     # with [Unreleased]: .../compare/<new_tag>...HEAD\n[clean_version]: .../compare/<prev_tag>...<new_tag>
     compare_unreleased_pattern = re.compile(
-        r"\[Unreleased\]:\s*(?P<url>https://github\.com/[^/]+/[^/]+/compare/)(?P<prev_tag>(?:ios-)?v[^\.]+[\d\.]+)\.\.\.HEAD",
+        r"\[Unreleased\]:\s*(?P<url>\S+?/compare/)(?P<prev_tag>(?:ios-)?v[^\.]+[\d\.]+)\.\.\.HEAD",
     )
     unreleased_link_match = compare_unreleased_pattern.search(new_text)
     if unreleased_link_match:
