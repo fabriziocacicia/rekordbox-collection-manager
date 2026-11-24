@@ -34,7 +34,7 @@ class CamelotWheelWidget(QWidget):
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.setMouseTracking(True)
-        self.setMinimumSize(280, 240)
+        self.setMinimumSize(380, 340)
 
         self.slices: Dict[str, CamelotSliceData] = {}
         self.hovered_code: Optional[str] = None
@@ -171,7 +171,7 @@ class CamelotWheelWidget(QWidget):
         w = self.width()
         h = self.height()
 
-        legend_space = 36.0
+        legend_space = 40.0
         wheel_h = h - legend_space
         center = QPointF(w / 2.0, wheel_h / 2.0)
 
@@ -182,7 +182,7 @@ class CamelotWheelWidget(QWidget):
         if min_dim < 100:
             return
 
-        r_outer = (min_dim / 2.0) - 16.0
+        r_outer = (min_dim / 2.0) - 10.0
         r_mid = r_outer * 0.68
         r_inner = r_outer * 0.38
         r_center_hub = r_inner * 0.84
@@ -379,18 +379,12 @@ class CamelotWheelWidget(QWidget):
         font_leg.setPointSize(8)
         painter.setFont(font_leg)
 
-        # Total legend components width
-        leg_w = min(200.0, max(120.0, w * 0.22))
-        leg_h = 8.0
-        gap = 24.0
-        air_text_w = 175.0
-        total_legend_w = 60.0 + leg_w + 70.0 + gap + 16.0 + 6.0 + air_text_w
+        # 1. Gradient Bar
+        leg_w = min(220.0, max(140.0, w - 120.0))
+        leg_h = 7.0
+        leg_x = (w - leg_w) / 2.0
+        leg_y = h - 22.0
 
-        start_x = max(8.0, (w - total_legend_w) / 2.0)
-        leg_x = start_x + 60.0
-        leg_y = h - 16.0
-
-        # Gradient Bar
         grad = QLinearGradient(leg_x, 0, leg_x + leg_w, 0)
         grad.setColorAt(0.00, QColor(29, 64, 160))
         grad.setColorAt(0.25, QColor(6, 160, 215))
@@ -403,32 +397,35 @@ class CamelotWheelWidget(QWidget):
         painter.drawRoundedRect(QRectF(leg_x, leg_y, leg_w, leg_h), 3, 3)
 
         painter.setPen(QColor(COLOR_TEXT_MUTED))
-        painter.drawText(QRectF(start_x, leg_y - 2, 54, 14), Qt.AlignmentFlag.AlignRight, "0")
-        painter.drawText(QRectF(leg_x + leg_w + 6, leg_y - 2, 70, 14), Qt.AlignmentFlag.AlignLeft, f"Max ({self.max_catalog_count})")
-        painter.drawText(QRectF(leg_x, leg_y - 13, leg_w, 12), Qt.AlignmentFlag.AlignCenter, "Catalog Density")
+        painter.drawText(QRectF(leg_x - 55, leg_y - 3, 50, 14), Qt.AlignmentFlag.AlignRight, "0")
+        painter.drawText(QRectF(leg_x + leg_w + 6, leg_y - 3, 65, 14), Qt.AlignmentFlag.AlignLeft, f"Max ({self.max_catalog_count})")
+        painter.drawText(QRectF(leg_x, leg_y - 12, leg_w, 11), Qt.AlignmentFlag.AlignCenter, "Catalog Density")
 
-        # Live Set Airtime Indicator
-        air_x = leg_x + leg_w + 70.0 + gap
-        air_box = QRectF(air_x, leg_y - 3, 14, 14)
+        # 2. Live Set Airtime Indicator (Centered row below)
+        air_y = h - 8.0
+        air_text = "Outer Rim = Live Set Airtime"
+        fm = painter.fontMetrics()
+        text_w = fm.horizontalAdvance(air_text)
+        total_sub_w = 14 + 6 + text_w
+        sub_start_x = (w - total_sub_w) / 2.0
 
-        # Base circle
+        air_box = QRectF(sub_start_x, air_y - 3, 11, 11)
         painter.setBrush(QBrush(QColor(29, 64, 160)))
         painter.setPen(QPen(QColor(COLOR_BORDER), 1))
         painter.drawEllipse(air_box)
 
-        # Glowing white rim arc
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.setPen(QPen(QColor(255, 255, 255, 230), 2.5))
+        painter.setPen(QPen(QColor(255, 255, 255, 230), 2.0))
         painter.drawArc(air_box, 30 * 16, 120 * 16)
 
-        painter.setPen(QColor(COLOR_TEXT_SECONDARY))
-        painter.drawText(QRectF(air_x + 20, leg_y - 3, air_text_w, 14), Qt.AlignmentFlag.AlignLeft, "Outer Rim = Live Set Airtime")
+        painter.setPen(QColor(COLOR_TEXT_MUTED))
+        painter.drawText(QRectF(sub_start_x + 16, air_y - 5, text_w + 10, 14), Qt.AlignmentFlag.AlignLeft, air_text)
 
     def _get_slice_at_pos(self, pos: QPointF) -> Optional[str]:
         """Hit test polar position to identify Camelot sector."""
         w = self.width()
         h = self.height()
-        legend_space = 36.0
+        legend_space = 40.0
         wheel_h = h - legend_space
         center = QPointF(w / 2.0, wheel_h / 2.0)
 
@@ -437,7 +434,7 @@ class CamelotWheelWidget(QWidget):
         dist = math.hypot(dx, dy)
 
         min_dim = min(w, wheel_h)
-        r_outer = (min_dim / 2.0) - 16.0
+        r_outer = (min_dim / 2.0) - 10.0
         r_mid = r_outer * 0.68
         r_inner = r_outer * 0.38
 

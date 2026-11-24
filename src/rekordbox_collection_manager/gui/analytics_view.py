@@ -505,18 +505,20 @@ class AnalyticsView(QWidget):
         # Vista 2: Camelot Wheel Container (Harmonic Station)
         v2_container = QWidget()
         v2_layout = QHBoxLayout(v2_container)
-        v2_layout.setContentsMargins(0, 0, 0, 6)
-        v2_layout.setSpacing(12)
+        v2_layout.setContentsMargins(0, 0, 0, 4)
+        v2_layout.setSpacing(16)
 
+        v2_layout.addStretch(1)
         self.card_harmonic_profile = self._create_harmonic_profile_card()
         v2_layout.addWidget(self.card_harmonic_profile)
 
         self.widget_camelot = CamelotWheelWidget(self)
         self.widget_camelot.slice_clicked.connect(self._on_camelot_slice_clicked)
-        v2_layout.addWidget(self.widget_camelot, stretch=1)
+        v2_layout.addWidget(self.widget_camelot)
 
         self.card_harmonic_mix = self._create_harmonic_mix_card()
         v2_layout.addWidget(self.card_harmonic_mix)
+        v2_layout.addStretch(1)
 
         self.chart_stack.addWidget(v2_container)
 
@@ -635,7 +637,7 @@ class AnalyticsView(QWidget):
         self.splitter.addWidget(bottom_container)
         self.splitter.setStretchFactor(0, 0)
         self.splitter.setStretchFactor(1, 1)
-        self.splitter.setSizes([260, 440])
+        self.splitter.setSizes([390, 330])
         self.splitter.setStyleSheet(f"""
             QSplitter::handle:vertical {{
                 background-color: {COLOR_BORDER};
@@ -1064,6 +1066,10 @@ class AnalyticsView(QWidget):
         self._update_section_info(tab_id)
         if tab_id == 1:
             self._update_harmonic_mix_guide(self.widget_camelot.selected_code)
+            current_sizes = self.splitter.sizes()
+            if current_sizes and current_sizes[0] < 380:
+                total_h = sum(current_sizes)
+                self.splitter.setSizes([390, max(260, total_h - 390)])
 
     def _update_section_info(self, tab_id: int) -> None:
         """Update section description banner and guide tooltip for active tab."""
