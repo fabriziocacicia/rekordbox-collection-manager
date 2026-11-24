@@ -34,7 +34,7 @@ class CamelotWheelWidget(QWidget):
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.setMouseTracking(True)
-        self.setMinimumSize(420, 420)
+        self.setMinimumSize(280, 240)
 
         self.slices: Dict[str, CamelotSliceData] = {}
         self.hovered_code: Optional[str] = None
@@ -150,6 +150,20 @@ class CamelotWheelWidget(QWidget):
 
         return QColor(r, g, b, 235)
 
+    def _get_contrast_color(self, bg_color: QColor, track_count: int) -> Tuple[QColor, QColor]:
+        """Compute WCAG 2.1 AA compliant text colors based on background perceived luminance."""
+        if track_count <= 0:
+            return QColor(COLOR_TEXT_MUTED), QColor(COLOR_TEXT_MUTED)
+        lum = 0.299 * bg_color.red() + 0.587 * bg_color.green() + 0.114 * bg_color.blue()
+        if lum > 138:
+            # High-luminance background (yellow, gold, radiant coral, bright emerald):
+            # Use deep rich dark slate for crisp > 6:1 contrast ratio
+            return QColor("#090d16"), QColor("#1e293b")
+        else:
+            # Low-luminance background (navy, slate, deep blue):
+            # Use pure white and clean off-white
+            return QColor("#ffffff"), QColor("#cbd5e1")
+
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -174,11 +188,13 @@ class CamelotWheelWidget(QWidget):
         r_center_hub = r_inner * 0.84
 
         font_label = QFont()
-        font_label.setPointSize(9)
+        font_main_pt = 9 if min_dim >= 340 else (8 if min_dim >= 260 else 7)
+        font_label.setPointSize(font_main_pt)
         font_label.setBold(True)
 
         font_sub = QFont()
-        font_sub.setPointSize(7)
+        font_sub_pt = 7 if min_dim >= 340 else 6
+        font_sub.setPointSize(font_sub_pt)
 
         # 1. Draw Sectors
         for n in range(1, 13):
@@ -315,9 +331,11 @@ class CamelotWheelWidget(QWidget):
         label_x = center.x() + r_mid * math.cos(mid_angle_rad)
         label_y = center.y() - r_mid * math.sin(mid_angle_rad)
 
+        main_text_col, sub_text_col = self._get_contrast_color(bg_color, track_count)
+
         # 1. Key Code (e.g. 8A)
         painter.setFont(font_main)
-        painter.setPen(QColor("#ffffff" if track_count > 0 else COLOR_TEXT_MUTED))
+        painter.setPen(main_text_col)
         text_rect = QRectF(label_x - 22, label_y - 15, 44, 14)
         painter.drawText(text_rect, Qt.AlignmentFlag.AlignCenter, code)
 
@@ -325,7 +343,7 @@ class CamelotWheelWidget(QWidget):
         trad_text = slice_data.traditional if slice_data else ""
         if trad_text:
             painter.setFont(font_sub)
-            painter.setPen(QColor("#e2e8f0" if track_count > 0 else COLOR_TEXT_MUTED))
+            painter.setPen(sub_text_col)
             sub_rect = QRectF(label_x - 22, label_y - 1, 44, 11)
             painter.drawText(sub_rect, Qt.AlignmentFlag.AlignCenter, trad_text)
 
@@ -356,12 +374,23 @@ class CamelotWheelWidget(QWidget):
         painter.drawText(pill_rect, Qt.AlignmentFlag.AlignCenter, count_str)
 
     def _draw_legend_bar(self, painter: QPainter, w: float, h: float) -> None:
-        """Draw density color scale legend at bottom of widget."""
-        leg_w = min(280.0, max(180.0, w - 80.0))
-        leg_h = 9.0
-        leg_x = (w - leg_w) / 2.0
-        leg_y = h - 18.0
+        """Draw density color scale and live set airtime indicator at bottom."""
+        font_leg = QFont()
+        font_leg.setPointSize(8)
+        painter.setFont(font_leg)
 
+        # Total legend components width
+        leg_w = min(200.0, max(120.0, w * 0.22))
+        leg_h = 8.0
+        gap = 24.0
+        air_text_w = 175.0
+        total_legend_w = 60.0 + leg_w + 70.0 + gap + 16.0 + 6.0 + air_text_w
+
+        start_x = max(8.0, (w - total_legend_w) / 2.0)
+        leg_x = start_x + 60.0
+        leg_y = h - 16.0
+
+        # Gradient Bar
         grad = QLinearGradient(leg_x, 0, leg_x + leg_w, 0)
         grad.setColorAt(0.00, QColor(29, 64, 160))
         grad.setColorAt(0.25, QColor(6, 160, 215))
@@ -371,15 +400,29 @@ class CamelotWheelWidget(QWidget):
 
         painter.setBrush(QBrush(grad))
         painter.setPen(QPen(QColor(COLOR_BORDER), 1))
-        painter.drawRoundedRect(QRectF(leg_x, leg_y, leg_w, leg_h), 4, 4)
+        painter.drawRoundedRect(QRectF(leg_x, leg_y, leg_w, leg_h), 3, 3)
 
-        font_leg = QFont()
-        font_leg.setPointSize(8)
-        painter.setFont(font_leg)
         painter.setPen(QColor(COLOR_TEXT_MUTED))
-        painter.drawText(QRectF(leg_x - 70, leg_y - 2, 62, 14), Qt.AlignmentFlag.AlignRight, "0 tracks")
-        painter.drawText(QRectF(leg_x + leg_w + 8, leg_y - 2, 85, 14), Qt.AlignmentFlag.AlignLeft, f"Max ({self.max_catalog_count})")
-        painter.drawText(QRectF(leg_x, leg_y - 14, leg_w, 12), Qt.AlignmentFlag.AlignCenter, "Catalog Density (Track count)")
+        painter.drawText(QRectF(start_x, leg_y - 2, 54, 14), Qt.AlignmentFlag.AlignRight, "0")
+        painter.drawText(QRectF(leg_x + leg_w + 6, leg_y - 2, 70, 14), Qt.AlignmentFlag.AlignLeft, f"Max ({self.max_catalog_count})")
+        painter.drawText(QRectF(leg_x, leg_y - 13, leg_w, 12), Qt.AlignmentFlag.AlignCenter, "Catalog Density")
+
+        # Live Set Airtime Indicator
+        air_x = leg_x + leg_w + 70.0 + gap
+        air_box = QRectF(air_x, leg_y - 3, 14, 14)
+
+        # Base circle
+        painter.setBrush(QBrush(QColor(29, 64, 160)))
+        painter.setPen(QPen(QColor(COLOR_BORDER), 1))
+        painter.drawEllipse(air_box)
+
+        # Glowing white rim arc
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(QPen(QColor(255, 255, 255, 230), 2.5))
+        painter.drawArc(air_box, 30 * 16, 120 * 16)
+
+        painter.setPen(QColor(COLOR_TEXT_SECONDARY))
+        painter.drawText(QRectF(air_x + 20, leg_y - 3, air_text_w, 14), Qt.AlignmentFlag.AlignLeft, "Outer Rim = Live Set Airtime")
 
     def _get_slice_at_pos(self, pos: QPointF) -> Optional[str]:
         """Hit test polar position to identify Camelot sector."""

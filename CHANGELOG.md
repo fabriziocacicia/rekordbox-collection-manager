@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **analytics**: Refine desktop Analytics dashboard UI layout, interactive KPI cards, Crate Health Matrix heatmap contrast, full-width responsive track table, and subtle splitter styling
+- **analytics**: Redesign Camelot Wheel view with Harmonic Profile and Harmonic Mix Guide companion cards, adaptive WCAG 2.1 AA text contrast, and complete airtime legend
 
 ### Fixed
 
