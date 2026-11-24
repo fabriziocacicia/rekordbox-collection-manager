@@ -201,9 +201,53 @@ class TestAnalyticsGUI(unittest.TestCase):
 
         # 4. Survival Decay Widget
         survival_widget = SurvivalDecayWidget()
-        survival_widget.resize(500, 300)
+        survival_widget.resize(700, 380)
         survival_widget.set_data(snapshot.survival_curve, snapshot.point_of_no_return_set)
         self.assertEqual(survival_widget.point_of_no_return, snapshot.point_of_no_return_set)
+
+        from rekordbox_collection_manager.analytics import SurvivalStepData
+        mock_steps = [
+            SurvivalStepData(
+                set_number=k,
+                total_exposed=100,
+                unplayed_count=max(50, 100 - k * 5 if k <= 6 else 70 - (k - 6)),
+                unplayed_pct=float(max(50, 100 - k * 5 if k <= 6 else 70 - (k - 6))),
+            )
+            for k in range(21)
+        ]
+        survival_widget.set_data(mock_steps, point_of_no_return=6)
+        pix_surv = QPixmap(700, 380)
+        survival_widget.render(pix_surv)
+
+        clicked_steps = []
+        survival_widget.step_clicked.connect(lambda sn, pct: clicked_steps.append((sn, pct)))
+        left_m, top_m, _, _, g_w, g_h = survival_widget._chart_geometry()
+        x_set6 = left_m + (6.0 / 20.0) * g_w
+        ev_surv_move = QMouseEvent(
+            QEvent.Type.MouseMove,
+            QPointF(x_set6, top_m + g_h * 0.8),
+            Qt.MouseButton.NoButton,
+            Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        survival_widget.mouseMoveEvent(ev_surv_move)
+        self.assertEqual(survival_widget.hovered_step_idx, 6)
+
+        ev_surv_click = QMouseEvent(
+            QEvent.Type.MouseButtonPress,
+            QPointF(x_set6, top_m + g_h * 0.8),
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        survival_widget.mousePressEvent(ev_surv_click)
+        self.assertEqual(survival_widget.selected_step_idx, 6)
+        self.assertEqual(clicked_steps, [(6, 70.0)])
+
+        survival_widget.leaveEvent(QEvent(QEvent.Type.Leave))
+        self.assertIsNone(survival_widget.hovered_step_idx)
+        survival_widget.clear_selection()
+        self.assertIsNone(survival_widget.selected_step_idx)
 
         # 5. Transition Graph Widget
         graph_widget = TransitionGraphWidget()
