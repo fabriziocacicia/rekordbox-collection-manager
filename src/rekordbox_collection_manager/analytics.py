@@ -13,6 +13,7 @@ and aggregations for:
 
 import logging
 import math
+import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -196,6 +197,10 @@ class TrackAnalytics:
         mins = int(self.total_time_sec // 60)
         secs = int(self.total_time_sec % 60)
         duration_str = f"{mins}:{secs:02d}" if self.total_time_sec > 0 else "--:--"
+        folder_dir = os.path.dirname(self.file_path) if self.file_path else ""
+        folder_name = os.path.basename(folder_dir) if folder_dir else "—"
+        if not folder_name or folder_name in ("/", "\\"):
+            folder_name = "—"
         return {
             "id": self.content_id,
             "title": self.title,
@@ -211,6 +216,9 @@ class TrackAnalytics:
             "rating": self.rating,
             "date_added": self.date_added_str,
             "created_at": self.date_added_str,
+            "folder": folder_name,
+            "folder_name": folder_name,
+            "folder_dir": folder_dir,
             "folder_path": self.file_path,
             "exposure_gigs": self.exposure_gigs,
             "set_presence_gigs": self.set_presence_gigs,

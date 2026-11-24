@@ -78,7 +78,7 @@ class CrateHealthMatrixWidget(QWidget):
 
         # Margins for axes headers
         left_margin = 105
-        bottom_margin = 52
+        bottom_margin = 56
         top_margin = 24
         right_margin = 20
 
@@ -104,13 +104,6 @@ class CrateHealthMatrixWidget(QWidget):
         painter.setPen(QColor(COLOR_TEXT_MUTED))
         painter.drawText(16, top_margin - 8, "PICK RATE")
 
-        # X-Axis (Exposure) Header
-        painter.drawText(
-            int(left_margin + grid_w / 2 - 80),
-            int(h - 12),
-            "EXPOSURE (LIVE SETS)",
-        )
-
         font_label = QFont()
         font_label.setPointSize(9)
         painter.setFont(font_label)
@@ -129,13 +122,22 @@ class CrateHealthMatrixWidget(QWidget):
         # Draw X-Axis Labels (Cols)
         for c_idx, e_bracket in enumerate(self.exposure_brackets):
             x_left = left_margin + c_idx * col_w
-            c_rect = QRectF(x_left, top_margin + grid_h + 6, col_w, 20)
+            c_rect = QRectF(x_left, top_margin + grid_h + 4, col_w, 18)
             painter.setPen(QColor(COLOR_TEXT_SECONDARY))
             painter.drawText(
                 c_rect,
                 Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
                 e_bracket,
             )
+
+        # X-Axis (Exposure) Header - perfectly centered under the grid with clean padding
+        painter.setFont(font_axis)
+        painter.setPen(QColor(COLOR_TEXT_MUTED))
+        painter.drawText(
+            QRectF(left_margin, top_margin + grid_h + 26, grid_w, 18),
+            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
+            "EXPOSURE (LIVE SETS)",
+        )
 
         # Draw Grid Cells
         font_count = QFont()

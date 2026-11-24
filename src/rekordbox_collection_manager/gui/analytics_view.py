@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QMenu,
@@ -133,10 +134,10 @@ class KPICard(QFrame):
         if self._is_active:
             self.setStyleSheet(f"""
                 QFrame#kpiCard {{
-                    background-color: #20202d;
+                    background-color: #1c2233;
                     border: 2px solid {self.accent_color};
                     border-radius: 8px;
-                    padding: 9px 13px;
+                    padding: 7px 11px;
                 }}
             """)
         else:
@@ -145,7 +146,7 @@ class KPICard(QFrame):
                     background-color: {COLOR_BG_CARD};
                     border: 1px solid {COLOR_BORDER};
                     border-radius: 8px;
-                    padding: 10px 14px;
+                    padding: 8px 12px;
                 }}
                 QFrame#kpiCard:hover {{
                     border-color: {self.accent_color};
@@ -409,7 +410,7 @@ class AnalyticsView(QWidget):
 
         self.tab_buttons: List[QPushButton] = []
         for meta in self._tabs_metadata:
-            btn = QPushButton(meta["label"])
+            btn = QPushButton(meta["label"].replace("&", "&&"))
             btn.setCheckable(True)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.setToolTip(meta["rich_tooltip"])
@@ -445,23 +446,17 @@ class AnalyticsView(QWidget):
 
         # Section Info Banner with interactive tooltip and description
         self.section_info_bar = QWidget()
-        self.section_info_bar.setStyleSheet(f"""
-            QWidget {{
-                background-color: {COLOR_BG_CARD};
-                border: 1px solid {COLOR_BORDER};
-                border-radius: 6px;
-            }}
-        """)
+        self.section_info_bar.setStyleSheet("background: transparent; border: none;")
         sec_layout = QHBoxLayout(self.section_info_bar)
-        sec_layout.setContentsMargins(10, 4, 10, 4)
+        sec_layout.setContentsMargins(4, 2, 4, 4)
         sec_layout.setSpacing(8)
 
         self.lbl_sec_icon = QLabel("📦")
-        self.lbl_sec_icon.setStyleSheet("font-size: 13px;")
+        self.lbl_sec_icon.setStyleSheet("font-size: 12px; background: transparent;")
         sec_layout.addWidget(self.lbl_sec_icon)
 
         self.lbl_sec_desc = QLabel("")
-        self.lbl_sec_desc.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY}; font-size: 11px;")
+        self.lbl_sec_desc.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY}; font-size: 11px; background: transparent;")
         sec_layout.addWidget(self.lbl_sec_desc, stretch=1)
 
         self.lbl_sec_help = QLabel("How to interpret")
@@ -471,8 +466,8 @@ class AnalyticsView(QWidget):
                 color: {COLOR_BLUE};
                 font-size: 11px;
                 font-weight: 600;
-                padding: 2px 7px;
-                background-color: #0d2b45;
+                padding: 2px 8px;
+                background-color: #0e2740;
                 border: 1px solid {COLOR_BLUE};
                 border-radius: 4px;
             }}
@@ -497,7 +492,7 @@ class AnalyticsView(QWidget):
         # Vista 1: Crate Health Matrix Container
         v1_container = QWidget()
         v1_layout = QVBoxLayout(v1_container)
-        v1_layout.setContentsMargins(0, 0, 0, 0)
+        v1_layout.setContentsMargins(0, 0, 0, 8)
         v1_layout.setSpacing(6)
 
         self.widget_health_matrix = CrateHealthMatrixWidget(self)
@@ -609,10 +604,33 @@ class AnalyticsView(QWidget):
         self.table.open_playlist_requested.connect(self.open_playlist_requested.emit)
         self.table.open_tag_requested.connect(self.open_tag_requested.emit)
         self.table.db_saved.connect(self.db_saved.emit)
+
+        # Stretch table columns across 100% of horizontal space
+        t_header = self.table.horizontalHeader()
+        for c_idx, c_name in enumerate(ANALYTICS_TABLE_COLUMNS):
+            if c_name == TrackColumn.TITLE:
+                t_header.setSectionResizeMode(c_idx, QHeaderView.ResizeMode.Stretch)
+            elif c_name == TrackColumn.ARTIST:
+                self.table.setColumnWidth(c_idx, 210)
+            elif c_name == TrackColumn.FOLDER:
+                self.table.setColumnWidth(c_idx, 190)
+
         bottom_layout.addWidget(self.table, stretch=1)
 
         self.splitter.addWidget(bottom_container)
-        self.splitter.setSizes([330, 350])
+        self.splitter.setStretchFactor(0, 0)
+        self.splitter.setStretchFactor(1, 1)
+        self.splitter.setSizes([260, 440])
+        self.splitter.setStyleSheet(f"""
+            QSplitter::handle:vertical {{
+                background-color: {COLOR_BORDER};
+                height: 1px;
+                margin: 2px 0px;
+            }}
+            QSplitter::handle:vertical:hover {{
+                background-color: {COLOR_BLUE};
+            }}
+        """)
 
         main_layout.addWidget(self.splitter, stretch=1)
 
