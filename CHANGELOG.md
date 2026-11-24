@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **analytics**: Modernize Set Turnover & DNA chart with subsampled X-axis ticks, timeline year markers, 2px bar spacing with rounded tops, minimalist legend with interactive category definition tooltips, and dynamic archetype hover badges
 - **analytics**: Rebalance horizontal split layout to 70/30 giving visual prominence to charts while enabling horizontal scrolling on lateral tracklist with interactive column widths
 - **analytics**: Transition desktop dashboard to horizontal master-detail layout with full-height lateral tracklist, compact column proportions, and streamlined harmonic profile summary
 - **analytics**: Refine desktop Analytics dashboard UI layout, interactive KPI cards, Crate Health Matrix heatmap contrast, full-width responsive track table, and subtle splitter styling

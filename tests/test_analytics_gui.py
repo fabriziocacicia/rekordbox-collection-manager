@@ -6,7 +6,8 @@ from unittest.mock import MagicMock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QPointF, Qt
+from PySide6.QtCore import QEvent, QPointF, Qt
+from PySide6.QtGui import QMouseEvent, QPixmap
 from PySide6.QtWidgets import QApplication, QMessageBox
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
@@ -135,6 +136,68 @@ class TestAnalyticsGUI(unittest.TestCase):
         turnover_widget.resize(500, 300)
         turnover_widget.set_data(snapshot.turnover_series)
         self.assertEqual(len(turnover_widget.series), 1)
+
+        # Test dense series (55 sessions) to verify subsampling and legend tooltips
+        from rekordbox_collection_manager.analytics import SessionTurnoverData
+        mock_series = [
+            SessionTurnoverData(
+                session_id=f"sess_{i}",
+                session_index=i + 1,
+                name=f"Set #{i + 1}",
+                date_str=f"2024-{(i % 12) + 1:02d}-01",
+                total_tracks=20,
+                peak_bangers_count=4,
+                peak_bangers_pct=20.0,
+                core_rotation_count=6,
+                core_rotation_pct=30.0,
+                untested_count=6,
+                untested_pct=30.0,
+                deep_cuts_cluster_count=4,
+                deep_cuts_cluster_pct=20.0,
+                burnout_count=0,
+                burnout_pct=0.0,
+                standard_count=0,
+                standard_pct=0.0,
+                new_entries_count=5,
+                new_entries_pct=25.0,
+                in_rotation_count=10,
+                in_rotation_pct=50.0,
+                deep_cuts_count=5,
+                deep_cuts_pct=25.0,
+                one_shot_count=0,
+                one_shot_pct=0.0,
+                fresh_tracks_count=15,
+                fresh_tracks_pct=75.0,
+                repeated_prev_count=5,
+                repeated_prev_pct=25.0,
+                archetype="Balanced",
+                archetype_desc="Balanced set",
+                archetype_icon="⚖️",
+                archetype_tags=["balanced"],
+            )
+            for i in range(55)
+        ]
+        turnover_widget.set_data(mock_series)
+        self.assertEqual(len(turnover_widget.series), 55)
+        pix = QPixmap(800, 400)
+        turnover_widget.canvas.render(pix)
+        self.assertEqual(len(turnover_widget.canvas._legend_items), 5)
+        self.assertIn("Peak Bangers", turnover_widget.canvas._legend_items[0][1])
+        self.assertIn("Set Staples", turnover_widget.canvas._legend_items[0][3])
+
+        # Test hover on legend item
+        first_legend_rect = turnover_widget.canvas._legend_items[0][0]
+        ev_move = QMouseEvent(
+            QEvent.Type.MouseMove,
+            first_legend_rect.center(),
+            Qt.MouseButton.NoButton,
+            Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        turnover_widget.canvas.mouseMoveEvent(ev_move)
+        ev_leave = QEvent(QEvent.Type.Leave)
+        turnover_widget.canvas.leaveEvent(ev_leave)
+        self.assertIsNone(turnover_widget.canvas.hovered_session_idx)
 
         # 4. Survival Decay Widget
         survival_widget = SurvivalDecayWidget()

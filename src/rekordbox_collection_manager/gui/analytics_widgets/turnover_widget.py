@@ -8,7 +8,7 @@ Allows analyzing the composition of chronological live sets through 3 unified di
 
 from typing import Any, Dict, List, Optional, Tuple
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPen
+from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QButtonGroup,
     QHBoxLayout,
@@ -60,6 +60,7 @@ class _TurnoverCanvas(QWidget):
         self.hovered_session_idx: Optional[int] = None
         self.hovered_segment: Optional[str] = None
         self.selected_session_idx: Optional[int] = None
+        self._legend_items: List[Tuple[QRectF, str, str, str]] = []
 
     def set_data(self, series: List[SessionTurnoverData]) -> None:
         self.series = series or []
@@ -119,14 +120,27 @@ class _TurnoverCanvas(QWidget):
             painter.drawText(
                 QRectF(left_margin, top_margin, grid_w, grid_h),
                 Qt.AlignmentFlag.AlignCenter,
-                "Nessuna sessione valida registrata per l'analisi del turnover.",
+                "No valid gig sessions recorded for set turnover analysis.",
             )
             return
 
-        # Bar widths
-        col_w = max(12.0, min(50.0, (grid_w / float(n_sessions)) * 0.78))
         step_w = grid_w / float(n_sessions)
 
+        # Determine step skipping for X-axis labels to eliminate text collision
+        min_label_width = 30.0
+        if step_w >= min_label_width:
+            label_interval = 1
+        elif step_w >= 16.0:
+            label_interval = 5
+        elif step_w >= 10.0:
+            label_interval = 10
+        else:
+            label_interval = 20
+
+        # Bar widths (guaranteeing a clean 2px gap between bars)
+        col_w = max(4.0, min(48.0, step_w - 2.0))
+
+        last_labeled_idx = -999
         for idx, s in enumerate(self.series):
             x_center = left_margin + (idx + 0.5) * step_w
             x_left = x_center - (col_w / 2.0)
@@ -134,56 +148,88 @@ class _TurnoverCanvas(QWidget):
             is_session_hovered = self.hovered_session_idx == idx
             is_session_selected = self.selected_session_idx == idx
 
-            # Draw Archetype Icon Badge above bar
-            badge_w = min(col_w + 6, 26.0)
-            badge_rect = QRectF(x_center - (badge_w / 2.0), top_margin - 23, badge_w, 18)
-            badge_bg = QColor("#0d2b45") if is_session_hovered else QColor("#1e293b")
-            border_col = QColor(COLOR_BLUE if is_session_hovered else COLOR_BORDER)
-            painter.setPen(QPen(border_col, 1))
-            painter.setBrush(QBrush(badge_bg))
-            painter.drawRoundedRect(badge_rect, 4, 4)
+            # Draw Archetype Icon Badge above bar (hover/select only if dense)
+            show_badge = (n_sessions <= 20) or is_session_hovered or is_session_selected
+            if show_badge:
+                badge_w = min(max(col_w + 6, 20.0), 28.0)
+                badge_rect = QRectF(x_center - (badge_w / 2.0), top_margin - 23, badge_w, 18)
+                badge_bg = QColor("#0d2b45") if is_session_hovered else QColor("#1e293b")
+                border_col = QColor(COLOR_BLUE if is_session_hovered else COLOR_BORDER)
+                painter.setPen(QPen(border_col, 1))
+                painter.setBrush(QBrush(badge_bg))
+                painter.drawRoundedRect(badge_rect, 4, 4)
 
-            font_icon = QFont()
-            font_icon.setPointSize(9)
-            painter.setFont(font_icon)
-            painter.setPen(QColor(COLOR_TEXT_PRIMARY))
-            painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, s.archetype_icon)
+                font_icon = QFont()
+                font_icon.setPointSize(9)
+                painter.setFont(font_icon)
+                painter.setPen(QColor(COLOR_TEXT_PRIMARY))
+                painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, s.archetype_icon)
 
-            # Draw Bars according to active_mode
+            # Draw Bars according to active_mode with rounded 3px clip path
+            bar_path = QPainterPath()
+            bar_path.addRoundedRect(QRectF(x_left, top_margin, col_w, grid_h), 3, 3)
+            painter.save()
+            painter.setClipPath(bar_path)
             if self.active_mode == "cluster":
                 self._draw_cluster_bars(painter, s, idx, x_left, col_w, top_margin, grid_h, is_session_hovered)
             elif self.active_mode == "turnover":
                 self._draw_turnover_bars(painter, s, idx, x_left, col_w, top_margin, grid_h, is_session_hovered)
             else:
                 self._draw_retention_bars(painter, s, idx, x_left, col_w, top_margin, grid_h, is_session_hovered)
+            painter.restore()
 
-            # Selection border
+            # Selection / Hover border
             if is_session_selected:
                 painter.setBrush(Qt.BrushStyle.NoBrush)
                 painter.setPen(QPen(QColor(COLOR_TEXT_PRIMARY), 2))
-                painter.drawRoundedRect(QRectF(x_left - 2, top_margin, col_w + 4, grid_h), 4, 4)
+                painter.drawRoundedRect(QRectF(x_left - 1, top_margin - 1, col_w + 2, grid_h + 2), 4, 4)
+            elif is_session_hovered:
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.setPen(QPen(QColor(COLOR_BLUE), 1))
+                painter.drawRoundedRect(QRectF(x_left - 0.5, top_margin - 0.5, col_w + 1, grid_h + 1), 3.5, 3.5)
 
             # Draw X-Axis Label below bar
-            font_label = QFont()
-            font_label.setPointSize(8)
-            painter.setFont(font_label)
-            painter.setPen(QColor(COLOR_TEXT_SECONDARY))
-            label_text = f"S{s.session_index}" if n_sessions > 12 else s.name[:8]
-            painter.drawText(
-                QRectF(x_center - 25, top_margin + grid_h + 5, 50, 16),
-                Qt.AlignmentFlag.AlignCenter,
-                label_text,
-            )
+            is_endpoint = (idx == 0) or (idx == n_sessions - 1)
+            is_interval = (idx + 1) % label_interval == 0
+            # Don't crowd the last endpoint label if interval just drew
+            if idx == n_sessions - 1 and (idx - last_labeled_idx) < (label_interval // 2) and (idx != 0):
+                is_endpoint = True
+            should_draw_label = is_endpoint or is_interval or is_session_hovered or is_session_selected
 
-            # Date subtext
-            if n_sessions <= 16:
-                painter.setPen(QColor(COLOR_TEXT_MUTED))
-                d_short = s.date_str[5:] if len(s.date_str) >= 10 else s.date_str
+            if should_draw_label:
+                last_labeled_idx = idx
+                # Tick line
+                painter.setPen(QPen(QColor(COLOR_BLUE if is_session_hovered else COLOR_BORDER), 1))
+                painter.drawLine(int(x_center), int(top_margin + grid_h), int(x_center), int(top_margin + grid_h + 3))
+
+                font_label = QFont()
+                font_label.setPointSize(8)
+                font_label.setBold(is_session_hovered or is_session_selected)
+                painter.setFont(font_label)
+                painter.setPen(QColor("#ffffff" if is_session_hovered else COLOR_TEXT_SECONDARY))
+                label_text = f"S{s.session_index}" if n_sessions > 12 else s.name[:8]
                 painter.drawText(
-                    QRectF(x_center - 25, top_margin + grid_h + 20, 50, 14),
+                    QRectF(x_center - 18, top_margin + grid_h + 5, 36, 14),
                     Qt.AlignmentFlag.AlignCenter,
-                    d_short,
+                    label_text,
                 )
+
+                # Date / Year timeline marker
+                is_year_change = (
+                    idx == 0
+                    or (idx > 0 and len(s.date_str) >= 4 and s.date_str[:4] != self.series[idx - 1].date_str[:4])
+                    or (idx == n_sessions - 1 and n_sessions > 15)
+                )
+                if is_year_change and len(s.date_str) >= 4:
+                    font_year = QFont()
+                    font_year.setPointSize(7)
+                    painter.setFont(font_year)
+                    painter.setPen(QColor(COLOR_TEXT_MUTED))
+                    painter.drawText(
+                        QRectF(x_center - 20, top_margin + grid_h + 19, 40, 12),
+                        Qt.AlignmentFlag.AlignCenter,
+                        s.date_str[:4],
+                    )
 
     def _draw_cluster_bars(
         self, painter: QPainter, s: SessionTurnoverData, idx: int,
@@ -254,44 +300,66 @@ class _TurnoverCanvas(QWidget):
     def _draw_legend(self, painter: QPainter, start_x: float, y: float, total_w: float) -> None:
         if self.active_mode == "cluster":
             legend_items = [
-                ("⚡ Peak Bangers", COLOR_PEAK),
-                ("🔄 Core Rotation", COLOR_CORE),
-                ("🌱 New / Debut", COLOR_UNTESTED),
-                ("🔍 Deep Cuts", COLOR_DEEP_CUTS),
-                ("⏳ Overexposed / Burnout", COLOR_BURNOUT),
+                ("Peak Bangers", COLOR_PEAK, "Set Staples (Pick Rate >= 60%). High-frequency hits and peak-time anchors reliably played across sets."),
+                ("Core Rotation", COLOR_CORE, "Active Rotation (Pick Rate 25–60%). Reliable backbone tracks regularly rotated into your sets."),
+                ("New / Debut", COLOR_UNTESTED, "Untested / Fresh Debuts. Recent additions or tracks debuting in this live set."),
+                ("Deep Cuts", COLOR_DEEP_CUTS, "Catalog Rediscoveries. Older catalog tracks pulled back into rotation after an absence."),
+                ("Overexposed / Burnout", COLOR_BURNOUT, "Saturated Tracks. Tracks played in many prior gigs that may suffer from set fatigue."),
             ]
         elif self.active_mode == "turnover":
             legend_items = [
-                ("🌱 New Entries", COLOR_GREEN),
-                ("🔄 In Rotation (last 3)", COLOR_BLUE),
-                ("✨ Deep Cuts / Catalog", COLOR_DEEP_CUTS),
-                ("🎯 One-Shot", COLOR_ONE_SHOT),
+                ("New Entries", COLOR_GREEN, "Collection Debuts. Tracks played for the very first time in your performance history."),
+                ("In Rotation (last 3)", COLOR_BLUE, "Active Rotation. Tracks that were also played in at least one of the 3 preceding live sets."),
+                ("Deep Cuts / Catalog", COLOR_DEEP_CUTS, "Historical Repertoire. Older collection tracks not played in the 3 preceding gigs."),
+                ("One-Shot", COLOR_ONE_SHOT, "Single Appearance. Tracks only played once in this specific set and never rotated again."),
             ]
         else:
             legend_items = [
-                ("🆕 Fresh / New Tracks", COLOR_GREEN),
-                ("🔁 Repeated from Prev Set", COLOR_AMBER),
+                ("Fresh Tracks", COLOR_GREEN, "Set Turnover. Tracks in this set that were NOT played in the immediately preceding set."),
+                ("Repeated from Prev", COLOR_AMBER, "Direct Retention. Tracks carried over directly from the immediately preceding gig."),
             ]
 
+        self._legend_items = []
         font_leg = QFont()
         font_leg.setPointSize(8)
         font_leg.setBold(True)
         painter.setFont(font_leg)
 
         curr_x = start_x
-        step_leg = min(150.0, total_w / float(len(legend_items)))
-        for label, col_str in legend_items:
-            painter.fillRect(int(curr_x), int(y + 2), 10, 10, QColor(col_str))
+        step_leg = min(170.0, total_w / float(len(legend_items)))
+        for label, col_str, desc in legend_items:
+            item_w = min(step_leg - 6, 160.0)
+            item_rect = QRectF(curr_x, y, item_w, 18)
+            self._legend_items.append((item_rect, label, col_str, desc))
+
+            # Dot indicator
+            painter.setBrush(QBrush(QColor(col_str)))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawEllipse(QRectF(curr_x, y + 4, 8, 8))
+
+            # Label text
             painter.setPen(QColor(COLOR_TEXT_SECONDARY))
-            painter.drawText(int(curr_x + 14), int(y + 11), label)
+            painter.drawText(
+                QRectF(curr_x + 13, y, item_w - 13, 16),
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                label,
+            )
             curr_x += step_leg
+
+    def leaveEvent(self, event) -> None:
+        super().leaveEvent(event)
+        if self.hovered_session_idx is not None or self.hovered_segment is not None:
+            self.hovered_session_idx = None
+            self.hovered_segment = None
+            self.update()
+        QToolTip.hideText()
 
     def mouseMoveEvent(self, event) -> None:
         pos = event.position()
         w = self.width()
         h = self.height()
 
-        top_margin = 38
+        top_margin = 52
         bottom_margin = 46
         left_margin = 45
         right_margin = 20
@@ -302,8 +370,30 @@ class _TurnoverCanvas(QWidget):
         if n_sessions == 0:
             return
 
+        # Check legend item hover for category explanation tooltip
+        if pos.y() < (top_margin - 12):
+            hovered_legend = None
+            for rect, label, col_str, desc in getattr(self, "_legend_items", []):
+                if rect.contains(pos):
+                    hovered_legend = (label, col_str, desc)
+                    break
+
+            if hovered_legend:
+                if self.hovered_session_idx is not None or self.hovered_segment is not None:
+                    self.hovered_session_idx = None
+                    self.hovered_segment = None
+                    self.update()
+                label, col_str, desc = hovered_legend
+                tip = (
+                    f"<b><font color='{col_str}'>● {label}</font></b><br/>"
+                    f"<span style='font-size:11px; color:#cbd5e1;'>{desc}</span>"
+                )
+                pos_pt = event.position().toPoint()
+                QToolTip.showText(self.mapToGlobal(pos_pt), tip, self)
+                return
+
         step_w = grid_w / float(n_sessions)
-        col_w = max(12.0, min(50.0, (grid_w / float(n_sessions)) * 0.78))
+        col_w = max(4.0, min(48.0, step_w - 2.0))
 
         old_idx = self.hovered_session_idx
         old_seg = self.hovered_segment
@@ -523,7 +613,23 @@ class SetTurnoverWidget(QWidget):
         header_row.addStretch(1)
 
         lbl_arch_hint = QLabel("🏷️ Archetypes ℹ️")
-        lbl_arch_hint.setStyleSheet(f"color: {COLOR_TEXT_MUTED}; font-size: 11px; font-weight: 500;")
+        lbl_arch_hint.setCursor(Qt.CursorShape.PointingHandCursor)
+        lbl_arch_hint.setStyleSheet(f"""
+            QLabel {{
+                color: {COLOR_TEXT_SECONDARY};
+                background-color: {COLOR_BG_CARD};
+                border: 1px solid {COLOR_BORDER};
+                border-radius: 5px;
+                padding: 4px 9px;
+                font-size: 11px;
+                font-weight: 600;
+            }}
+            QLabel:hover {{
+                background-color: #2b2b36;
+                border-color: {COLOR_BLUE};
+                color: {COLOR_TEXT_PRIMARY};
+            }}
+        """)
         lbl_arch_hint.setToolTip(
             "Automatic descriptive set profile:\n"
             "• 🚀 Prime-Time / Festival: >= 65% proven hits and core rotation\n"
