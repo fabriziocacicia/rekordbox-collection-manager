@@ -77,8 +77,8 @@ class CrateHealthMatrixWidget(QWidget):
         h = self.height()
 
         # Margins for axes headers
-        left_margin = 120
-        bottom_margin = 44
+        left_margin = 105
+        bottom_margin = 52
         top_margin = 24
         right_margin = 20
 
@@ -98,7 +98,7 @@ class CrateHealthMatrixWidget(QWidget):
 
         # Y-Axis (Pick Rate) Header
         font_axis = QFont()
-        font_axis.setPointSize(10)
+        font_axis.setPointSize(9)
         font_axis.setBold(True)
         painter.setFont(font_axis)
         painter.setPen(QColor(COLOR_TEXT_MUTED))
@@ -106,9 +106,9 @@ class CrateHealthMatrixWidget(QWidget):
 
         # X-Axis (Exposure) Header
         painter.drawText(
-            int(left_margin + grid_w / 2 - 70),
-            int(h - 8),
-            "ESPOSIZIONE (SET DI ESPOSIZIONE)",
+            int(left_margin + grid_w / 2 - 80),
+            int(h - 12),
+            "EXPOSURE (LIVE SETS)",
         )
 
         font_label = QFont()
@@ -118,7 +118,7 @@ class CrateHealthMatrixWidget(QWidget):
         # Draw Y-Axis Labels (Rows)
         for r_idx, p_bracket in enumerate(self.pick_rate_brackets):
             y_top = top_margin + r_idx * row_h
-            r_rect = QRectF(10, y_top, left_margin - 20, row_h)
+            r_rect = QRectF(10, y_top, left_margin - 16, row_h)
             painter.setPen(QColor(COLOR_TEXT_SECONDARY))
             painter.drawText(
                 r_rect,
@@ -129,7 +129,7 @@ class CrateHealthMatrixWidget(QWidget):
         # Draw X-Axis Labels (Cols)
         for c_idx, e_bracket in enumerate(self.exposure_brackets):
             x_left = left_margin + c_idx * col_w
-            c_rect = QRectF(x_left, top_margin + grid_h + 4, col_w, 24)
+            c_rect = QRectF(x_left, top_margin + grid_h + 6, col_w, 20)
             painter.setPen(QColor(COLOR_TEXT_SECONDARY))
             painter.drawText(
                 c_rect,
@@ -160,33 +160,33 @@ class CrateHealthMatrixWidget(QWidget):
                 is_selected = self.selected_cell == (c_idx, r_idx)
 
                 # Determine base cell color & hazard zones
-                is_death_zone = (p_bracket == "0% (Mai suonata)") and (
-                    e_bracket in (">10 Set (Veterano)", "6-10 Set (Avanzato)")
+                is_death_zone = (p_bracket == "0% (Never played)") and (
+                    e_bracket in (">10 Sets (Veteran)", "6-10 Sets (Advanced)")
                 )
                 is_peak_zone = (p_bracket in ("76-100%", "51-75%")) and (
-                    e_bracket in (">10 Set (Veterano)", "6-10 Set (Avanzato)")
+                    e_bracket in (">10 Sets (Veteran)", "6-10 Sets (Advanced)")
                 )
 
                 intensity = min(1.0, count / float(self.max_cell_count)) if self.max_cell_count > 0 else 0
 
                 if count == 0:
-                    bg_color = QColor(COLOR_BG_CARD)
+                    bg_color = QColor(24, 24, 32, 190)
                     border_color = QColor(COLOR_BORDER)
                 elif is_death_zone:
-                    # Red hazard warning for dead weight
-                    r_val = int(70 + 130 * intensity)
-                    bg_color = QColor(r_val, 20, 25, 230)
+                    # Refined crimson/wine for dead weight
+                    r_val = int(55 + 85 * intensity)
+                    bg_color = QColor(r_val, 22, 28, int(170 + 75 * intensity))
                     border_color = QColor(COLOR_RED)
                 elif is_peak_zone:
-                    # Vibrant emerald/cyan for peak bangers
-                    g_val = int(60 + 140 * intensity)
-                    bg_color = QColor(10, g_val, 80, 220)
+                    # Sophisticated emerald for peak bangers
+                    g_val = int(45 + 75 * intensity)
+                    bg_color = QColor(12, g_val, 45, int(170 + 75 * intensity))
                     border_color = QColor(COLOR_GREEN)
                 else:
-                    # Sleek dark blue intensity
-                    b_val = int(50 + 150 * intensity)
-                    bg_color = QColor(15, int(40 + 70 * intensity), b_val, 220)
-                    border_color = QColor(COLOR_BORDER)
+                    # Deep slate navy blue
+                    b_val = int(35 + 85 * intensity)
+                    bg_color = QColor(14, int(28 + 45 * intensity), b_val, int(150 + 80 * intensity))
+                    border_color = QColor(42, 54, 72) if intensity > 0.4 else QColor(COLOR_BORDER)
 
                 if is_hovered:
                     bg_color = bg_color.lighter(130)
@@ -210,14 +210,14 @@ class CrateHealthMatrixWidget(QWidget):
                         str(count),
                     )
 
-                    # Subtext badge (e.g. "brani" or "ZAVORRA")
+                    # Subtext badge
                     painter.setFont(font_sub)
                     if is_death_zone:
-                        painter.setPen(QColor("#ff8888"))
-                        sub_text = "💀 DEAD WEIGHT"
+                        painter.setPen(QColor("#ff9999"))
+                        sub_text = "DEAD WEIGHT"
                     elif is_peak_zone:
-                        painter.setPen(QColor("#88ffaa"))
-                        sub_text = "⚡ PEAK"
+                        painter.setPen(QColor("#99ffbb"))
+                        sub_text = "PEAK"
                     else:
                         painter.setPen(QColor(COLOR_TEXT_MUTED))
                         sub_text = "tracks"

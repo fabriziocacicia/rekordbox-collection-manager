@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **analytics**: Refine desktop Analytics dashboard UI layout, interactive KPI cards, Crate Health Matrix heatmap contrast, and track table density
+
 ### Fixed
 
 - **analytics**: Localize desktop Analytics dashboard, status bar notifications, chart widgets, tooltips, and export dialogs into English for consistency with application language standards

@@ -193,6 +193,9 @@ class TrackAnalytics:
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to track record dictionary compatible with TracksTableWidget."""
+        mins = int(self.total_time_sec // 60)
+        secs = int(self.total_time_sec % 60)
+        duration_str = f"{mins}:{secs:02d}" if self.total_time_sec > 0 else "--:--"
         return {
             "id": self.content_id,
             "title": self.title,
@@ -203,6 +206,7 @@ class TrackAnalytics:
             "original_key": self.key,
             "camelot_code": self.camelot_code,
             "duration_sec": self.total_time_sec,
+            "duration_str": duration_str,
             "play_count": self.dj_play_count,
             "rating": self.rating,
             "date_added": self.date_added_str,
@@ -425,10 +429,10 @@ class AnalyticsSnapshot:
 
 
 EXPOSURE_BRACKETS = [
-    "1-2 Set (Test)",
-    "3-5 Set (Focus)",
-    "6-10 Set (Avanzato)",
-    ">10 Set (Veterano)",
+    "1-2 Sets (Test)",
+    "3-5 Sets (Focus)",
+    "6-10 Sets (Advanced)",
+    ">10 Sets (Veteran)",
 ]
 
 PICK_RATE_BRACKETS = [
@@ -436,25 +440,25 @@ PICK_RATE_BRACKETS = [
     "51-75%",
     "26-50%",
     "1-25%",
-    "0% (Mai suonata)",
+    "0% (Never played)",
 ]
 
 
 def _get_exposure_bracket(exposure: int) -> Optional[str]:
     if 1 <= exposure <= 2:
-        return "1-2 Set (Test)"
+        return "1-2 Sets (Test)"
     elif 3 <= exposure <= 5:
-        return "3-5 Set (Focus)"
+        return "3-5 Sets (Focus)"
     elif 6 <= exposure <= 10:
-        return "6-10 Set (Avanzato)"
+        return "6-10 Sets (Advanced)"
     elif exposure > 10:
-        return ">10 Set (Veterano)"
+        return ">10 Sets (Veteran)"
     return None
 
 
 def _get_pick_rate_bracket(pick_rate: float) -> str:
     if pick_rate <= 0.0001:
-        return "0% (Mai suonata)"
+        return "0% (Never played)"
     elif pick_rate <= 25.0:
         return "1-25%"
     elif pick_rate <= 50.0:

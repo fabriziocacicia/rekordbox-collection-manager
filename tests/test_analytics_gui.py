@@ -221,6 +221,15 @@ class TestAnalyticsGUI(unittest.TestCase):
         view._filter_by_cluster("Tutti")
         self.assertEqual(len(view.current_filtered_tracks), 2)
 
+        # KPI card active toggle
+        self.assertFalse(view.card_dead_weight.is_active())
+        view._on_kpi_card_clicked(view.card_dead_weight, "Dead Weight (Zavorra)")
+        self.assertTrue(view.card_dead_weight.is_active())
+        # Clicking again deselects and resets to all tracks
+        view._on_kpi_card_clicked(view.card_dead_weight, "Dead Weight (Zavorra)")
+        self.assertFalse(view.card_dead_weight.is_active())
+        self.assertEqual(len(view.current_filtered_tracks), 2)
+
         # Table search filter
         view._apply_table_search("Track 1")
         self.assertEqual(len(view.table.records), 1)

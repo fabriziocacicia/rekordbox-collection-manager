@@ -68,6 +68,17 @@ from rekordbox_collection_manager.utils import is_rekordbox_running
 
 logger = logging.getLogger(__name__)
 
+ANALYTICS_TABLE_COLUMNS: List[str] = [
+    TrackColumn.INDEX,
+    TrackColumn.TITLE,
+    TrackColumn.ARTIST,
+    TrackColumn.KEY,
+    TrackColumn.BPM,
+    TrackColumn.TIME,
+    TrackColumn.PLAYS,
+    TrackColumn.FOLDER,
+]
+
 
 class KPICard(QFrame):
     """Compact status card displaying a single KPI metric."""
@@ -86,21 +97,12 @@ class KPICard(QFrame):
         super().__init__(parent)
         self.setObjectName("kpiCard")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.accent_color = accent_color
+        self._is_active = False
         if tooltip:
             self.setToolTip(tooltip)
 
-        self.setStyleSheet(f"""
-            QFrame#kpiCard {{
-                background-color: {COLOR_BG_CARD};
-                border: 1px solid {COLOR_BORDER};
-                border-radius: 8px;
-                padding: 10px 14px;
-            }}
-            QFrame#kpiCard:hover {{
-                border-color: {accent_color};
-                background-color: #262632;
-            }}
-        """)
+        self._update_style()
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -118,6 +120,38 @@ class KPICard(QFrame):
             self.lbl_sub = QLabel(subtitle)
             self.lbl_sub.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY}; font-size: 10px;")
             layout.addWidget(self.lbl_sub)
+
+    def set_active(self, active: bool) -> None:
+        if self._is_active != active:
+            self._is_active = active
+            self._update_style()
+
+    def is_active(self) -> bool:
+        return self._is_active
+
+    def _update_style(self) -> None:
+        if self._is_active:
+            self.setStyleSheet(f"""
+                QFrame#kpiCard {{
+                    background-color: #20202d;
+                    border: 2px solid {self.accent_color};
+                    border-radius: 8px;
+                    padding: 9px 13px;
+                }}
+            """)
+        else:
+            self.setStyleSheet(f"""
+                QFrame#kpiCard {{
+                    background-color: {COLOR_BG_CARD};
+                    border: 1px solid {COLOR_BORDER};
+                    border-radius: 8px;
+                    padding: 10px 14px;
+                }}
+                QFrame#kpiCard:hover {{
+                    border-color: {self.accent_color};
+                    background-color: #262632;
+                }}
+            """)
 
     def set_value(self, value: str, subtitle: Optional[str] = None) -> None:
         self.lbl_value.setText(value)
@@ -166,7 +200,7 @@ class AnalyticsView(QWidget):
         title_col = QVBoxLayout()
         title_col.setSpacing(2)
 
-        title_lbl = QLabel("📊 Collection Analytics & Set Flow Insights")
+        title_lbl = QLabel("Collection Analytics & Set Flow Insights")
         title_lbl.setStyleSheet(f"color: {COLOR_TEXT_PRIMARY}; font-size: 18px; font-weight: 700; letter-spacing: -0.3px;")
         title_col.addWidget(title_lbl)
 
@@ -175,7 +209,7 @@ class AnalyticsView(QWidget):
         title_col.addWidget(sub_lbl)
         header_row.addLayout(title_col, stretch=1)
 
-        self.btn_refresh = QPushButton("🔄 Recalculate Metrics")
+        self.btn_refresh = QPushButton("Recalculate Metrics")
         self.btn_refresh.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_refresh.setStyleSheet(f"""
             QPushButton {{
@@ -207,35 +241,30 @@ class AnalyticsView(QWidget):
             "Dead Weight", "0", COLOR_RED, "Prune candidates for removal",
             tooltip="Tracks never played after 5+ sets or unplayed for 6+ consecutive sets",
         )
-        self.card_dead_weight.clicked.connect(lambda: self._filter_by_cluster("Dead Weight (Zavorra)"))
         self.cards_row.addWidget(self.card_dead_weight)
 
         self.card_peak = KPICard(
             "Peak Bangers", "0", COLOR_GREEN, "Reliable set staples (Pick >= 60%)",
             tooltip="Core tracks with very high selection frequency",
         )
-        self.card_peak.clicked.connect(lambda: self._filter_by_cluster("Peak Bangers"))
         self.cards_row.addWidget(self.card_peak)
 
         self.card_core = KPICard(
             "Core Rotation", "0", COLOR_BLUE, "Reliable rotation (25-60%)",
             tooltip="Consistent repertoire in steady rotation",
         )
-        self.card_core.clicked.connect(lambda: self._filter_by_cluster("Core Rotation"))
         self.cards_row.addWidget(self.card_core)
 
         self.card_untested = KPICard(
             "Untested", "0", COLOR_AMBER, "New additions awaiting test (protected)",
             tooltip="Recent additions exposed to <= 2 gigs: strictly protected",
         )
-        self.card_untested.clicked.connect(lambda: self._filter_by_cluster("In Incubazione / Untested"))
         self.cards_row.addWidget(self.card_untested)
 
         self.card_burnout = KPICard(
             "Burnout", "0", "#f97316", "Saturated tracks (unplayed for 8+ sets)",
             tooltip="Tracks with high historical play count but neglected in recent sets",
         )
-        self.card_burnout.clicked.connect(lambda: self._filter_by_cluster("Burnout Tracks"))
         self.cards_row.addWidget(self.card_burnout)
 
         self.card_sessions = KPICard(
@@ -243,6 +272,17 @@ class AnalyticsView(QWidget):
             tooltip="History sessions with duration >= 20 min and >= 5 tracks",
         )
         self.cards_row.addWidget(self.card_sessions)
+
+        self.kpi_cluster_map = {
+            self.card_dead_weight: "Dead Weight (Zavorra)",
+            self.card_peak: "Peak Bangers",
+            self.card_core: "Core Rotation",
+            self.card_untested: "In Incubazione / Untested",
+            self.card_burnout: "Burnout Tracks",
+        }
+
+        for card, cluster_key in self.kpi_cluster_map.items():
+            card.clicked.connect(lambda ck=cluster_key, c=card: self._on_kpi_card_clicked(c, ck))
 
         main_layout.addLayout(self.cards_row)
 
@@ -268,32 +308,32 @@ class AnalyticsView(QWidget):
         self._tabs_metadata = [
             {
                 "id": 0,
-                "label": "📦 Crate Health Matrix",
+                "label": "Crate Health Matrix",
                 "icon": "📦",
                 "short_desc": "Health Matrix: crosses gig exposure with Pick Rate to isolate dead weight (Death Zone) from set staples.",
                 "rich_tooltip": (
                     "<div style='max-width: 420px; font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif; line-height: 1.4;'>"
-                    "<b style='font-size: 13px; color: #38bdf8;'>📦 Crate Health Matrix (Health & Pruning Matrix)</b><br/><br/>"
+                    "<b style='font-size: 13px; color: #38bdf8;'>Crate Health Matrix (Health & Pruning Matrix)</b><br/><br/>"
                     "<b>What you are viewing:</b><br/>"
                     "Distribution of all library tracks crossing two key dimensions:<br/>"
                     "• <b>X Axis (Exposure):</b> How many live dates/gigs the track was present in your collection.<br/>"
                     "• <b>Y Axis (Pick Rate %):</b> In what percentage of those gigs you actually played it.<br/><br/>"
                     "<b>How to interpret the zones:</b><br/>"
-                    "• <b style='color: #ef4444;'>💀 Death Zone (bottom-right):</b> Tracks brought to 5+ gigs but never played, or ignored for over 6 consecutive gigs. These are prime <i>dead weight</i> candidates for pruning.<br/>"
-                    "• <b style='color: #10b981;'>⭐ Top Performers (top-right):</b> Core workhorses with high rotation and reliability.<br/>"
-                    "• <b style='color: #f59e0b;'>🌱 In Incubation (bottom-left):</b> New additions exposed to &le; 2 gigs, protected and awaiting test.<br/><br/>"
+                    "• <b style='color: #ef4444;'>Death Zone (bottom-right):</b> Tracks brought to 5+ gigs but never played, or ignored for over 6 consecutive gigs. These are prime <i>dead weight</i> candidates for pruning.<br/>"
+                    "• <b style='color: #10b981;'>Top Performers (top-right):</b> Core workhorses with high rotation and reliability.<br/>"
+                    "• <b style='color: #f59e0b;'>In Incubation (bottom-left):</b> New additions exposed to &le; 2 gigs, protected and awaiting test.<br/><br/>"
                     "<i style='color: #94a3b8;'>💡 Click a cell to load its tracks and export the Prune Crate (M3U8, XML, or Rekordbox Playlist).</i>"
                     "</div>"
                 ),
             },
             {
                 "id": 1,
-                "label": "🎡 Camelot Wheel",
+                "label": "Camelot Wheel",
                 "icon": "🎡",
                 "short_desc": "Harmonic Wheel: compares catalog track density against actual airtime in your live sets.",
                 "rich_tooltip": (
                     "<div style='max-width: 420px; font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif; line-height: 1.4;'>"
-                    "<b style='font-size: 13px; color: #38bdf8;'>🎡 Camelot Wheel (Harmonic Balance)</b><br/><br/>"
+                    "<b style='font-size: 13px; color: #38bdf8;'>Camelot Wheel (Harmonic Balance)</b><br/><br/>"
                     "<b>What you are viewing:</b><br/>"
                     "24-spoke polar harmonic wheel: inner ring for Minor keys (1A–12A), outer ring for Major keys (1B–12B).<br/><br/>"
                     "<b>How to interpret data:</b><br/>"
@@ -307,37 +347,37 @@ class AnalyticsView(QWidget):
             },
             {
                 "id": 2,
-                "label": "🧬 Set Turnover & DNA",
+                "label": "Set Turnover & DNA",
                 "icon": "🧬",
                 "short_desc": "Turnover & DNA: setlist rotation, freshness, and automatic gig archetype classification.",
                 "rich_tooltip": (
                     "<div style='max-width: 420px; font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif; line-height: 1.4;'>"
-                    "<b style='font-size: 13px; color: #38bdf8;'>🧬 Set Turnover & DNA (Set Identity Card)</b><br/><br/>"
+                    "<b style='font-size: 13px; color: #38bdf8;'>Set Turnover & DNA (Set Identity Card)</b><br/><br/>"
                     "<b>What you are viewing:</b><br/>"
                     "100% stacked bar chart analyzing the tracklist of each gig in chronological order from left to right.<br/><br/>"
                     "<b>How to interpret data:</b><br/>"
-                    "• <b>🏷️ Automatic Archetypes (Badge above each column):</b> Instant classification of the set profile (e.g. 🚀 Prime-Time, 🧪 Testing Lab, 🔍 Digger, 🔁 Duplicate, ⚖️ Balanced).<br/>"
+                    "• <b>Automatic Archetypes:</b> Instant classification of the set profile (e.g. Prime-Time, Testing Lab, Digger, Duplicate, Balanced).<br/>"
                     "• <b>3 Analysis Lenses:</b><br/>"
-                    "  1. <i>🧬 Performance Clusters:</i> Deconstructs set across Hits, Rotation, Brand-new tracks, Deep Cuts, and overexposed tracks at that time.<br/>"
-                    "  2. <i>⏳ Temporal Turnover:</i> Measures influx of brand-new tracks (New Entries), recent continuity, and catalog deep cuts.<br/>"
-                    "  3. <i>🔁 Previous Set Retention:</i> How many tracks were repeated identically from the immediate prior gig.<br/><br/>"
+                    "  1. <i>Performance Clusters:</i> Deconstructs set across Hits, Rotation, Brand-new tracks, Deep Cuts, and overexposed tracks at that time.<br/>"
+                    "  2. <i>Temporal Turnover:</i> Measures influx of brand-new tracks (New Entries), recent continuity, and catalog deep cuts.<br/>"
+                    "  3. <i>Previous Set Retention:</i> How many tracks were repeated identically from the immediate prior gig.<br/><br/>"
                     "<i style='color: #94a3b8;'>💡 Click a bar or segment to isolate those exact tracks in the table.</i>"
                     "</div>"
                 ),
             },
             {
                 "id": 3,
-                "label": "📉 Survival Decay",
+                "label": "Survival Decay",
                 "icon": "📉",
                 "short_desc": "Decay Curve: highlights the point of no return beyond which unplayed tracks end up forgotten.",
                 "rich_tooltip": (
                     "<div style='max-width: 420px; font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif; line-height: 1.4;'>"
-                    "<b style='font-size: 13px; color: #38bdf8;'>📉 Survival Decay (Kaplan-Meier Decay Curve)</b><br/><br/>"
+                    "<b style='font-size: 13px; color: #38bdf8;'>Survival Decay (Kaplan-Meier Decay Curve)</b><br/><br/>"
                     "<b>What you are viewing:</b><br/>"
                     "Tracks what happens to purchased tracks as live gigs pass: what percentage remains at ZERO plays after 1, 2, 3, 5, 10 sets from date added.<br/><br/>"
                     "<b>How to interpret the curve:</b><br/>"
                     "• <b>Stepwise descent:</b> Starts at 100% (all new additions start at zero plays) and descends as tracks get 'baptized' in your sets.<br/>"
-                    "• <b style='color: #f59e0b;'>⚠️ Point of No Return (dashed amber line):</b> Mathematical point where the curve flattens out. If a track is not played within the first 4 gigs, the likelihood of ever being played plunges close to zero.<br/>"
+                    "• <b style='color: #f59e0b;'>Point of No Return (dashed amber line):</b> Mathematical point where the curve flattens out. If a track is not played within the first 4 gigs, the likelihood of ever being played plunges close to zero.<br/>"
                     "• <b>Purpose:</b> Spot impulse purchases gathering dust before they turn into immovable dead weight.<br/><br/>"
                     "<i style='color: #94a3b8;'>💡 Click a step to view tracks still at zero plays by that gig.</i>"
                     "</div>"
@@ -345,12 +385,12 @@ class AnalyticsView(QWidget):
             },
             {
                 "id": 4,
-                "label": "🕸️ Transitions & Combos",
+                "label": "Transitions & Combos",
                 "icon": "🕸️",
                 "short_desc": "Transition Graph: sequences played consecutively (A ➔ B) across at least 2 distinct gigs, revealing mixing habits and staple combos.",
                 "rich_tooltip": (
                     "<div style='max-width: 440px; font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif; line-height: 1.45;'>"
-                    "<b style='font-size: 13px; color: #38bdf8;'>🕸️ Transitions & Combos (Habitual Sequence Graph)</b><br/><br/>"
+                    "<b style='font-size: 13px; color: #38bdf8;'>Transitions & Combos (Habitual Sequence Graph)</b><br/><br/>"
                     "<b>What you are viewing:</b><br/>"
                     "Directed network map of transitions and 'automatic combos' between tracks emerging from your gig histories.<br/><br/>"
                     "<b>Criteria for a Combo to appear in graph:</b><br/>"
@@ -413,7 +453,7 @@ class AnalyticsView(QWidget):
             }}
         """)
         sec_layout = QHBoxLayout(self.section_info_bar)
-        sec_layout.setContentsMargins(10, 5, 10, 5)
+        sec_layout.setContentsMargins(10, 4, 10, 4)
         sec_layout.setSpacing(8)
 
         self.lbl_sec_icon = QLabel("📦")
@@ -424,7 +464,7 @@ class AnalyticsView(QWidget):
         self.lbl_sec_desc.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY}; font-size: 11px;")
         sec_layout.addWidget(self.lbl_sec_desc, stretch=1)
 
-        self.lbl_sec_help = QLabel("ℹ️ How to interpret")
+        self.lbl_sec_help = QLabel("How to interpret")
         self.lbl_sec_help.setCursor(Qt.CursorShape.PointingHandCursor)
         self.lbl_sec_help.setStyleSheet(f"""
             QLabel {{
@@ -459,40 +499,6 @@ class AnalyticsView(QWidget):
         v1_layout = QVBoxLayout(v1_container)
         v1_layout.setContentsMargins(0, 0, 0, 0)
         v1_layout.setSpacing(6)
-
-        # Cluster filter chips above matrix
-        cluster_chips_layout = QHBoxLayout()
-        cluster_chips_layout.setSpacing(6)
-        cluster_chips_layout.addWidget(QLabel("Filter Cluster:"))
-        for c_label, c_key, c_col in [
-            ("All", "All", COLOR_TEXT_SECONDARY),
-            ("Dead Weight", "Dead Weight (Zavorra)", COLOR_RED),
-            ("Peak Bangers", "Peak Bangers", COLOR_GREEN),
-            ("Core Rotation", "Core Rotation", COLOR_BLUE),
-            ("Untested", "In Incubazione / Untested", COLOR_AMBER),
-            ("Burnout Tracks", "Burnout Tracks", "#f97316"),
-        ]:
-            c_btn = QPushButton(c_label)
-            c_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            c_btn.setStyleSheet(f"""
-                QPushButton {{
-                    background-color: {COLOR_BG_PANEL};
-                    border: 1px solid {COLOR_BORDER};
-                    border-radius: 4px;
-                    color: {c_col};
-                    padding: 3px 10px;
-                    font-size: 11px;
-                    font-weight: 600;
-                }}
-                QPushButton:hover {{
-                    background-color: {COLOR_BG_CARD};
-                    border-color: {c_col};
-                }}
-            """)
-            c_btn.clicked.connect(lambda checked=False, ck=c_key: self._filter_by_cluster(ck))
-            cluster_chips_layout.addWidget(c_btn)
-        cluster_chips_layout.addStretch(1)
-        v1_layout.addLayout(cluster_chips_layout)
 
         self.widget_health_matrix = CrateHealthMatrixWidget(self)
         self.widget_health_matrix.cell_clicked.connect(self._on_matrix_cell_clicked)
@@ -547,7 +553,7 @@ class AnalyticsView(QWidget):
 
         # Search filter
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("🔍 Filter displayed tracks...")
+        self.search_input.setPlaceholderText("Filter displayed tracks...")
         self.search_input.setFixedWidth(210)
         self.search_input.setStyleSheet(f"""
             QLineEdit {{
@@ -566,7 +572,7 @@ class AnalyticsView(QWidget):
         table_bar.addWidget(self.search_input)
 
         # Export Actions Button Menu
-        self.btn_export_menu = QPushButton("📤 Export Prune Crate ▼")
+        self.btn_export_menu = QPushButton("Export Prune Crate ▼")
         self.btn_export_menu.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_export_menu.setStyleSheet(f"""
             QPushButton {{
@@ -590,7 +596,7 @@ class AnalyticsView(QWidget):
 
         # Shared TracksTableWidget (client-side fast sorting)
         table_config = TrackTableConfig(
-            columns=list(DEFAULT_COLLECTION_COLUMNS),
+            columns=list(ANALYTICS_TABLE_COLUMNS),
             index_mode="row_number",
             index_header_tooltip="Position",
             sorting_mode="client",
@@ -606,7 +612,7 @@ class AnalyticsView(QWidget):
         bottom_layout.addWidget(self.table, stretch=1)
 
         self.splitter.addWidget(bottom_container)
-        self.splitter.setSizes([380, 280])
+        self.splitter.setSizes([330, 350])
 
         main_layout.addWidget(self.splitter, stretch=1)
 
@@ -630,17 +636,17 @@ class AnalyticsView(QWidget):
             }}
         """)
 
-        act_m3u = QAction("📄 Export M3U8 Playlist...", self)
+        act_m3u = QAction("Export M3U8 Playlist...", self)
         act_m3u.triggered.connect(self._export_m3u8)
         menu.addAction(act_m3u)
 
-        act_xml = QAction("📑 Export Rekordbox XML...", self)
+        act_xml = QAction("Export Rekordbox XML...", self)
         act_xml.triggered.connect(self._export_xml)
         menu.addAction(act_xml)
 
         menu.addSeparator()
 
-        act_rekordbox = QAction("➕ Create 'Prune Crate' Playlist in Rekordbox", self)
+        act_rekordbox = QAction("Create 'Prune Crate' Playlist in Rekordbox", self)
         act_rekordbox.triggered.connect(self._create_rekordbox_playlist)
         menu.addAction(act_rekordbox)
 
@@ -685,7 +691,7 @@ class AnalyticsView(QWidget):
     def _on_analytics_loaded(self, snapshot: AnalyticsSnapshot) -> None:
         self.snapshot = snapshot
         self.btn_refresh.setEnabled(True)
-        self.btn_refresh.setText("🔄 Recalculate Metrics")
+        self.btn_refresh.setText("Recalculate Metrics")
 
         # Update KPI Cards
         self.card_dead_weight.set_value(str(snapshot.dead_weight_count))
@@ -706,6 +712,7 @@ class AnalyticsView(QWidget):
         if snapshot.dead_weight_count > 0:
             self._filter_by_cluster("Dead Weight (Zavorra)")
         else:
+            self._set_active_kpi_card(None)
             all_records = [t.to_dict() for t in snapshot.tracks_by_id.values()]
             self._display_tracks(all_records, "All catalog tracks")
 
@@ -716,7 +723,7 @@ class AnalyticsView(QWidget):
 
     def _on_analytics_error(self, err_msg: str) -> None:
         self.btn_refresh.setEnabled(True)
-        self.btn_refresh.setText("🔄 Recalculate Metrics")
+        self.btn_refresh.setText("Recalculate Metrics")
         self.notify_status.emit(f"Analytics calculation error: {err_msg}")
         if self._interactive_refresh:
             QMessageBox.warning(self, "Analytics Error", f"Unable to calculate analytics:\n{err_msg}")
@@ -738,10 +745,24 @@ class AnalyticsView(QWidget):
     # Interactive Filtering Callbacks
     # --------------------------------------------------------------------------
 
+    def _on_kpi_card_clicked(self, card: KPICard, cluster_key: str) -> None:
+        if card.is_active():
+            self._set_active_kpi_card(None)
+            if self.snapshot:
+                records = [t.to_dict() for t in self.snapshot.tracks_by_id.values()]
+                self._display_tracks(records, "All Tracks")
+        else:
+            self._filter_by_cluster(cluster_key)
+
+    def _set_active_kpi_card(self, active_card: Optional[KPICard]) -> None:
+        for card in self.kpi_cluster_map:
+            card.set_active(card is active_card)
+
     def _filter_by_cluster(self, cluster_name: str) -> None:
         if not self.snapshot:
             return
         if cluster_name in ("All", "Tutti"):
+            self._set_active_kpi_card(None)
             records = [t.to_dict() for t in self.snapshot.tracks_by_id.values()]
             self._display_tracks(records, "All Tracks")
             return
@@ -751,20 +772,30 @@ class AnalyticsView(QWidget):
             "Untested": "In Incubazione / Untested",
         }
         target_key = cluster_map.get(cluster_name, cluster_name)
+
+        matched_card = None
+        for card, c_key in self.kpi_cluster_map.items():
+            if c_key == target_key or cluster_name in (c_key, card.lbl_title.text()):
+                matched_card = card
+                break
+        self._set_active_kpi_card(matched_card)
+
         c_ids = self.snapshot.cluster_track_ids.get(target_key, [])
         records = [self.snapshot.tracks_by_id[cid].to_dict() for cid in c_ids if cid in self.snapshot.tracks_by_id]
         clean_name = "Dead Weight" if "Dead Weight" in cluster_name else ("Untested" if "Untested" in cluster_name else cluster_name)
         self._display_tracks(records, f"Cluster: {clean_name}")
 
     def _on_matrix_cell_clicked(self, exposure: str, pick_rate: str, track_ids: List[str]) -> None:
+        self._set_active_kpi_card(None)
         if not self.snapshot:
             return
         records = [self.snapshot.tracks_by_id[cid].to_dict() for cid in track_ids if cid in self.snapshot.tracks_by_id]
-        is_death = (pick_rate == "0% (Mai suonata)") and (exposure in (">10 Set (Veterano)", "6-10 Set (Avanzato)"))
-        hazard_prefix = "💀 [DEAD WEIGHT] " if is_death else ""
+        is_death = (pick_rate == "0% (Never played)") and (exposure in (">10 Sets (Veteran)", "6-10 Sets (Advanced)"))
+        hazard_prefix = "[DEAD WEIGHT] " if is_death else ""
         self._display_tracks(records, f"{hazard_prefix}Matrix: {exposure} / Pick Rate {pick_rate}")
 
     def _on_camelot_slice_clicked(self, camelot_code: str, track_ids: List[str]) -> None:
+        self._set_active_kpi_card(None)
         if not self.snapshot:
             return
         records = [self.snapshot.tracks_by_id[cid].to_dict() for cid in track_ids if cid in self.snapshot.tracks_by_id]
@@ -773,12 +804,14 @@ class AnalyticsView(QWidget):
         self._display_tracks(records, f"Camelot Key: {camelot_code}{trad_str}")
 
     def _on_turnover_session_clicked(self, session_id: str, category_name: str, track_ids: List[str]) -> None:
+        self._set_active_kpi_card(None)
         if not self.snapshot:
             return
         records = [self.snapshot.tracks_by_id[cid].to_dict() for cid in track_ids if cid in self.snapshot.tracks_by_id]
         self._display_tracks(records, f"Set #{session_id}: {category_name}")
 
     def _on_survival_step_clicked(self, set_number: int, unplayed_pct: float) -> None:
+        self._set_active_kpi_card(None)
         if not self.snapshot:
             return
         # Tracks exposed to set_number with 0 plays up to set_number
@@ -789,6 +822,7 @@ class AnalyticsView(QWidget):
         self._display_tracks(unplayed, f"Zero-play tracks after {set_number} sets ({unplayed_pct}%)")
 
     def _on_transition_edge_clicked(self, src_id: str, tgt_id: str, count: int) -> None:
+        self._set_active_kpi_card(None)
         if not self.snapshot:
             return
         records = []
@@ -798,6 +832,7 @@ class AnalyticsView(QWidget):
         self._display_tracks(records, f"Automatic Combo: {count} consecutive transitions")
 
     def _on_transition_node_clicked(self, track_id: str) -> None:
+        self._set_active_kpi_card(None)
         if not self.snapshot:
             return
         if track_id in self.snapshot.tracks_by_id:
