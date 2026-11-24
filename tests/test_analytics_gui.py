@@ -218,6 +218,10 @@ class TestAnalyticsGUI(unittest.TestCase):
         view._toggle_layout_mode()
         self.assertEqual(view.splitter.orientation(), Qt.Orientation.Horizontal)
 
+        # Verify horizontal scrollbar policy and stretch factors
+        self.assertEqual(view.table.horizontalScrollBarPolicy(), Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.assertIn("Export", view.btn_export_menu.text())
+
         # Tab switching and section descriptions
         self.assertEqual(len(view.tab_buttons), 5)
         for btn in view.tab_buttons:

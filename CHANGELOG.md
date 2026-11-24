@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **analytics**: Rebalance horizontal split layout to 70/30 giving visual prominence to charts while enabling horizontal scrolling on lateral tracklist with interactive column widths
 - **analytics**: Transition desktop dashboard to horizontal master-detail layout with full-height lateral tracklist, compact column proportions, and streamlined harmonic profile summary
 - **analytics**: Refine desktop Analytics dashboard UI layout, interactive KPI cards, Crate Health Matrix heatmap contrast, full-width responsive track table, and subtle splitter styling
 - **analytics**: Redesign Camelot Wheel view with Harmonic Profile and Harmonic Mix Guide companion cards, adaptive WCAG 2.1 AA text contrast, and complete airtime legend

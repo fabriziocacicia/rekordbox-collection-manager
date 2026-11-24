@@ -190,7 +190,7 @@ class AnalyticsView(QWidget):
         self.current_filtered_tracks: List[Dict[str, Any]] = []
         self._active_filter_label: str = "All Tracks"
         self._user_pinned_layout: bool = False
-        self._horizontal_sizes: List[int] = [640, 620]
+        self._horizontal_sizes: List[int] = [880, 420]
         self._vertical_sizes: List[int] = [340, 260]
 
         self._init_ui()
@@ -590,7 +590,7 @@ class AnalyticsView(QWidget):
         # Search filter
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("Filter tracks...")
-        self.search_input.setFixedWidth(160)
+        self.search_input.setFixedWidth(130)
         self.search_input.setStyleSheet(f"""
             QLineEdit {{
                 background-color: {COLOR_BG_INPUT};
@@ -608,15 +608,16 @@ class AnalyticsView(QWidget):
         table_bar.addWidget(self.search_input)
 
         # Export Actions Button Menu
-        self.btn_export_menu = QPushButton("Export Prune Crate ▼")
+        self.btn_export_menu = QPushButton("Export ▼")
         self.btn_export_menu.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_export_menu.setToolTip("Export tracks to Rekordbox playlist, M3U8, or XML")
         self.btn_export_menu.setStyleSheet(f"""
             QPushButton {{
                 background-color: #381212;
                 border: 1px solid {COLOR_RED};
                 border-radius: 6px;
                 color: #ff9999;
-                padding: 5px 12px;
+                padding: 5px 10px;
                 font-weight: 700;
                 font-size: 11px;
             }}
@@ -646,38 +647,34 @@ class AnalyticsView(QWidget):
         self.table.open_tag_requested.connect(self.open_tag_requested.emit)
         self.table.db_saved.connect(self.db_saved.emit)
 
-        # Proportion table columns for lateral layout
+        # Proportion table columns for lateral layout with horizontal scrolling
+        self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         t_header = self.table.horizontalHeader()
+        t_header.setStretchLastSection(False)
         for c_idx, c_name in enumerate(ANALYTICS_TABLE_COLUMNS):
-            if c_name == TrackColumn.TITLE:
-                t_header.setSectionResizeMode(c_idx, QHeaderView.ResizeMode.Stretch)
-            elif c_name == TrackColumn.INDEX:
-                t_header.setSectionResizeMode(c_idx, QHeaderView.ResizeMode.Interactive)
+            t_header.setSectionResizeMode(c_idx, QHeaderView.ResizeMode.Interactive)
+            if c_name == TrackColumn.INDEX:
                 self.table.setColumnWidth(c_idx, 34)
+            elif c_name == TrackColumn.TITLE:
+                self.table.setColumnWidth(c_idx, 180)
             elif c_name == TrackColumn.ARTIST:
-                t_header.setSectionResizeMode(c_idx, QHeaderView.ResizeMode.Interactive)
                 self.table.setColumnWidth(c_idx, 120)
             elif c_name == TrackColumn.KEY:
-                t_header.setSectionResizeMode(c_idx, QHeaderView.ResizeMode.Interactive)
                 self.table.setColumnWidth(c_idx, 46)
             elif c_name == TrackColumn.BPM:
-                t_header.setSectionResizeMode(c_idx, QHeaderView.ResizeMode.Interactive)
-                self.table.setColumnWidth(c_idx, 62)
+                self.table.setColumnWidth(c_idx, 60)
             elif c_name == TrackColumn.TIME:
-                t_header.setSectionResizeMode(c_idx, QHeaderView.ResizeMode.Interactive)
-                self.table.setColumnWidth(c_idx, 56)
+                self.table.setColumnWidth(c_idx, 54)
             elif c_name == TrackColumn.PLAYS:
-                t_header.setSectionResizeMode(c_idx, QHeaderView.ResizeMode.Interactive)
-                self.table.setColumnWidth(c_idx, 56)
+                self.table.setColumnWidth(c_idx, 52)
             elif c_name == TrackColumn.FOLDER:
-                t_header.setSectionResizeMode(c_idx, QHeaderView.ResizeMode.Interactive)
                 self.table.setColumnWidth(c_idx, 90)
 
         right_layout.addWidget(self.table, stretch=1)
 
         self.splitter.addWidget(right_container)
-        self.splitter.setStretchFactor(0, 0)
-        self.splitter.setStretchFactor(1, 1)
+        self.splitter.setStretchFactor(0, 7)
+        self.splitter.setStretchFactor(1, 3)
         self._apply_splitter_orientation(Qt.Orientation.Horizontal)
 
         main_layout.addWidget(self.splitter, stretch=1)
@@ -715,13 +712,15 @@ class AnalyticsView(QWidget):
                     background-color: {COLOR_BLUE};
                 }}
             """)
-            self.splitter.setStretchFactor(0, 0)
-            self.splitter.setStretchFactor(1, 1)
+            self.splitter.setStretchFactor(0, 7)
+            self.splitter.setStretchFactor(1, 3)
             if hasattr(self, "_horizontal_sizes") and sum(self._horizontal_sizes) > 0:
                 self.splitter.setSizes(self._horizontal_sizes)
             else:
                 w = self.width() or 1300
-                self.splitter.setSizes([640, max(420, w - 670)])
+                chart_w = max(660, int(w * 0.68))
+                table_w = max(380, w - chart_w)
+                self.splitter.setSizes([chart_w, table_w])
             if hasattr(self, "btn_layout_toggle"):
                 self.btn_layout_toggle.setText("⫤⫥ Lateral")
                 self.btn_layout_toggle.setToolTip("Layout: Lateral (Side-by-Side). Click to switch to Stacked.")
@@ -736,13 +735,13 @@ class AnalyticsView(QWidget):
                     background-color: {COLOR_BLUE};
                 }}
             """)
-            self.splitter.setStretchFactor(0, 0)
-            self.splitter.setStretchFactor(1, 1)
+            self.splitter.setStretchFactor(0, 6)
+            self.splitter.setStretchFactor(1, 4)
             if hasattr(self, "_vertical_sizes") and sum(self._vertical_sizes) > 0:
                 self.splitter.setSizes(self._vertical_sizes)
             else:
                 total_h = self.splitter.height() or 500
-                top_h = max(280, int(total_h * 0.55))
+                top_h = max(280, int(total_h * 0.58))
                 self.splitter.setSizes([top_h, max(180, total_h - top_h)])
             if hasattr(self, "btn_layout_toggle"):
                 self.btn_layout_toggle.setText("⬍ Stacked")
