@@ -193,6 +193,7 @@ class TestAnalyticsGUI(unittest.TestCase):
     def test_analytics_view_integration(self):
         """Test AnalyticsView loaded with snapshot and interactive filtering."""
         view = AnalyticsView()
+        view.show()
         view.resize(900, 700)
 
         snapshot = compute_analytics(self.engine, min_session_duration_sec=0, min_session_tracks=1)
@@ -221,6 +222,42 @@ class TestAnalyticsGUI(unittest.TestCase):
         # Verify horizontal scrollbar policy and stretch factors
         self.assertEqual(view.table.horizontalScrollBarPolicy(), Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.assertIn("Export", view.btn_export_menu.text())
+
+        # Test table expand/collapse functionality and auto-restore
+        self.assertTrue(view.chart_container.isVisible())
+        self.assertIn("Expand", view.btn_expand_table.text())
+
+        # Expand table via button
+        view.btn_expand_table.click()
+        self.assertTrue(view._table_expanded)
+        self.assertFalse(view.chart_container.isVisible())
+        self.assertIn("Restore", view.btn_expand_table.text())
+
+        # Auto-restore on tab switch
+        view._on_tab_switched(2)
+        self.assertFalse(view._table_expanded)
+        self.assertTrue(view.chart_container.isVisible())
+        self.assertIn("Expand", view.btn_expand_table.text())
+
+        # Expand via double-click on splitter handle
+        from PySide6.QtCore import QEvent, QPointF
+        from PySide6.QtGui import QMouseEvent
+        handle = view.splitter.handle(1)
+        dbl_click = QMouseEvent(
+            QEvent.Type.MouseButtonDblClick,
+            QPointF(5, 5),
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        QApplication.sendEvent(handle, dbl_click)
+        self.assertTrue(view._table_expanded)
+        self.assertFalse(view.chart_container.isVisible())
+
+        # Auto-restore on KPI card click
+        view._on_kpi_card_clicked(view.card_dead_weight, "Dead Weight (Zavorra)")
+        self.assertFalse(view._table_expanded)
+        self.assertTrue(view.chart_container.isVisible())
 
         # Tab switching and section descriptions
         self.assertEqual(len(view.tab_buttons), 5)

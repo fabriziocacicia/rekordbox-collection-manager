@@ -8,7 +8,7 @@ import logging
 import os
 from datetime import datetime
 from typing import Any, Dict, List, Optional
-from PySide6.QtCore import QPoint, QSize, Qt, Signal
+from PySide6.QtCore import QEvent, QObject, QPoint, QSize, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QFont, QIcon
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -324,8 +324,8 @@ class AnalyticsView(QWidget):
         self.splitter.setChildrenCollapsible(False)
 
         # Left Container: Tab Buttons + Stack of 5 Visualizations
-        left_container = QWidget()
-        left_layout = QVBoxLayout(left_container)
+        self.chart_container = QWidget()
+        left_layout = QVBoxLayout(self.chart_container)
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.setSpacing(8)
 
@@ -563,7 +563,7 @@ class AnalyticsView(QWidget):
         self.chart_stack.addWidget(self.widget_transitions)
 
         left_layout.addWidget(self.chart_stack)
-        self.splitter.addWidget(left_container)
+        self.splitter.addWidget(self.chart_container)
 
         # ----------------------------------------------------------------------
         # 4. Right Container: Interactive Track Table with Crate Export
@@ -629,6 +629,29 @@ class AnalyticsView(QWidget):
         self._setup_export_menu()
         table_bar.addWidget(self.btn_export_menu)
 
+        # Expand/Collapse Table Button
+        self.btn_expand_table = QPushButton("⤢ Expand")
+        self.btn_expand_table.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_expand_table.setToolTip("Expand track table to full height / Hide charts (or double-click splitter)")
+        self.btn_expand_table.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLOR_BG_CARD};
+                border: 1px solid {COLOR_BORDER};
+                border-radius: 6px;
+                color: {COLOR_TEXT_SECONDARY};
+                padding: 5px 10px;
+                font-weight: 600;
+                font-size: 11px;
+            }}
+            QPushButton:hover {{
+                background-color: #2b2b36;
+                color: {COLOR_TEXT_PRIMARY};
+                border-color: {COLOR_BLUE};
+            }}
+        """)
+        self.btn_expand_table.clicked.connect(lambda: self._toggle_table_expanded())
+        table_bar.addWidget(self.btn_expand_table)
+
         right_layout.addLayout(table_bar)
 
         # Shared TracksTableWidget (client-side fast sorting)
@@ -673,14 +696,73 @@ class AnalyticsView(QWidget):
         right_layout.addWidget(self.table, stretch=1)
 
         self.splitter.addWidget(right_container)
+        handle = self.splitter.handle(1)
+        if handle:
+            handle.setToolTip("Double-click to collapse/expand charts")
+            handle.installEventFilter(self)
         self.splitter.setStretchFactor(0, 7)
         self.splitter.setStretchFactor(1, 3)
         self._apply_splitter_orientation(Qt.Orientation.Horizontal)
 
         main_layout.addWidget(self.splitter, stretch=1)
 
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if hasattr(self, "splitter") and watched == self.splitter.handle(1):
+            if event.type() == QEvent.Type.MouseButtonDblClick:
+                self._toggle_table_expanded()
+                return True
+        return super().eventFilter(watched, event)
+
+    def _toggle_table_expanded(self, expand: Optional[bool] = None) -> None:
+        """Toggle or set full table expansion by collapsing/restoring the charts container."""
+        if expand is None:
+            self._table_expanded = not getattr(self, "_table_expanded", False)
+        else:
+            self._table_expanded = expand
+
+        if self._table_expanded:
+            self.chart_container.setVisible(False)
+            self.btn_expand_table.setText("⤡ Restore")
+            self.btn_expand_table.setToolTip("Restore charts view (or click any tab / KPI card)")
+            self.btn_expand_table.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: #0f3a63;
+                    border: 1px solid {COLOR_BLUE};
+                    border-radius: 6px;
+                    color: #ffffff;
+                    padding: 5px 10px;
+                    font-weight: 700;
+                    font-size: 11px;
+                }}
+                QPushButton:hover {{
+                    background-color: #1a4d80;
+                }}
+            """)
+        else:
+            self.chart_container.setVisible(True)
+            self.btn_expand_table.setText("⤢ Expand")
+            self.btn_expand_table.setToolTip("Expand track table to full height / Hide charts (or double-click splitter)")
+            self.btn_expand_table.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {COLOR_BG_CARD};
+                    border: 1px solid {COLOR_BORDER};
+                    border-radius: 6px;
+                    color: {COLOR_TEXT_SECONDARY};
+                    padding: 5px 10px;
+                    font-weight: 600;
+                    font-size: 11px;
+                }}
+                QPushButton:hover {{
+                    background-color: #2b2b36;
+                    color: {COLOR_TEXT_PRIMARY};
+                    border-color: {COLOR_BLUE};
+                }}
+            """)
+
     def _toggle_layout_mode(self) -> None:
         """Manually toggle between Lateral (horizontal) and Stacked (vertical) splitter orientation."""
+        if getattr(self, "_table_expanded", False):
+            self._toggle_table_expanded(expand=False)
         self._user_pinned_layout = True
         new_orientation = (
             Qt.Orientation.Vertical
@@ -1013,6 +1095,8 @@ class AnalyticsView(QWidget):
             QMessageBox.warning(self, "Analytics Error", f"Unable to calculate analytics:\n{err_msg}")
 
     def _on_tab_switched(self, tab_id: int) -> None:
+        if getattr(self, "_table_expanded", False):
+            self._toggle_table_expanded(expand=False)
         self.chart_stack.setCurrentIndex(tab_id)
         self._update_section_info(tab_id)
 
@@ -1030,6 +1114,8 @@ class AnalyticsView(QWidget):
     # --------------------------------------------------------------------------
 
     def _on_kpi_card_clicked(self, card: KPICard, cluster_key: str) -> None:
+        if getattr(self, "_table_expanded", False):
+            self._toggle_table_expanded(expand=False)
         if card.is_active():
             self._set_active_kpi_card(None)
             if self.snapshot:
