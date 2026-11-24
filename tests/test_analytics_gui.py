@@ -201,6 +201,9 @@ class TestAnalyticsGUI(unittest.TestCase):
         # Verify KPI values are populated
         self.assertEqual(view.card_sessions.lbl_value.text(), "1")
 
+        # Verify horizontal splitter layout
+        self.assertEqual(view.splitter.orientation(), Qt.Orientation.Horizontal)
+
         # Tab switching and section descriptions
         self.assertEqual(len(view.tab_buttons), 5)
         for btn in view.tab_buttons:
@@ -214,20 +217,18 @@ class TestAnalyticsGUI(unittest.TestCase):
 
         view._on_tab_switched(1)
         self.assertEqual(view.chart_stack.currentIndex(), 1)
-        # Verify harmonic companion cards populated
+        # Verify harmonic profile card populated
         self.assertIn("Minor", view.lbl_mode_ratio.text())
-        self.assertEqual(view.mix_stack.currentIndex(), 0)
 
         # Click Camelot slice 8A
         view._on_camelot_slice_clicked("8A", ["t1"])
-        self.assertEqual(view.mix_stack.currentIndex(), 1)
-        self.assertIn("8A", view.lbl_mix_selected_key.text())
-        self.assertIn("9A", view.btn_mix_boost.text())
+        self.assertIn("8A", view.lbl_table_title.text())
+        self.assertEqual(len(view.table.records), 1)
 
-        # Test jumping via mix guide
+        # Test jumping via Camelot key helper
         view._jump_to_key("8B")
         self.assertEqual(view.widget_camelot.selected_code, "8B")
-        self.assertIn("8B", view.lbl_mix_selected_key.text())
+        self.assertIn("8B", view.lbl_table_title.text())
 
         view._on_tab_switched(0)
         self.assertEqual(view.chart_stack.currentIndex(), 0)

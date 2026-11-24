@@ -290,16 +290,17 @@ class AnalyticsView(QWidget):
         main_layout.addLayout(self.cards_row)
 
         # ----------------------------------------------------------------------
-        # 3. Main Splitter (Top: Charts & Analytics Vistas, Bottom: Tracks Table)
+        # 3. Main Splitter (Left: Charts & Analytics Vistas, Right: Tracks Table)
         # ----------------------------------------------------------------------
-        self.splitter = QSplitter(Qt.Orientation.Vertical)
+        self.splitter = QSplitter(Qt.Orientation.Horizontal)
         self.splitter.setChildrenCollapsible(False)
 
-        # Top Container: Tab Buttons + Stack of 5 Visualizations
-        top_container = QWidget()
-        top_layout = QVBoxLayout(top_container)
-        top_layout.setContentsMargins(0, 0, 0, 0)
-        top_layout.setSpacing(8)
+        # Left Container: Tab Buttons + Stack of 5 Visualizations
+        left_container = QWidget()
+        left_container.setMinimumWidth(660)
+        left_layout = QVBoxLayout(left_container)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(8)
 
         # Tab Selector Bar
         tab_bar = QHBoxLayout()
@@ -422,7 +423,7 @@ class AnalyticsView(QWidget):
                     border: 1px solid {COLOR_BORDER};
                     border-radius: 6px;
                     color: {COLOR_TEXT_SECONDARY};
-                    padding: 6px 14px;
+                    padding: 5px 9px;
                     font-size: 11px;
                     font-weight: 600;
                 }}
@@ -444,7 +445,7 @@ class AnalyticsView(QWidget):
 
         tab_bar.addStretch(1)
         self.tab_group.idClicked.connect(self._on_tab_switched)
-        top_layout.addLayout(tab_bar)
+        left_layout.addLayout(tab_bar)
 
         # Section Info Banner with interactive tooltip and description
         self.section_info_bar = QWidget()
@@ -458,6 +459,7 @@ class AnalyticsView(QWidget):
         sec_layout.addWidget(self.lbl_sec_icon)
 
         self.lbl_sec_desc = QLabel("")
+        self.lbl_sec_desc.setWordWrap(True)
         self.lbl_sec_desc.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY}; font-size: 11px; background: transparent;")
         sec_layout.addWidget(self.lbl_sec_desc, stretch=1)
 
@@ -485,7 +487,7 @@ class AnalyticsView(QWidget):
         )
         sec_layout.addWidget(self.lbl_sec_help)
 
-        top_layout.addWidget(self.section_info_bar)
+        left_layout.addWidget(self.section_info_bar)
         self._update_section_info(0)
 
         # Stacked Widget for the 5 Vistas
@@ -502,23 +504,18 @@ class AnalyticsView(QWidget):
         v1_layout.addWidget(self.widget_health_matrix)
         self.chart_stack.addWidget(v1_container)
 
-        # Vista 2: Camelot Wheel Container (Harmonic Station)
+        # Vista 2: Camelot Wheel Container (Harmonic Profile + Radial Wheel)
         v2_container = QWidget()
         v2_layout = QHBoxLayout(v2_container)
         v2_layout.setContentsMargins(0, 0, 0, 4)
-        v2_layout.setSpacing(16)
+        v2_layout.setSpacing(12)
 
-        v2_layout.addStretch(1)
         self.card_harmonic_profile = self._create_harmonic_profile_card()
         v2_layout.addWidget(self.card_harmonic_profile)
 
         self.widget_camelot = CamelotWheelWidget(self)
         self.widget_camelot.slice_clicked.connect(self._on_camelot_slice_clicked)
-        v2_layout.addWidget(self.widget_camelot)
-
-        self.card_harmonic_mix = self._create_harmonic_mix_card()
-        v2_layout.addWidget(self.card_harmonic_mix)
-        v2_layout.addStretch(1)
+        v2_layout.addWidget(self.widget_camelot, stretch=1)
 
         self.chart_stack.addWidget(v2_container)
 
@@ -538,23 +535,24 @@ class AnalyticsView(QWidget):
         self.widget_transitions.node_clicked.connect(self._on_transition_node_clicked)
         self.chart_stack.addWidget(self.widget_transitions)
 
-        top_layout.addWidget(self.chart_stack)
-        self.splitter.addWidget(top_container)
+        left_layout.addWidget(self.chart_stack)
+        self.splitter.addWidget(left_container)
 
         # ----------------------------------------------------------------------
-        # 4. Bottom Container: Interactive Track Table with Crate Export
+        # 4. Right Container: Interactive Track Table with Crate Export
         # ----------------------------------------------------------------------
-        bottom_container = QWidget()
-        bottom_layout = QVBoxLayout(bottom_container)
-        bottom_layout.setContentsMargins(0, 4, 0, 0)
-        bottom_layout.setSpacing(6)
+        right_container = QWidget()
+        right_layout = QVBoxLayout(right_container)
+        right_layout.setContentsMargins(4, 0, 0, 0)
+        right_layout.setSpacing(6)
 
         # Table Control Bar
         table_bar = QHBoxLayout()
-        table_bar.setSpacing(10)
+        table_bar.setContentsMargins(0, 0, 0, 0)
+        table_bar.setSpacing(6)
 
         self.lbl_table_title = QLabel("All Tracks")
-        self.lbl_table_title.setStyleSheet(f"color: {COLOR_TEXT_PRIMARY}; font-size: 13px; font-weight: 700;")
+        self.lbl_table_title.setStyleSheet(f"color: {COLOR_TEXT_PRIMARY}; font-size: 12px; font-weight: 700;")
         table_bar.addWidget(self.lbl_table_title)
 
         self.lbl_table_count = QLabel("(0 tracks)")
@@ -565,8 +563,8 @@ class AnalyticsView(QWidget):
 
         # Search filter
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("Filter displayed tracks...")
-        self.search_input.setFixedWidth(210)
+        self.search_input.setPlaceholderText("Filter tracks...")
+        self.search_input.setFixedWidth(140)
         self.search_input.setStyleSheet(f"""
             QLineEdit {{
                 background-color: {COLOR_BG_INPUT};
@@ -592,7 +590,7 @@ class AnalyticsView(QWidget):
                 border: 1px solid {COLOR_RED};
                 border-radius: 6px;
                 color: #ff9999;
-                padding: 5px 12px;
+                padding: 4px 10px;
                 font-weight: 700;
                 font-size: 11px;
             }}
@@ -604,7 +602,7 @@ class AnalyticsView(QWidget):
         self._setup_export_menu()
         table_bar.addWidget(self.btn_export_menu)
 
-        bottom_layout.addLayout(table_bar)
+        right_layout.addLayout(table_bar)
 
         # Shared TracksTableWidget (client-side fast sorting)
         table_config = TrackTableConfig(
@@ -622,29 +620,46 @@ class AnalyticsView(QWidget):
         self.table.open_tag_requested.connect(self.open_tag_requested.emit)
         self.table.db_saved.connect(self.db_saved.emit)
 
-        # Stretch table columns across 100% of horizontal space
+        # Proportion table columns for lateral layout
         t_header = self.table.horizontalHeader()
         for c_idx, c_name in enumerate(ANALYTICS_TABLE_COLUMNS):
             if c_name == TrackColumn.TITLE:
                 t_header.setSectionResizeMode(c_idx, QHeaderView.ResizeMode.Stretch)
+            elif c_name == TrackColumn.INDEX:
+                t_header.setSectionResizeMode(c_idx, QHeaderView.ResizeMode.Interactive)
+                self.table.setColumnWidth(c_idx, 34)
             elif c_name == TrackColumn.ARTIST:
-                self.table.setColumnWidth(c_idx, 210)
+                t_header.setSectionResizeMode(c_idx, QHeaderView.ResizeMode.Interactive)
+                self.table.setColumnWidth(c_idx, 120)
+            elif c_name == TrackColumn.KEY:
+                t_header.setSectionResizeMode(c_idx, QHeaderView.ResizeMode.Interactive)
+                self.table.setColumnWidth(c_idx, 46)
+            elif c_name == TrackColumn.BPM:
+                t_header.setSectionResizeMode(c_idx, QHeaderView.ResizeMode.Interactive)
+                self.table.setColumnWidth(c_idx, 62)
+            elif c_name == TrackColumn.TIME:
+                t_header.setSectionResizeMode(c_idx, QHeaderView.ResizeMode.Interactive)
+                self.table.setColumnWidth(c_idx, 56)
+            elif c_name == TrackColumn.PLAYS:
+                t_header.setSectionResizeMode(c_idx, QHeaderView.ResizeMode.Interactive)
+                self.table.setColumnWidth(c_idx, 56)
             elif c_name == TrackColumn.FOLDER:
-                self.table.setColumnWidth(c_idx, 190)
+                t_header.setSectionResizeMode(c_idx, QHeaderView.ResizeMode.Interactive)
+                self.table.setColumnWidth(c_idx, 90)
 
-        bottom_layout.addWidget(self.table, stretch=1)
+        right_layout.addWidget(self.table, stretch=1)
 
-        self.splitter.addWidget(bottom_container)
+        self.splitter.addWidget(right_container)
         self.splitter.setStretchFactor(0, 0)
         self.splitter.setStretchFactor(1, 1)
-        self.splitter.setSizes([390, 330])
+        self.splitter.setSizes([680, 620])
         self.splitter.setStyleSheet(f"""
-            QSplitter::handle:vertical {{
+            QSplitter::handle:horizontal {{
                 background-color: {COLOR_BORDER};
-                height: 1px;
-                margin: 2px 0px;
+                width: 1px;
+                margin: 0px 4px;
             }}
-            QSplitter::handle:vertical:hover {{
+            QSplitter::handle:horizontal:hover {{
                 background-color: {COLOR_BLUE};
             }}
         """)
@@ -688,9 +703,9 @@ class AnalyticsView(QWidget):
         self.btn_export_menu.setMenu(menu)
 
     def _create_harmonic_profile_card(self) -> QFrame:
-        """Create left side companion card summarizing collection harmonic distribution."""
+        """Create companion card summarizing collection harmonic distribution."""
         card = QFrame()
-        card.setFixedWidth(240)
+        card.setFixedWidth(220)
         card.setStyleSheet(f"""
             QFrame {{
                 background-color: {COLOR_BG_CARD};
@@ -768,131 +783,8 @@ class AnalyticsView(QWidget):
         layout.addStretch(1)
         return card
 
-    def _create_harmonic_mix_card(self) -> QFrame:
-        """Create right side companion card for harmonic mixing rules and instant key jumps."""
-        card = QFrame()
-        card.setFixedWidth(240)
-        card.setStyleSheet(f"""
-            QFrame {{
-                background-color: {COLOR_BG_CARD};
-                border: 1px solid {COLOR_BORDER};
-                border-radius: 8px;
-            }}
-        """)
-        layout = QVBoxLayout(card)
-        layout.setContentsMargins(12, 10, 12, 10)
-        layout.setSpacing(8)
-
-        lbl_header = QLabel("🎛️ HARMONIC MIX GUIDE")
-        lbl_header.setStyleSheet(f"font-size: 11px; font-weight: 700; color: {COLOR_TEXT_PRIMARY}; border: none; background: transparent;")
-        layout.addWidget(lbl_header)
-
-        self.mix_stack = QStackedWidget()
-        self.mix_stack.setStyleSheet("background: transparent; border: none;")
-
-        # Page 0: Unselected state
-        p0 = QWidget()
-        p0_layout = QVBoxLayout(p0)
-        p0_layout.setContentsMargins(0, 4, 0, 0)
-        p0_layout.setSpacing(6)
-
-        lbl_p0_title = QLabel("Select a Key")
-        lbl_p0_title.setStyleSheet(f"font-size: 11px; font-weight: 600; color: {COLOR_BLUE}; border: none; background: transparent;")
-        p0_layout.addWidget(lbl_p0_title)
-
-        lbl_p0_desc = QLabel("Click any sector on the wheel to view compatible harmonic mixing rules and energy shifts for your live sets.")
-        lbl_p0_desc.setWordWrap(True)
-        lbl_p0_desc.setStyleSheet(f"font-size: 10px; color: {COLOR_TEXT_SECONDARY}; line-height: 1.3; border: none; background: transparent;")
-        p0_layout.addWidget(lbl_p0_desc)
-
-        lbl_p0_rules = QLabel(
-            "<b>Harmonic Rules:</b><br/>"
-            "• 🔄 <b>Same Key:</b> Zero-tension lock<br/>"
-            "• ⚡ <b>+1 Hour:</b> Energy boost<br/>"
-            "• 🌊 <b>-1 Hour:</b> Energy drop<br/>"
-            "• 🔀 <b>A ↔ B:</b> Major / Minor switch<br/>"
-            "• 🚀 <b>+2 Hours:</b> Dramatic energy jump"
-        )
-        lbl_p0_rules.setWordWrap(True)
-        lbl_p0_rules.setStyleSheet(f"font-size: 10px; color: {COLOR_TEXT_MUTED}; border: none; background: transparent;")
-        p0_layout.addWidget(lbl_p0_rules)
-        p0_layout.addStretch(1)
-        self.mix_stack.addWidget(p0)
-
-        # Page 1: Selected Key State
-        p1 = QWidget()
-        p1_layout = QVBoxLayout(p1)
-        p1_layout.setContentsMargins(0, 0, 0, 0)
-        p1_layout.setSpacing(6)
-
-        self.lbl_mix_selected_key = QLabel("8A • A Minor")
-        self.lbl_mix_selected_key.setStyleSheet(f"font-size: 12px; font-weight: 700; color: {COLOR_BLUE}; border: none; background: transparent;")
-        p1_layout.addWidget(self.lbl_mix_selected_key)
-
-        self.lbl_mix_selected_sub = QLabel("168 tracks • 14.2% airtime")
-        self.lbl_mix_selected_sub.setStyleSheet(f"font-size: 10px; color: {COLOR_TEXT_MUTED}; border: none; background: transparent;")
-        p1_layout.addWidget(self.lbl_mix_selected_sub)
-
-        lbl_trans_title = QLabel("Compatible Transitions:")
-        lbl_trans_title.setStyleSheet(f"font-size: 10px; font-weight: 600; color: {COLOR_TEXT_SECONDARY}; border: none; background: transparent; margin-top: 2px;")
-        p1_layout.addWidget(lbl_trans_title)
-
-        btn_style = f"""
-            QPushButton {{
-                background-color: {COLOR_BG_PANEL};
-                border: 1px solid {COLOR_BORDER};
-                border-radius: 5px;
-                color: {COLOR_TEXT_PRIMARY};
-                text-align: left;
-                padding: 4px 8px;
-                font-size: 10px;
-                font-weight: 500;
-            }}
-            QPushButton:hover {{
-                background-color: #1e293b;
-                border-color: {COLOR_BLUE};
-                color: #ffffff;
-            }}
-        """
-
-        self.btn_mix_same = QPushButton("🔄 Lock: —")
-        self.btn_mix_same.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_mix_same.setStyleSheet(btn_style)
-        self.btn_mix_same.clicked.connect(lambda: self._jump_to_key(str(self.btn_mix_same.property("target_key") or "")))
-        p1_layout.addWidget(self.btn_mix_same)
-
-        self.btn_mix_boost = QPushButton("⚡ Boost (+1): —")
-        self.btn_mix_boost.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_mix_boost.setStyleSheet(btn_style)
-        self.btn_mix_boost.clicked.connect(lambda: self._jump_to_key(str(self.btn_mix_boost.property("target_key") or "")))
-        p1_layout.addWidget(self.btn_mix_boost)
-
-        self.btn_mix_drop = QPushButton("🌊 Drop (-1): —")
-        self.btn_mix_drop.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_mix_drop.setStyleSheet(btn_style)
-        self.btn_mix_drop.clicked.connect(lambda: self._jump_to_key(str(self.btn_mix_drop.property("target_key") or "")))
-        p1_layout.addWidget(self.btn_mix_drop)
-
-        self.btn_mix_relative = QPushButton("🔀 Relative: —")
-        self.btn_mix_relative.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_mix_relative.setStyleSheet(btn_style)
-        self.btn_mix_relative.clicked.connect(lambda: self._jump_to_key(str(self.btn_mix_relative.property("target_key") or "")))
-        p1_layout.addWidget(self.btn_mix_relative)
-
-        self.btn_mix_power = QPushButton("🚀 Power (+2): —")
-        self.btn_mix_power.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_mix_power.setStyleSheet(btn_style)
-        self.btn_mix_power.clicked.connect(lambda: self._jump_to_key(str(self.btn_mix_power.property("target_key") or "")))
-        p1_layout.addWidget(self.btn_mix_power)
-
-        p1_layout.addStretch(1)
-        self.mix_stack.addWidget(p1)
-
-        layout.addWidget(self.mix_stack)
-        return card
-
     def _update_harmonic_profile(self, slices: Dict[str, CamelotSliceData]) -> None:
-        """Update left companion card with mode distribution and dominant keys."""
+        """Update companion card with mode distribution and dominant keys."""
         if not slices:
             return
 
@@ -925,53 +817,6 @@ class AnalyticsView(QWidget):
             self.lbl_gap_key.setText(f"Lowest: <b>{gap.code}</b> ({gap.traditional}) — {gap.catalog_count} tracks")
         else:
             self.lbl_gap_key.setText("No tracks categorized")
-
-    def _update_harmonic_mix_guide(self, key_code: Optional[str]) -> None:
-        """Update right companion card with harmonic mixing rules for selected key."""
-        if not key_code or not self.snapshot or key_code not in self.snapshot.camelot_slices:
-            self.mix_stack.setCurrentIndex(0)
-            return
-
-        s = self.snapshot.camelot_slices[key_code]
-        try:
-            num = int(key_code[:-1])
-            ring = key_code[-1]
-        except (ValueError, IndexError):
-            self.mix_stack.setCurrentIndex(0)
-            return
-
-        trad = CAMELOT_TO_TRADITIONAL.get(key_code, "")
-        self.lbl_mix_selected_key.setText(f"{key_code} • {trad}")
-        self.lbl_mix_selected_sub.setText(f"{s.catalog_count} tracks in catalog • {s.live_share_pct}% live airtime")
-
-        # Calculate 5 transition destination keys
-        same_code = key_code
-        boost_code = f"{(num % 12) + 1}{ring}"
-        drop_code = f"{12 if num == 1 else num - 1}{ring}"
-        rel_code = f"{num}{'B' if ring == 'A' else 'A'}"
-        power_code = f"{((num + 1) % 12) + 1}{ring}"
-
-        def _fmt(target_code: str) -> str:
-            trad_t = CAMELOT_TO_TRADITIONAL.get(target_code, "")
-            cnt = self.snapshot.camelot_slices[target_code].catalog_count if self.snapshot and target_code in self.snapshot.camelot_slices else 0
-            return f"{target_code} ({trad_t}) — {cnt}"
-
-        self.btn_mix_same.setText(f"🔄 Lock: {_fmt(same_code)}")
-        self.btn_mix_same.setProperty("target_key", same_code)
-
-        self.btn_mix_boost.setText(f"⚡ Boost (+1): {_fmt(boost_code)}")
-        self.btn_mix_boost.setProperty("target_key", boost_code)
-
-        self.btn_mix_drop.setText(f"🌊 Drop (-1): {_fmt(drop_code)}")
-        self.btn_mix_drop.setProperty("target_key", drop_code)
-
-        self.btn_mix_relative.setText(f"🔀 Relative: {_fmt(rel_code)}")
-        self.btn_mix_relative.setProperty("target_key", rel_code)
-
-        self.btn_mix_power.setText(f"🚀 Power (+2): {_fmt(power_code)}")
-        self.btn_mix_power.setProperty("target_key", power_code)
-
-        self.mix_stack.setCurrentIndex(1)
 
     def _jump_to_key(self, key_code: str) -> None:
         """Programmatically select a Camelot key and display its tracks."""
@@ -1039,7 +884,6 @@ class AnalyticsView(QWidget):
 
         # Update Harmonic Profile Card
         self._update_harmonic_profile(snapshot.camelot_slices)
-        self._update_harmonic_mix_guide(None)
 
         # Default filter: if dead weight tracks exist, display them to facilitate crate pruning
         if snapshot.dead_weight_count > 0:
@@ -1064,12 +908,6 @@ class AnalyticsView(QWidget):
     def _on_tab_switched(self, tab_id: int) -> None:
         self.chart_stack.setCurrentIndex(tab_id)
         self._update_section_info(tab_id)
-        if tab_id == 1:
-            self._update_harmonic_mix_guide(self.widget_camelot.selected_code)
-            current_sizes = self.splitter.sizes()
-            if current_sizes and current_sizes[0] < 380:
-                total_h = sum(current_sizes)
-                self.splitter.setSizes([390, max(260, total_h - 390)])
 
     def _update_section_info(self, tab_id: int) -> None:
         """Update section description banner and guide tooltip for active tab."""
@@ -1141,7 +979,6 @@ class AnalyticsView(QWidget):
         trad = self.snapshot.camelot_slices.get(camelot_code)
         trad_str = f" ({trad.traditional})" if trad and trad.traditional else ""
         self._display_tracks(records, f"Camelot Key: {camelot_code}{trad_str}")
-        self._update_harmonic_mix_guide(camelot_code)
 
     def _on_turnover_session_clicked(self, session_id: str, category_name: str, track_ids: List[str]) -> None:
         self._set_active_kpi_card(None)

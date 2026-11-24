@@ -34,7 +34,7 @@ class CamelotWheelWidget(QWidget):
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.setMouseTracking(True)
-        self.setMinimumSize(380, 340)
+        self.setMinimumSize(320, 300)
 
         self.slices: Dict[str, CamelotSliceData] = {}
         self.hovered_code: Optional[str] = None
