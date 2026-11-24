@@ -190,7 +190,9 @@ class AnalyticsView(QWidget):
         self.current_filtered_tracks: List[Dict[str, Any]] = []
         self._active_filter_label: str = "All Tracks"
         self._user_pinned_layout: bool = False
-        self._horizontal_sizes: List[int] = [880, 420]
+        self._user_moved_horizontal_splitter: bool = False
+        self._user_moved_vertical_splitter: bool = False
+        self._horizontal_sizes: List[int] = []
         self._vertical_sizes: List[int] = [340, 260]
 
         self._init_ui()
@@ -700,11 +702,29 @@ class AnalyticsView(QWidget):
         if handle:
             handle.setToolTip("Double-click to collapse/expand charts")
             handle.installEventFilter(self)
-        self.splitter.setStretchFactor(0, 7)
-        self.splitter.setStretchFactor(1, 3)
+        self.splitter.splitterMoved.connect(self._on_splitter_moved)
+        self.splitter.setStretchFactor(0, 1)
+        self.splitter.setStretchFactor(1, 0)
         self._apply_splitter_orientation(Qt.Orientation.Horizontal)
 
         main_layout.addWidget(self.splitter, stretch=1)
+
+    def _on_splitter_moved(self, pos: int, index: int) -> None:
+        """Persist user-chosen splitter proportions only when explicitly dragged."""
+        if self.splitter.orientation() == Qt.Orientation.Horizontal:
+            self._user_moved_horizontal_splitter = True
+            self._horizontal_sizes = list(self.splitter.sizes())
+        else:
+            self._user_moved_vertical_splitter = True
+            self._vertical_sizes = list(self.splitter.sizes())
+
+    def _apply_default_horizontal_split(self) -> None:
+        """Push the lateral track table to its compact minimum width so charts maximize horizontal space."""
+        if self.splitter.count() < 2 or self.splitter.orientation() != Qt.Orientation.Horizontal:
+            return
+        total_w = self.splitter.width() if self.splitter.width() > 200 else (self.width() or 1380)
+        min_right = max(460, self.splitter.widget(1).minimumSizeHint().width())
+        self.splitter.setSizes([max(580, total_w - min_right), min_right])
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
         if hasattr(self, "splitter") and watched == self.splitter.handle(1):
@@ -772,15 +792,6 @@ class AnalyticsView(QWidget):
         self._apply_splitter_orientation(new_orientation)
 
     def _apply_splitter_orientation(self, orientation: Qt.Orientation) -> None:
-        # Save previous sizes if valid and already configured
-        if self.splitter.count() >= 2:
-            current_sizes = self.splitter.sizes()
-            if sum(current_sizes) > 0:
-                if self.splitter.orientation() == Qt.Orientation.Horizontal:
-                    self._horizontal_sizes = list(current_sizes)
-                else:
-                    self._vertical_sizes = list(current_sizes)
-
         self.splitter.setOrientation(orientation)
 
         if orientation == Qt.Orientation.Horizontal:
@@ -794,15 +805,16 @@ class AnalyticsView(QWidget):
                     background-color: {COLOR_BLUE};
                 }}
             """)
-            self.splitter.setStretchFactor(0, 7)
-            self.splitter.setStretchFactor(1, 3)
-            if hasattr(self, "_horizontal_sizes") and sum(self._horizontal_sizes) > 0:
+            self.splitter.setStretchFactor(0, 1)
+            self.splitter.setStretchFactor(1, 0)
+            if (
+                getattr(self, "_user_moved_horizontal_splitter", False)
+                and hasattr(self, "_horizontal_sizes")
+                and sum(self._horizontal_sizes) > 0
+            ):
                 self.splitter.setSizes(self._horizontal_sizes)
             else:
-                w = self.width() or 1300
-                chart_w = max(660, int(w * 0.68))
-                table_w = max(380, w - chart_w)
-                self.splitter.setSizes([chart_w, table_w])
+                self._apply_default_horizontal_split()
             if hasattr(self, "btn_layout_toggle"):
                 self.btn_layout_toggle.setText("⫤⫥ Lateral")
                 self.btn_layout_toggle.setToolTip("Layout: Lateral (Side-by-Side). Click to switch to Stacked.")
@@ -819,7 +831,11 @@ class AnalyticsView(QWidget):
             """)
             self.splitter.setStretchFactor(0, 6)
             self.splitter.setStretchFactor(1, 4)
-            if hasattr(self, "_vertical_sizes") and sum(self._vertical_sizes) > 0:
+            if (
+                getattr(self, "_user_moved_vertical_splitter", False)
+                and hasattr(self, "_vertical_sizes")
+                and sum(self._vertical_sizes) > 0
+            ):
                 self.splitter.setSizes(self._vertical_sizes)
             else:
                 total_h = self.splitter.height() or 500
@@ -839,8 +855,18 @@ class AnalyticsView(QWidget):
             if w >= RESPONSIVE_BREAKPOINT_WIDTH
             else Qt.Orientation.Vertical
         )
-        if hasattr(self, "splitter") and self.splitter.orientation() != target:
-            self._apply_splitter_orientation(target)
+        if hasattr(self, "splitter"):
+            if self.splitter.orientation() != target:
+                self._apply_splitter_orientation(target)
+            elif (
+                target == Qt.Orientation.Horizontal
+                and not getattr(self, "_user_moved_horizontal_splitter", False)
+            ):
+                self._apply_default_horizontal_split()
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self._handle_responsive_layout()
 
     def resize(self, *args) -> None:
         super().resize(*args)

@@ -270,10 +270,13 @@ class TestAnalyticsGUI(unittest.TestCase):
         self.assertEqual(view.splitter.orientation(), Qt.Orientation.Vertical)
         self.assertIn("Stacked", view.btn_layout_toggle.text())
 
-        # At 1250px (>= 1120px breakpoint), layout adapts to Horizontal (Lateral)
-        view.resize(1250, 800)
+        # At 1400px (>= 1120px breakpoint), layout adapts to Horizontal (Lateral) with pushed-right compact table
+        view.resize(1400, 800)
+        QApplication.processEvents()
         self.assertEqual(view.splitter.orientation(), Qt.Orientation.Horizontal)
         self.assertIn("Lateral", view.btn_layout_toggle.text())
+        sizes = view.splitter.sizes()
+        self.assertGreater(sizes[0], sizes[1] + 250)
 
         # Test manual toggle override
         view._toggle_layout_mode()
