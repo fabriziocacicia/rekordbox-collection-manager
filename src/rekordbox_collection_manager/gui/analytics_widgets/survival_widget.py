@@ -31,7 +31,7 @@ class SurvivalDecayWidget(QWidget):
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.setMouseTracking(True)
-        self.setMinimumSize(480, 260)
+        self.setMinimumSize(460, 220)
 
         self.steps: List[SurvivalStepData] = []
         self.point_of_no_return: int = 4

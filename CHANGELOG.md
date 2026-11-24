@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **analytics**: Add responsive breakpoint adapting Analytics dashboard to stacked layout on compact window widths with manual Lateral/Stacked view toggle
+
 ### Changed
 
 - **analytics**: Transition desktop dashboard to horizontal master-detail layout with full-height lateral tracklist, compact column proportions, and streamlined harmonic profile summary

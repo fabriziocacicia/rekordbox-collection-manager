@@ -32,7 +32,7 @@ class CrateHealthMatrixWidget(QWidget):
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.setMouseTracking(True)
-        self.setMinimumSize(480, 280)
+        self.setMinimumSize(460, 240)
 
         self.exposure_brackets = list(EXPOSURE_BRACKETS)
         self.pick_rate_brackets = list(PICK_RATE_BRACKETS)

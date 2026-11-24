@@ -37,7 +37,7 @@ class TransitionGraphWidget(QWidget):
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.setMouseTracking(True)
-        self.setMinimumSize(480, 320)
+        self.setMinimumSize(460, 240)
 
         self.edges: List[TransitionEdgeData] = []
         self.nodes: Dict[str, Dict[str, Any]] = {}

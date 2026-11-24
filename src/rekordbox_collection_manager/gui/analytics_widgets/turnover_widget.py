@@ -466,7 +466,7 @@ class SetTurnoverWidget(QWidget):
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
-        self.setMinimumSize(480, 280)
+        self.setMinimumSize(460, 240)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -477,16 +477,16 @@ class SetTurnoverWidget(QWidget):
         header_row.setContentsMargins(8, 4, 8, 0)
         header_row.setSpacing(8)
 
-        lbl_mode = QLabel("DNA DECOMPOSITION:")
+        lbl_mode = QLabel("DNA:")
         lbl_mode.setStyleSheet(f"color: {COLOR_TEXT_MUTED}; font-size: 10px; font-weight: 700; letter-spacing: 0.5px;")
         header_row.addWidget(lbl_mode)
 
         self.btn_group = QButtonGroup(self)
         self.btn_group.setExclusive(True)
 
-        self.btn_mode_cluster = QPushButton("🧬 Performance Clusters")
-        self.btn_mode_turnover = QPushButton("⏳ Set Turnover")
-        self.btn_mode_retention = QPushButton("🔁 Previous Set Retention")
+        self.btn_mode_cluster = QPushButton("🧬 Clusters")
+        self.btn_mode_turnover = QPushButton("⏳ Turnover")
+        self.btn_mode_retention = QPushButton("🔁 Retention")
 
         for idx, (btn, mode_key) in enumerate([
             (self.btn_mode_cluster, "cluster"),
@@ -522,8 +522,8 @@ class SetTurnoverWidget(QWidget):
 
         header_row.addStretch(1)
 
-        lbl_arch_hint = QLabel("🏷️ Archetypes: 🚀 Prime-Time | 🧪 Testing | 🔍 Digger | 🔁 Duplicate | ⚖️ Balanced")
-        lbl_arch_hint.setStyleSheet(f"color: {COLOR_TEXT_MUTED}; font-size: 11px;")
+        lbl_arch_hint = QLabel("🏷️ Archetypes ℹ️")
+        lbl_arch_hint.setStyleSheet(f"color: {COLOR_TEXT_MUTED}; font-size: 11px; font-weight: 500;")
         lbl_arch_hint.setToolTip(
             "Automatic descriptive set profile:\n"
             "• 🚀 Prime-Time / Festival: >= 65% proven hits and core rotation\n"

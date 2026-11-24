@@ -201,7 +201,21 @@ class TestAnalyticsGUI(unittest.TestCase):
         # Verify KPI values are populated
         self.assertEqual(view.card_sessions.lbl_value.text(), "1")
 
-        # Verify horizontal splitter layout
+        # Verify responsive orientation adaptation
+        # At 900px (< 1120px breakpoint), layout adapts to Vertical (Stacked)
+        self.assertEqual(view.splitter.orientation(), Qt.Orientation.Vertical)
+        self.assertIn("Stacked", view.btn_layout_toggle.text())
+
+        # At 1250px (>= 1120px breakpoint), layout adapts to Horizontal (Lateral)
+        view.resize(1250, 800)
+        self.assertEqual(view.splitter.orientation(), Qt.Orientation.Horizontal)
+        self.assertIn("Lateral", view.btn_layout_toggle.text())
+
+        # Test manual toggle override
+        view._toggle_layout_mode()
+        self.assertEqual(view.splitter.orientation(), Qt.Orientation.Vertical)
+        self.assertTrue(view._user_pinned_layout)
+        view._toggle_layout_mode()
         self.assertEqual(view.splitter.orientation(), Qt.Orientation.Horizontal)
 
         # Tab switching and section descriptions

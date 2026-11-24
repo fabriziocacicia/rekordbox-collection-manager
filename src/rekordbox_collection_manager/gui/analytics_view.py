@@ -71,6 +71,8 @@ from rekordbox_collection_manager.utils import is_rekordbox_running
 
 logger = logging.getLogger(__name__)
 
+RESPONSIVE_BREAKPOINT_WIDTH: int = 1120
+
 ANALYTICS_TABLE_COLUMNS: List[str] = [
     TrackColumn.INDEX,
     TrackColumn.TITLE,
@@ -121,6 +123,7 @@ class KPICard(QFrame):
 
         if subtitle:
             self.lbl_sub = QLabel(subtitle)
+            self.lbl_sub.setWordWrap(True)
             self.lbl_sub.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY}; font-size: 10px;")
             layout.addWidget(self.lbl_sub)
 
@@ -139,7 +142,7 @@ class KPICard(QFrame):
                     background-color: #1c2233;
                     border: 2px solid {self.accent_color};
                     border-radius: 8px;
-                    padding: 7px 11px;
+                    padding: 6px 10px;
                 }}
             """)
         else:
@@ -148,7 +151,7 @@ class KPICard(QFrame):
                     background-color: {COLOR_BG_CARD};
                     border: 1px solid {COLOR_BORDER};
                     border-radius: 8px;
-                    padding: 8px 12px;
+                    padding: 6px 10px;
                 }}
                 QFrame#kpiCard:hover {{
                     border-color: {self.accent_color};
@@ -186,6 +189,9 @@ class AnalyticsView(QWidget):
 
         self.current_filtered_tracks: List[Dict[str, Any]] = []
         self._active_filter_label: str = "All Tracks"
+        self._user_pinned_layout: bool = False
+        self._horizontal_sizes: List[int] = [640, 620]
+        self._vertical_sizes: List[int] = [340, 260]
 
         self._init_ui()
 
@@ -208,9 +214,31 @@ class AnalyticsView(QWidget):
         title_col.addWidget(title_lbl)
 
         sub_lbl = QLabel("Deterministic event analysis: Crate Pruning, Harmonic Distribution, Gig DNA & Transitions")
+        sub_lbl.setWordWrap(True)
         sub_lbl.setStyleSheet(f"color: {COLOR_TEXT_MUTED}; font-size: 11px;")
         title_col.addWidget(sub_lbl)
         header_row.addLayout(title_col, stretch=1)
+
+        self.btn_layout_toggle = QPushButton("⫤⫥ Lateral")
+        self.btn_layout_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_layout_toggle.setToolTip("Switch between Lateral (side-by-side) and Stacked (vertical) layouts")
+        self.btn_layout_toggle.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLOR_BG_CARD};
+                border: 1px solid {COLOR_BORDER};
+                border-radius: 6px;
+                color: {COLOR_TEXT_PRIMARY};
+                padding: 6px 12px;
+                font-weight: 600;
+                font-size: 11px;
+            }}
+            QPushButton:hover {{
+                background-color: #2b2b36;
+                border-color: {COLOR_BLUE};
+            }}
+        """)
+        self.btn_layout_toggle.clicked.connect(self._toggle_layout_mode)
+        header_row.addWidget(self.btn_layout_toggle)
 
         self.btn_refresh = QPushButton("Recalculate Metrics")
         self.btn_refresh.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -297,7 +325,6 @@ class AnalyticsView(QWidget):
 
         # Left Container: Tab Buttons + Stack of 5 Visualizations
         left_container = QWidget()
-        left_container.setMinimumWidth(660)
         left_layout = QVBoxLayout(left_container)
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.setSpacing(8)
@@ -312,7 +339,7 @@ class AnalyticsView(QWidget):
         self._tabs_metadata = [
             {
                 "id": 0,
-                "label": "Crate Health Matrix",
+                "label": "Crate Health",
                 "icon": "📦",
                 "short_desc": "Health Matrix: crosses gig exposure with Pick Rate to isolate dead weight (Death Zone) from set staples.",
                 "rich_tooltip": (
@@ -351,7 +378,7 @@ class AnalyticsView(QWidget):
             },
             {
                 "id": 2,
-                "label": "Set Turnover & DNA",
+                "label": "Turnover & DNA",
                 "icon": "🧬",
                 "short_desc": "Turnover & DNA: setlist rotation, freshness, and automatic gig archetype classification.",
                 "rich_tooltip": (
@@ -389,7 +416,7 @@ class AnalyticsView(QWidget):
             },
             {
                 "id": 4,
-                "label": "Transitions & Combos",
+                "label": "Transitions",
                 "icon": "🕸️",
                 "short_desc": "Transition Graph: sequences played consecutively (A ➔ B) across at least 2 distinct gigs, revealing mixing habits and staple combos.",
                 "rich_tooltip": (
@@ -423,7 +450,7 @@ class AnalyticsView(QWidget):
                     border: 1px solid {COLOR_BORDER};
                     border-radius: 6px;
                     color: {COLOR_TEXT_SECONDARY};
-                    padding: 5px 9px;
+                    padding: 6px 14px;
                     font-size: 11px;
                     font-weight: 600;
                 }}
@@ -548,11 +575,10 @@ class AnalyticsView(QWidget):
 
         # Table Control Bar
         table_bar = QHBoxLayout()
-        table_bar.setContentsMargins(0, 0, 0, 0)
-        table_bar.setSpacing(6)
+        table_bar.setSpacing(8)
 
         self.lbl_table_title = QLabel("All Tracks")
-        self.lbl_table_title.setStyleSheet(f"color: {COLOR_TEXT_PRIMARY}; font-size: 12px; font-weight: 700;")
+        self.lbl_table_title.setStyleSheet(f"color: {COLOR_TEXT_PRIMARY}; font-size: 13px; font-weight: 700;")
         table_bar.addWidget(self.lbl_table_title)
 
         self.lbl_table_count = QLabel("(0 tracks)")
@@ -564,7 +590,7 @@ class AnalyticsView(QWidget):
         # Search filter
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("Filter tracks...")
-        self.search_input.setFixedWidth(140)
+        self.search_input.setFixedWidth(160)
         self.search_input.setStyleSheet(f"""
             QLineEdit {{
                 background-color: {COLOR_BG_INPUT};
@@ -590,7 +616,7 @@ class AnalyticsView(QWidget):
                 border: 1px solid {COLOR_RED};
                 border-radius: 6px;
                 color: #ff9999;
-                padding: 4px 10px;
+                padding: 5px 12px;
                 font-weight: 700;
                 font-size: 11px;
             }}
@@ -652,19 +678,101 @@ class AnalyticsView(QWidget):
         self.splitter.addWidget(right_container)
         self.splitter.setStretchFactor(0, 0)
         self.splitter.setStretchFactor(1, 1)
-        self.splitter.setSizes([680, 620])
-        self.splitter.setStyleSheet(f"""
-            QSplitter::handle:horizontal {{
-                background-color: {COLOR_BORDER};
-                width: 1px;
-                margin: 0px 4px;
-            }}
-            QSplitter::handle:horizontal:hover {{
-                background-color: {COLOR_BLUE};
-            }}
-        """)
+        self._apply_splitter_orientation(Qt.Orientation.Horizontal)
 
         main_layout.addWidget(self.splitter, stretch=1)
+
+    def _toggle_layout_mode(self) -> None:
+        """Manually toggle between Lateral (horizontal) and Stacked (vertical) splitter orientation."""
+        self._user_pinned_layout = True
+        new_orientation = (
+            Qt.Orientation.Vertical
+            if self.splitter.orientation() == Qt.Orientation.Horizontal
+            else Qt.Orientation.Horizontal
+        )
+        self._apply_splitter_orientation(new_orientation)
+
+    def _apply_splitter_orientation(self, orientation: Qt.Orientation) -> None:
+        # Save previous sizes if valid and already configured
+        if self.splitter.count() >= 2:
+            current_sizes = self.splitter.sizes()
+            if sum(current_sizes) > 0:
+                if self.splitter.orientation() == Qt.Orientation.Horizontal:
+                    self._horizontal_sizes = list(current_sizes)
+                else:
+                    self._vertical_sizes = list(current_sizes)
+
+        self.splitter.setOrientation(orientation)
+
+        if orientation == Qt.Orientation.Horizontal:
+            self.splitter.setStyleSheet(f"""
+                QSplitter::handle:horizontal {{
+                    background-color: {COLOR_BORDER};
+                    width: 1px;
+                    margin: 0px 4px;
+                }}
+                QSplitter::handle:horizontal:hover {{
+                    background-color: {COLOR_BLUE};
+                }}
+            """)
+            self.splitter.setStretchFactor(0, 0)
+            self.splitter.setStretchFactor(1, 1)
+            if hasattr(self, "_horizontal_sizes") and sum(self._horizontal_sizes) > 0:
+                self.splitter.setSizes(self._horizontal_sizes)
+            else:
+                w = self.width() or 1300
+                self.splitter.setSizes([640, max(420, w - 670)])
+            if hasattr(self, "btn_layout_toggle"):
+                self.btn_layout_toggle.setText("⫤⫥ Lateral")
+                self.btn_layout_toggle.setToolTip("Layout: Lateral (Side-by-Side). Click to switch to Stacked.")
+        else:
+            self.splitter.setStyleSheet(f"""
+                QSplitter::handle:vertical {{
+                    background-color: {COLOR_BORDER};
+                    height: 1px;
+                    margin: 4px 0px;
+                }}
+                QSplitter::handle:vertical:hover {{
+                    background-color: {COLOR_BLUE};
+                }}
+            """)
+            self.splitter.setStretchFactor(0, 0)
+            self.splitter.setStretchFactor(1, 1)
+            if hasattr(self, "_vertical_sizes") and sum(self._vertical_sizes) > 0:
+                self.splitter.setSizes(self._vertical_sizes)
+            else:
+                total_h = self.splitter.height() or 500
+                top_h = max(280, int(total_h * 0.55))
+                self.splitter.setSizes([top_h, max(180, total_h - top_h)])
+            if hasattr(self, "btn_layout_toggle"):
+                self.btn_layout_toggle.setText("⬍ Stacked")
+                self.btn_layout_toggle.setToolTip("Layout: Stacked (Vertical). Click to switch to Lateral.")
+
+    def _handle_responsive_layout(self, width: Optional[int] = None) -> None:
+        """Evaluate responsive breakpoint and adapt orientation if not pinned by user."""
+        if getattr(self, "_user_pinned_layout", False):
+            return
+        w = width if width is not None else self.width()
+        target = (
+            Qt.Orientation.Horizontal
+            if w >= RESPONSIVE_BREAKPOINT_WIDTH
+            else Qt.Orientation.Vertical
+        )
+        if hasattr(self, "splitter") and self.splitter.orientation() != target:
+            self._apply_splitter_orientation(target)
+
+    def resize(self, *args) -> None:
+        super().resize(*args)
+        if len(args) == 2 and isinstance(args[0], (int, float)):
+            self._handle_responsive_layout(int(args[0]))
+        elif len(args) == 1 and hasattr(args[0], "width"):
+            self._handle_responsive_layout(int(args[0].width()))
+        else:
+            self._handle_responsive_layout()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._handle_responsive_layout(event.size().width())
 
     def _setup_export_menu(self) -> None:
         menu = QMenu(self)
