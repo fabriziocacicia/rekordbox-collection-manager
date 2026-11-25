@@ -6,8 +6,8 @@ displays track count badges directly inside each sector, and overlays live set e
 """
 
 import math
-from typing import Dict, List, Optional, Tuple
-from PySide6.QtCore import QPointF, QRectF, QSize, Qt, Signal
+from typing import Dict, Optional, Tuple
+from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QToolTip, QWidget
 
@@ -18,7 +18,6 @@ from rekordbox_collection_manager.gui.theme import (
     COLOR_BG_DARK,
     COLOR_BLUE,
     COLOR_BORDER,
-    COLOR_GREEN,
     COLOR_RED,
     COLOR_TEXT_MUTED,
     COLOR_TEXT_PRIMARY,
@@ -34,7 +33,7 @@ class CamelotWheelWidget(QWidget):
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.setMouseTracking(True)
-        self.setMinimumSize(420, 420)
+        self.setMinimumSize(320, 300)
 
         self.slices: Dict[str, CamelotSliceData] = {}
         self.hovered_code: Optional[str] = None
@@ -48,6 +47,8 @@ class CamelotWheelWidget(QWidget):
     def set_data(self, slices: Dict[str, CamelotSliceData]) -> None:
         """Update Camelot slices dataset and compute scale maxima."""
         self.slices = slices or {}
+        self.hovered_code = None
+        self.selected_code = None
         max_cnt = 1
         total_cnt = 0
         max_cat = 1.0
@@ -150,6 +151,20 @@ class CamelotWheelWidget(QWidget):
 
         return QColor(r, g, b, 235)
 
+    def _get_contrast_color(self, bg_color: QColor, track_count: int) -> Tuple[QColor, QColor]:
+        """Compute WCAG 2.1 AA compliant text colors based on background perceived luminance."""
+        if track_count <= 0:
+            return QColor(COLOR_TEXT_MUTED), QColor(COLOR_TEXT_MUTED)
+        lum = 0.299 * bg_color.red() + 0.587 * bg_color.green() + 0.114 * bg_color.blue()
+        if lum > 138:
+            # High-luminance background (yellow, gold, radiant coral, bright emerald):
+            # Use deep rich dark slate for crisp > 6:1 contrast ratio
+            return QColor("#090d16"), QColor("#1e293b")
+        else:
+            # Low-luminance background (navy, slate, deep blue):
+            # Use pure white and clean off-white
+            return QColor("#ffffff"), QColor("#cbd5e1")
+
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -157,7 +172,7 @@ class CamelotWheelWidget(QWidget):
         w = self.width()
         h = self.height()
 
-        legend_space = 36.0
+        legend_space = 40.0
         wheel_h = h - legend_space
         center = QPointF(w / 2.0, wheel_h / 2.0)
 
@@ -168,17 +183,19 @@ class CamelotWheelWidget(QWidget):
         if min_dim < 100:
             return
 
-        r_outer = (min_dim / 2.0) - 16.0
+        r_outer = (min_dim / 2.0) - 10.0
         r_mid = r_outer * 0.68
         r_inner = r_outer * 0.38
         r_center_hub = r_inner * 0.84
 
         font_label = QFont()
-        font_label.setPointSize(9)
+        font_main_pt = 9 if min_dim >= 340 else (8 if min_dim >= 260 else 7)
+        font_label.setPointSize(font_main_pt)
         font_label.setBold(True)
 
         font_sub = QFont()
-        font_sub.setPointSize(7)
+        font_sub_pt = 7 if min_dim >= 340 else 6
+        font_sub.setPointSize(font_sub_pt)
 
         # 1. Draw Sectors
         for n in range(1, 13):
@@ -315,9 +332,11 @@ class CamelotWheelWidget(QWidget):
         label_x = center.x() + r_mid * math.cos(mid_angle_rad)
         label_y = center.y() - r_mid * math.sin(mid_angle_rad)
 
+        main_text_col, sub_text_col = self._get_contrast_color(bg_color, track_count)
+
         # 1. Key Code (e.g. 8A)
         painter.setFont(font_main)
-        painter.setPen(QColor("#ffffff" if track_count > 0 else COLOR_TEXT_MUTED))
+        painter.setPen(main_text_col)
         text_rect = QRectF(label_x - 22, label_y - 15, 44, 14)
         painter.drawText(text_rect, Qt.AlignmentFlag.AlignCenter, code)
 
@@ -325,7 +344,7 @@ class CamelotWheelWidget(QWidget):
         trad_text = slice_data.traditional if slice_data else ""
         if trad_text:
             painter.setFont(font_sub)
-            painter.setPen(QColor("#e2e8f0" if track_count > 0 else COLOR_TEXT_MUTED))
+            painter.setPen(sub_text_col)
             sub_rect = QRectF(label_x - 22, label_y - 1, 44, 11)
             painter.drawText(sub_rect, Qt.AlignmentFlag.AlignCenter, trad_text)
 
@@ -356,11 +375,16 @@ class CamelotWheelWidget(QWidget):
         painter.drawText(pill_rect, Qt.AlignmentFlag.AlignCenter, count_str)
 
     def _draw_legend_bar(self, painter: QPainter, w: float, h: float) -> None:
-        """Draw density color scale legend at bottom of widget."""
-        leg_w = min(280.0, max(180.0, w - 80.0))
-        leg_h = 9.0
+        """Draw density color scale and live set airtime indicator at bottom."""
+        font_leg = QFont()
+        font_leg.setPointSize(8)
+        painter.setFont(font_leg)
+
+        # 1. Gradient Bar
+        leg_w = min(220.0, max(140.0, w - 120.0))
+        leg_h = 7.0
         leg_x = (w - leg_w) / 2.0
-        leg_y = h - 18.0
+        leg_y = h - 22.0
 
         grad = QLinearGradient(leg_x, 0, leg_x + leg_w, 0)
         grad.setColorAt(0.00, QColor(29, 64, 160))
@@ -371,21 +395,38 @@ class CamelotWheelWidget(QWidget):
 
         painter.setBrush(QBrush(grad))
         painter.setPen(QPen(QColor(COLOR_BORDER), 1))
-        painter.drawRoundedRect(QRectF(leg_x, leg_y, leg_w, leg_h), 4, 4)
+        painter.drawRoundedRect(QRectF(leg_x, leg_y, leg_w, leg_h), 3, 3)
 
-        font_leg = QFont()
-        font_leg.setPointSize(8)
-        painter.setFont(font_leg)
         painter.setPen(QColor(COLOR_TEXT_MUTED))
-        painter.drawText(QRectF(leg_x - 70, leg_y - 2, 62, 14), Qt.AlignmentFlag.AlignRight, "0 tracks")
-        painter.drawText(QRectF(leg_x + leg_w + 8, leg_y - 2, 85, 14), Qt.AlignmentFlag.AlignLeft, f"Max ({self.max_catalog_count})")
-        painter.drawText(QRectF(leg_x, leg_y - 14, leg_w, 12), Qt.AlignmentFlag.AlignCenter, "Catalog Density (Track count)")
+        painter.drawText(QRectF(leg_x - 55, leg_y - 3, 50, 14), Qt.AlignmentFlag.AlignRight, "0")
+        painter.drawText(QRectF(leg_x + leg_w + 6, leg_y - 3, 65, 14), Qt.AlignmentFlag.AlignLeft, f"Max ({self.max_catalog_count})")
+        painter.drawText(QRectF(leg_x, leg_y - 12, leg_w, 11), Qt.AlignmentFlag.AlignCenter, "Catalog Density")
+
+        # 2. Live Set Airtime Indicator (Centered row below)
+        air_y = h - 8.0
+        air_text = "Outer Rim = Live Set Airtime"
+        fm = painter.fontMetrics()
+        text_w = fm.horizontalAdvance(air_text)
+        total_sub_w = 14 + 6 + text_w
+        sub_start_x = (w - total_sub_w) / 2.0
+
+        air_box = QRectF(sub_start_x, air_y - 3, 11, 11)
+        painter.setBrush(QBrush(QColor(29, 64, 160)))
+        painter.setPen(QPen(QColor(COLOR_BORDER), 1))
+        painter.drawEllipse(air_box)
+
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(QPen(QColor(255, 255, 255, 230), 2.0))
+        painter.drawArc(air_box, 30 * 16, 120 * 16)
+
+        painter.setPen(QColor(COLOR_TEXT_MUTED))
+        painter.drawText(QRectF(sub_start_x + 16, air_y - 5, text_w + 10, 14), Qt.AlignmentFlag.AlignLeft, air_text)
 
     def _get_slice_at_pos(self, pos: QPointF) -> Optional[str]:
         """Hit test polar position to identify Camelot sector."""
         w = self.width()
         h = self.height()
-        legend_space = 36.0
+        legend_space = 40.0
         wheel_h = h - legend_space
         center = QPointF(w / 2.0, wheel_h / 2.0)
 
@@ -394,7 +435,7 @@ class CamelotWheelWidget(QWidget):
         dist = math.hypot(dx, dy)
 
         min_dim = min(w, wheel_h)
-        r_outer = (min_dim / 2.0) - 16.0
+        r_outer = (min_dim / 2.0) - 10.0
         r_mid = r_outer * 0.68
         r_inner = r_outer * 0.38
 
@@ -413,6 +454,13 @@ class CamelotWheelWidget(QWidget):
 
         ring = "B" if dist >= r_mid else "A"
         return f"{num}{ring}"
+
+    def leaveEvent(self, event) -> None:
+        super().leaveEvent(event)
+        if self.hovered_code is not None:
+            self.hovered_code = None
+            self.update()
+        QToolTip.hideText()
 
     def mouseMoveEvent(self, event) -> None:
         pos = event.position()

@@ -6,12 +6,17 @@ from unittest.mock import MagicMock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QPointF, Qt
+from PySide6.QtCore import QEvent, QPointF, Qt
+from PySide6.QtGui import QMouseEvent, QPixmap
 from PySide6.QtWidgets import QApplication, QMessageBox
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
-from rekordbox_collection_manager.analytics import compute_analytics
+from rekordbox_collection_manager.analytics import (
+    AnalyticsSnapshot,
+    compute_analytics,
+    create_purge_playlist_in_rekordbox,
+)
 from rekordbox_collection_manager.gui.analytics_view import AnalyticsView
 from rekordbox_collection_manager.gui.analytics_widgets import (
     CamelotWheelWidget,
@@ -118,17 +123,54 @@ class TestAnalyticsGUI(unittest.TestCase):
         matrix_widget.resize(500, 300)
         matrix_widget.set_data(snapshot.health_matrix)
         self.assertEqual(len(matrix_widget.exposure_brackets), 4)
+        matrix_widget.render(QPixmap(500, 300))
+        matrix_cells = []
+        matrix_widget.cell_clicked.connect(lambda e, p, ids: matrix_cells.append((e, p, ids)))
+        first_rect = next(iter(matrix_widget._cell_rects.values()))
+        matrix_widget.mousePressEvent(
+            QMouseEvent(
+                QEvent.Type.MouseButtonPress,
+                first_rect.center(),
+                Qt.MouseButton.LeftButton,
+                Qt.MouseButton.LeftButton,
+                Qt.KeyboardModifier.NoModifier,
+            )
+        )
+        self.assertEqual(len(matrix_cells), 1)
+        self.assertIsNotNone(matrix_widget.selected_cell)
+        matrix_widget.leaveEvent(QEvent(QEvent.Type.Leave))
+        self.assertIsNone(matrix_widget.hovered_cell)
+        matrix_widget.clear_selection()
+        self.assertIsNone(matrix_widget.selected_cell)
 
         # 2. Camelot Wheel Widget
         wheel_widget = CamelotWheelWidget()
         wheel_widget.resize(400, 400)
         wheel_widget.set_data(snapshot.camelot_slices)
+        wheel_widget.render(QPixmap(400, 400))
         wheel_widget.select_slice("8A")
         self.assertEqual(wheel_widget.selected_code, "8A")
         self.assertGreaterEqual(wheel_widget.max_catalog_count, 1)
         col_empty = wheel_widget._get_slice_color(0, is_minor=True)
         col_active = wheel_widget._get_slice_color(10, is_minor=False)
         self.assertNotEqual(col_empty, col_active)
+        wheel_clicks = []
+        wheel_widget.slice_clicked.connect(lambda code, ids: wheel_clicks.append((code, ids)))
+        # Inner minor sector at 12 o'clock (12A)
+        wheel_widget.mousePressEvent(
+            QMouseEvent(
+                QEvent.Type.MouseButtonPress,
+                QPointF(200, 115),
+                Qt.MouseButton.LeftButton,
+                Qt.MouseButton.LeftButton,
+                Qt.KeyboardModifier.NoModifier,
+            )
+        )
+        self.assertEqual(wheel_clicks[0][0], "12A")
+        wheel_widget.leaveEvent(QEvent(QEvent.Type.Leave))
+        self.assertIsNone(wheel_widget.hovered_code)
+        wheel_widget.clear_selection()
+        self.assertIsNone(wheel_widget.selected_code)
 
         # 3. Turnover Widget
         turnover_widget = SetTurnoverWidget()
@@ -136,11 +178,131 @@ class TestAnalyticsGUI(unittest.TestCase):
         turnover_widget.set_data(snapshot.turnover_series)
         self.assertEqual(len(turnover_widget.series), 1)
 
+        # Test dense series (55 sessions) to verify subsampling and legend tooltips
+        from rekordbox_collection_manager.analytics import SessionTurnoverData
+        mock_series = [
+            SessionTurnoverData(
+                session_id=f"sess_{i}",
+                session_index=i + 1,
+                name=f"Set #{i + 1}",
+                date_str=f"2024-{(i % 12) + 1:02d}-01",
+                total_tracks=20,
+                peak_bangers_count=4,
+                peak_bangers_pct=20.0,
+                core_rotation_count=6,
+                core_rotation_pct=30.0,
+                untested_count=6,
+                untested_pct=30.0,
+                deep_cuts_cluster_count=4,
+                deep_cuts_cluster_pct=20.0,
+                burnout_count=0,
+                burnout_pct=0.0,
+                standard_count=0,
+                standard_pct=0.0,
+                new_entries_count=5,
+                new_entries_pct=25.0,
+                in_rotation_count=10,
+                in_rotation_pct=50.0,
+                deep_cuts_count=5,
+                deep_cuts_pct=25.0,
+                one_shot_count=0,
+                one_shot_pct=0.0,
+                fresh_tracks_count=15,
+                fresh_tracks_pct=75.0,
+                repeated_prev_count=5,
+                repeated_prev_pct=25.0,
+                archetype="Balanced",
+                archetype_desc="Balanced set",
+                archetype_icon="⚖️",
+                archetype_tags=["balanced"],
+            )
+            for i in range(55)
+        ]
+        turnover_widget.set_data(mock_series)
+        self.assertEqual(len(turnover_widget.series), 55)
+        pix = QPixmap(800, 400)
+        turnover_widget.canvas.render(pix)
+        self.assertEqual(len(turnover_widget.canvas._legend_items), 5)
+        self.assertIn("Peak Bangers", turnover_widget.canvas._legend_items[0][1])
+        self.assertIn("Set Staples", turnover_widget.canvas._legend_items[0][3])
+
+        # Test hover on legend item
+        first_legend_rect = turnover_widget.canvas._legend_items[0][0]
+        ev_move = QMouseEvent(
+            QEvent.Type.MouseMove,
+            first_legend_rect.center(),
+            Qt.MouseButton.NoButton,
+            Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        turnover_widget.canvas.mouseMoveEvent(ev_move)
+        ev_leave = QEvent(QEvent.Type.Leave)
+        turnover_widget.canvas.leaveEvent(ev_leave)
+        self.assertIsNone(turnover_widget.canvas.hovered_session_idx)
+
+        # Test SetTurnoverWidget mode switches, select_session, and clear_selection
+        turnover_widget.select_session(3)
+        self.assertEqual(turnover_widget.canvas.selected_session_idx, 3)
+        turnover_widget.clear_selection()
+        self.assertIsNone(turnover_widget.canvas.selected_session_idx)
+        turnover_widget.btn_mode_turnover.click()
+        self.assertEqual(turnover_widget.active_mode, "turnover")
+        turnover_widget.btn_mode_retention.click()
+        self.assertEqual(turnover_widget.active_mode, "retention")
+        turnover_widget.btn_mode_cluster.click()
+        self.assertEqual(turnover_widget.active_mode, "cluster")
+        turnover_widget.set_data(mock_series)
+        self.assertIsNone(turnover_widget.canvas.selected_session_idx)
+
         # 4. Survival Decay Widget
         survival_widget = SurvivalDecayWidget()
-        survival_widget.resize(500, 300)
+        survival_widget.resize(700, 380)
         survival_widget.set_data(snapshot.survival_curve, snapshot.point_of_no_return_set)
         self.assertEqual(survival_widget.point_of_no_return, snapshot.point_of_no_return_set)
+
+        from rekordbox_collection_manager.analytics import SurvivalStepData
+        mock_steps = [
+            SurvivalStepData(
+                set_number=k,
+                total_exposed=100,
+                unplayed_count=max(50, 100 - k * 5 if k <= 6 else 70 - (k - 6)),
+                unplayed_pct=float(max(50, 100 - k * 5 if k <= 6 else 70 - (k - 6))),
+            )
+            for k in range(21)
+        ]
+        survival_widget.set_data(mock_steps, point_of_no_return=6)
+        pix_surv = QPixmap(700, 380)
+        survival_widget.render(pix_surv)
+
+        clicked_steps = []
+        survival_widget.step_clicked.connect(lambda sn, pct: clicked_steps.append((sn, pct)))
+        left_m, top_m, _, _, g_w, g_h = survival_widget._chart_geometry()
+        x_set6 = left_m + (6.0 / 20.0) * g_w
+        ev_surv_move = QMouseEvent(
+            QEvent.Type.MouseMove,
+            QPointF(x_set6, top_m + g_h * 0.8),
+            Qt.MouseButton.NoButton,
+            Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        survival_widget.mouseMoveEvent(ev_surv_move)
+        self.assertEqual(survival_widget.hovered_step_idx, 6)
+
+        ev_surv_click = QMouseEvent(
+            QEvent.Type.MouseButtonPress,
+            QPointF(x_set6, top_m + g_h * 0.8),
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        survival_widget.mousePressEvent(ev_surv_click)
+        self.assertEqual(survival_widget.selected_step_idx, 6)
+        self.assertEqual(clicked_steps, [(6, 70.0)])
+
+        survival_widget.leaveEvent(QEvent(QEvent.Type.Leave))
+        self.assertIsNone(survival_widget.hovered_step_idx)
+        survival_widget.clear_selection()
+        self.assertIsNone(survival_widget.selected_step_idx)
 
         # 5. Transition Graph Widget
         graph_widget = TransitionGraphWidget()
@@ -190,9 +352,125 @@ class TestAnalyticsGUI(unittest.TestCase):
         self.assertAlmostEqual(graph_widget._pan_offset.x(), 0.0)
         self.assertAlmostEqual(graph_widget._pan_offset.y(), 0.0)
 
+        # Render to populate overlay button rects and verify edge-click & leaveEvent
+        pix_graph = QPixmap(800, 600)
+        graph_widget.render(pix_graph)
+        zoomed_val = graph_widget._zoom_factor
+        graph_widget.zoom_in()
+        self.assertGreater(graph_widget._zoom_factor, zoomed_val)
+        after_zoom = graph_widget._zoom_factor
+        # Double-clicking zoom-in button must not reset view
+        ev_dbl_btn = QMouseEvent(
+            QEvent.Type.MouseButtonDblClick,
+            graph_widget._btn_zoom_in.center(),
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        graph_widget.mouseDoubleClickEvent(ev_dbl_btn)
+        self.assertAlmostEqual(graph_widget._zoom_factor, after_zoom)
+        graph_widget.reset_view()
+
+        clicked_edges = []
+        graph_widget.edge_clicked.connect(lambda u, v, c: clicked_edges.append((u, v, c)))
+        p1 = graph_widget.node_positions["s_0"]
+        p2 = graph_widget.node_positions["t_0"]
+        mid_screen = graph_widget._world_to_widget(QPointF((p1.x() + p2.x()) / 2.0, (p1.y() + p2.y()) / 2.0))
+        graph_widget.mousePressEvent(
+            QMouseEvent(
+                QEvent.Type.MouseButtonPress,
+                mid_screen,
+                Qt.MouseButton.LeftButton,
+                Qt.MouseButton.LeftButton,
+                Qt.KeyboardModifier.NoModifier,
+            )
+        )
+        self.assertFalse(graph_widget._is_panning)
+        graph_widget.mouseReleaseEvent(
+            QMouseEvent(
+                QEvent.Type.MouseButtonRelease,
+                mid_screen,
+                Qt.MouseButton.LeftButton,
+                Qt.MouseButton.NoButton,
+                Qt.KeyboardModifier.NoModifier,
+            )
+        )
+        self.assertEqual(clicked_edges, [("s_0", "t_0", 2)])
+        self.assertEqual(graph_widget.selected_edge, ("s_0", "t_0"))
+
+        graph_widget.leaveEvent(QEvent(QEvent.Type.Leave))
+        self.assertIsNone(graph_widget.hovered_node_id)
+        self.assertIsNone(graph_widget.hovered_edge)
+        graph_widget.clear_selection()
+        self.assertIsNone(graph_widget.selected_edge)
+
+        # Test node drag persistence across resizeEvent and node_clicked emission
+        clicked_nodes = []
+        graph_widget.node_clicked.connect(clicked_nodes.append)
+        s0_screen = graph_widget._world_to_widget(graph_widget.node_positions["s_0"])
+        graph_widget.mousePressEvent(
+            QMouseEvent(
+                QEvent.Type.MouseButtonPress,
+                s0_screen,
+                Qt.MouseButton.LeftButton,
+                Qt.MouseButton.LeftButton,
+                Qt.KeyboardModifier.NoModifier,
+            )
+        )
+        graph_widget.mouseReleaseEvent(
+            QMouseEvent(
+                QEvent.Type.MouseButtonRelease,
+                s0_screen,
+                Qt.MouseButton.LeftButton,
+                Qt.MouseButton.NoButton,
+                Qt.KeyboardModifier.NoModifier,
+            )
+        )
+        self.assertEqual(clicked_nodes, ["s_0"])
+
+        # Drag node > 4px preserves custom layout across resizeEvent
+        drag_target = QPointF(s0_screen.x() + 40, s0_screen.y() + 25)
+        graph_widget.mousePressEvent(
+            QMouseEvent(
+                QEvent.Type.MouseButtonPress,
+                s0_screen,
+                Qt.MouseButton.LeftButton,
+                Qt.MouseButton.LeftButton,
+                Qt.KeyboardModifier.NoModifier,
+            )
+        )
+        graph_widget.mouseMoveEvent(
+            QMouseEvent(
+                QEvent.Type.MouseMove,
+                drag_target,
+                Qt.MouseButton.LeftButton,
+                Qt.MouseButton.LeftButton,
+                Qt.KeyboardModifier.NoModifier,
+            )
+        )
+        graph_widget.mouseReleaseEvent(
+            QMouseEvent(
+                QEvent.Type.MouseButtonRelease,
+                drag_target,
+                Qt.MouseButton.LeftButton,
+                Qt.MouseButton.NoButton,
+                Qt.KeyboardModifier.NoModifier,
+            )
+        )
+        self.assertTrue(graph_widget._has_custom_layout)
+        dragged_pos = QPointF(graph_widget.node_positions["s_0"])
+        graph_widget.resize(900, 650)
+        self.assertEqual(graph_widget.node_positions["s_0"], dragged_pos)
+
+        # Empty graph clears stale zoom button rects
+        graph_widget.set_data([], {})
+        graph_widget.render(QPixmap(500, 300))
+        self.assertTrue(graph_widget._btn_zoom_in.isNull())
+
     def test_analytics_view_integration(self):
         """Test AnalyticsView loaded with snapshot and interactive filtering."""
         view = AnalyticsView()
+        view.show()
         view.resize(900, 700)
 
         snapshot = compute_analytics(self.engine, min_session_duration_sec=0, min_session_tracks=1)
@@ -200,6 +478,84 @@ class TestAnalyticsGUI(unittest.TestCase):
 
         # Verify KPI values are populated
         self.assertEqual(view.card_sessions.lbl_value.text(), "1")
+
+        # Verify responsive orientation adaptation
+        # At 900px (< 1120px breakpoint), layout adapts to Vertical (Stacked)
+        self.assertEqual(view.splitter.orientation(), Qt.Orientation.Vertical)
+        self.assertIn("Stacked", view.btn_layout_toggle.text())
+
+        # At 1400px (>= 1120px breakpoint), layout adapts to Horizontal (Lateral) with pushed-right compact table
+        view.resize(1400, 800)
+        QApplication.processEvents()
+        self.assertEqual(view.splitter.orientation(), Qt.Orientation.Horizontal)
+        self.assertIn("Lateral", view.btn_layout_toggle.text())
+        sizes = view.splitter.sizes()
+        self.assertGreater(sizes[0], sizes[1] + 250)
+
+        # Test manual toggle override
+        view._toggle_layout_mode()
+        self.assertEqual(view.splitter.orientation(), Qt.Orientation.Vertical)
+        self.assertTrue(view._user_pinned_layout)
+        view._toggle_layout_mode()
+        self.assertEqual(view.splitter.orientation(), Qt.Orientation.Horizontal)
+
+        # Verify horizontal scrollbar policy, export button, and Expand hidden in Lateral mode
+        self.assertEqual(view.table.horizontalScrollBarPolicy(), Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.assertIn("Export", view.btn_export_menu.text())
+        self.assertFalse(view.btn_expand_table.isVisible())
+
+        # Double-click on splitter handle is a no-op in Lateral (horizontal split) mode
+        handle = view.splitter.handle(1)
+        dbl_click = QMouseEvent(
+            QEvent.Type.MouseButtonDblClick,
+            QPointF(5, 5),
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        QApplication.sendEvent(handle, dbl_click)
+        self.assertFalse(getattr(view, "_table_expanded", False))
+        self.assertTrue(view.chart_container.isVisible())
+
+        # Switch to Vertical (Stacked) mode: Expand button becomes visible and TITLE stretches
+        view._toggle_layout_mode()
+        self.assertEqual(view.splitter.orientation(), Qt.Orientation.Vertical)
+        self.assertTrue(view.btn_expand_table.isVisible())
+        self.assertIn("Expand", view.btn_expand_table.text())
+
+        # Expand table via button in Stacked mode
+        view.btn_expand_table.click()
+        self.assertTrue(view._table_expanded)
+        self.assertFalse(view.chart_container.isVisible())
+        self.assertIn("Restore", view.btn_expand_table.text())
+
+        # Auto-restore on tab switch
+        view._on_tab_switched(2)
+        self.assertFalse(view._table_expanded)
+        self.assertTrue(view.chart_container.isVisible())
+        self.assertIn("Expand", view.btn_expand_table.text())
+
+        # Expand via double-click on splitter handle in Stacked mode
+        QApplication.sendEvent(handle, dbl_click)
+        self.assertTrue(view._table_expanded)
+        self.assertFalse(view.chart_container.isVisible())
+
+        # Auto-restore on KPI card click
+        view._on_kpi_card_clicked(view.card_dead_weight, "Dead Weight")
+        self.assertFalse(view._table_expanded)
+        self.assertTrue(view.chart_container.isVisible())
+
+        # Auto-restore if switching back to Horizontal while expanded
+        view.btn_expand_table.click()
+        self.assertTrue(view._table_expanded)
+        view._toggle_layout_mode()
+        self.assertEqual(view.splitter.orientation(), Qt.Orientation.Horizontal)
+        self.assertFalse(view._table_expanded)
+        self.assertTrue(view.chart_container.isVisible())
+        self.assertFalse(view.btn_expand_table.isVisible())
+
+        # Non-clickable Sessions KPI card
+        self.assertFalse(view.card_sessions._clickable)
 
         # Tab switching and section descriptions
         self.assertEqual(len(view.tab_buttons), 5)
@@ -214,11 +570,49 @@ class TestAnalyticsGUI(unittest.TestCase):
 
         view._on_tab_switched(1)
         self.assertEqual(view.chart_stack.currentIndex(), 1)
+        # Verify harmonic profile card populated
+        self.assertIn("Minor", view.lbl_mode_ratio.text())
+
+        # Click Camelot slice 8A
+        view._on_camelot_slice_clicked("8A", ["t1"])
+        self.assertIn("8A", view.lbl_table_title.text())
+        self.assertEqual(len(view.table.records), 1)
+
+        # Test jumping via Camelot key helper
+        view._jump_to_key("8B")
+        self.assertEqual(view.widget_camelot.selected_code, "8B")
+        self.assertIn("8B", view.lbl_table_title.text())
+
+        # Chart callbacks for Turnover, Survival, and Transitions
+        view._on_turnover_session_clicked("1", "Set #1: Club Night", ["t1"])
+        self.assertEqual(len(view.table.records), 1)
+        self.assertEqual(view.lbl_table_title.text(), "Set #1: Club Night")
+        self.assertIsNone(view.widget_camelot.selected_code)
+
+        view._on_survival_step_clicked(1, 50.0)
+        self.assertIn("Zero-play tracks after 1", view.lbl_table_title.text())
+        self.assertIn("Zero-play tracks after 1 sets (50.0%)", view.lbl_table_title.toolTip())
+
+        view._on_transition_node_clicked("t1")
+        self.assertEqual(len(view.table.records), 1)
+
         view._on_tab_switched(0)
         self.assertEqual(view.chart_stack.currentIndex(), 0)
 
-        # Filter by cluster
-        view._filter_by_cluster("Tutti")
+        # Filter by cluster resets chart selection
+        view._filter_by_cluster("All")
+        self.assertEqual(len(view.current_filtered_tracks), 2)
+        self.assertIsNone(view.widget_camelot.selected_code)
+
+        # KPI card active toggle clears chart selections
+        view._jump_to_key("8B")
+        self.assertEqual(view.widget_camelot.selected_code, "8B")
+        view._on_kpi_card_clicked(view.card_dead_weight, "Dead Weight")
+        self.assertTrue(view.card_dead_weight.is_active())
+        self.assertIsNone(view.widget_camelot.selected_code)
+        # Clicking again deselects and resets to all tracks
+        view._on_kpi_card_clicked(view.card_dead_weight, "Dead Weight")
+        self.assertFalse(view.card_dead_weight.is_active())
         self.assertEqual(len(view.current_filtered_tracks), 2)
 
         # Table search filter
@@ -226,6 +620,60 @@ class TestAnalyticsGUI(unittest.TestCase):
         self.assertEqual(len(view.table.records), 1)
         view._apply_table_search("")
         self.assertEqual(len(view.table.records), 2)
+        view.close()
+
+    def test_analytics_view_empty_snapshot_and_playlist_guard(self):
+        """Empty snapshot resets harmonic profile and Rekordbox running guard blocks playlist creation."""
+        view = AnalyticsView()
+        snapshot = compute_analytics(self.engine, min_session_duration_sec=0, min_session_tracks=1)
+        view._on_analytics_loaded(snapshot)
+        self.assertIn("Minor", view.lbl_mode_ratio.text())
+
+        # Reset with empty snapshot
+        empty_snap = AnalyticsSnapshot(
+            total_tracks=0,
+            total_valid_sessions=0,
+            total_live_plays=0,
+            burnout_threshold_plays=0,
+            peak_bangers_count=0,
+            core_rotation_count=0,
+            deep_cuts_count=0,
+            untested_count=0,
+            dead_weight_count=0,
+            burnout_count=0,
+            avg_rotation_rate=0.0,
+            avg_new_entries_rate=0.0,
+            tracks_by_id={},
+            cluster_track_ids={},
+            health_matrix={},
+            exposure_brackets=[],
+            pick_rate_brackets=[],
+            camelot_slices={},
+            turnover_series=[],
+            stagnation_risk=False,
+            survival_curve=[],
+            point_of_no_return_set=0,
+            transition_edges=[],
+            transition_nodes={},
+        )
+        view._on_analytics_loaded(empty_snap)
+        self.assertEqual(view.lbl_mode_ratio.text(), "Minor (A): 0% (0) | Major (B): 0% (0)")
+        self.assertEqual(view.card_sessions.lbl_value.text(), "0")
+        self.assertEqual(len(view.table.records), 0)
+
+        # Verify ensure_rekordbox_not_running guard in create_purge_playlist_in_rekordbox
+        with patch("rekordbox_collection_manager.analytics.ensure_rekordbox_not_running", return_value=True):
+            with self.assertRaises(RuntimeError):
+                create_purge_playlist_in_rekordbox(self.engine, "Prune Crate", ["t1"])
+
+        # Verify GUI playlist action handles running Rekordbox gracefully
+        view.engine = self.engine
+        view.current_filtered_tracks = [t.to_dict() for t in snapshot.tracks_by_id.values()]
+        with patch("rekordbox_collection_manager.gui.analytics_view.is_rekordbox_running", return_value=True):
+            with patch.object(QMessageBox, "warning") as mock_warn:
+                view._create_rekordbox_playlist()
+                mock_warn.assert_called_once()
+        view.close()
 
     def test_analytics_view_error_modal_only_on_interactive_refresh(self):
         """Passive DB-load analytics errors emit status without modal QMessageBox popups."""
@@ -238,6 +686,7 @@ class TestAnalyticsGUI(unittest.TestCase):
             view._interactive_refresh = True
             view._on_analytics_error("no such table: djmdContent")
             mock_warn.assert_called_once()
+        view.close()
 
     def test_analytics_view_cleanup_stops_worker(self):
         """AnalyticsView.cleanup() stops and clears any active background worker."""
@@ -248,6 +697,7 @@ class TestAnalyticsGUI(unittest.TestCase):
             view.cleanup()
             mock_stop.assert_called_once_with(mock_worker, wait_ms=1000)
             self.assertIsNone(view._worker)
+        view.close()
 
 
 if __name__ == "__main__":
