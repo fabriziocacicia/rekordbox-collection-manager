@@ -297,6 +297,58 @@ class TestAnalyticsGUI(unittest.TestCase):
         self.assertAlmostEqual(graph_widget._pan_offset.x(), 0.0)
         self.assertAlmostEqual(graph_widget._pan_offset.y(), 0.0)
 
+        # Render to populate overlay button rects and verify edge-click & leaveEvent
+        pix_graph = QPixmap(800, 600)
+        graph_widget.render(pix_graph)
+        zoomed_val = graph_widget._zoom_factor
+        graph_widget.zoom_in()
+        self.assertGreater(graph_widget._zoom_factor, zoomed_val)
+        after_zoom = graph_widget._zoom_factor
+        # Double-clicking zoom-in button must not reset view
+        ev_dbl_btn = QMouseEvent(
+            QEvent.Type.MouseButtonDblClick,
+            graph_widget._btn_zoom_in.center(),
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        graph_widget.mouseDoubleClickEvent(ev_dbl_btn)
+        self.assertAlmostEqual(graph_widget._zoom_factor, after_zoom)
+        graph_widget.reset_view()
+
+        clicked_edges = []
+        graph_widget.edge_clicked.connect(lambda u, v, c: clicked_edges.append((u, v, c)))
+        p1 = graph_widget.node_positions["s_0"]
+        p2 = graph_widget.node_positions["t_0"]
+        mid_screen = graph_widget._world_to_widget(QPointF((p1.x() + p2.x()) / 2.0, (p1.y() + p2.y()) / 2.0))
+        graph_widget.mousePressEvent(
+            QMouseEvent(
+                QEvent.Type.MouseButtonPress,
+                mid_screen,
+                Qt.MouseButton.LeftButton,
+                Qt.MouseButton.LeftButton,
+                Qt.KeyboardModifier.NoModifier,
+            )
+        )
+        self.assertFalse(graph_widget._is_panning)
+        graph_widget.mouseReleaseEvent(
+            QMouseEvent(
+                QEvent.Type.MouseButtonRelease,
+                mid_screen,
+                Qt.MouseButton.LeftButton,
+                Qt.MouseButton.NoButton,
+                Qt.KeyboardModifier.NoModifier,
+            )
+        )
+        self.assertEqual(clicked_edges, [("s_0", "t_0", 2)])
+        self.assertEqual(graph_widget.selected_edge, ("s_0", "t_0"))
+
+        graph_widget.leaveEvent(QEvent(QEvent.Type.Leave))
+        self.assertIsNone(graph_widget.hovered_node_id)
+        self.assertIsNone(graph_widget.hovered_edge)
+        graph_widget.clear_selection()
+        self.assertIsNone(graph_widget.selected_edge)
+
     def test_analytics_view_integration(self):
         """Test AnalyticsView loaded with snapshot and interactive filtering."""
         view = AnalyticsView()

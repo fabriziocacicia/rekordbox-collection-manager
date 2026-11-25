@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **analytics**: Redesign Transition Graph layout using left-to-right DAG flow and aspect-ratio shelf packing (increasing default zoom to fill viewport), dark title pill backdrops, ring legend with combo summary counts, `"Fit"` button with hover highlights, and Combo Hub track filtering on node click
 - **analytics**: Upgrade Survival Decay chart with dual-zone discovery/dead-weight shading, vertical hover crosshair, persistent node selection, milestone data callouts, top adoption summary strip, clamped threshold badge, and adaptive X-axis tick thinning
 - **analytics**: Modernize Set Turnover & DNA chart with subsampled X-axis ticks, timeline year markers, 2px bar spacing with rounded tops, minimalist legend with interactive category definition tooltips, and dynamic archetype hover badges
 - **analytics**: Anchor default horizontal split to the compact minimum tracklist width (maximizing chart space) while enabling horizontal scrolling and preserving manual splitter drags
@@ -23,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **analytics**: Fix Transition Graph edge-badge click handling (preventing background pan from swallowing `edge_clicked`), guard zoom buttons from double-click resets, and add `leaveEvent` cleanup across Transition and Survival widgets
 - **analytics**: Localize desktop Analytics dashboard, status bar notifications, chart widgets, tooltips, and export dialogs into English for consistency with application language standards
 
 ## [0.23.0] - 2026-11-23

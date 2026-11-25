@@ -1268,7 +1268,19 @@ class AnalyticsView(QWidget):
             return
         if track_id in self.snapshot.tracks_by_id:
             t_obj = self.snapshot.tracks_by_id[track_id]
-            self._display_tracks([t_obj.to_dict()], f"Track: {t_obj.title} ({t_obj.artist})")
+            hub_ids = [track_id]
+            for edge in self.snapshot.transition_edges:
+                if edge.source_id == track_id and edge.target_id not in hub_ids:
+                    hub_ids.append(edge.target_id)
+                elif edge.target_id == track_id and edge.source_id not in hub_ids:
+                    hub_ids.append(edge.source_id)
+            records = [
+                self.snapshot.tracks_by_id[cid].to_dict()
+                for cid in hub_ids
+                if cid in self.snapshot.tracks_by_id
+            ]
+            short_title = t_obj.title if len(t_obj.title) <= 22 else t_obj.title[:20] + "…"
+            self._display_tracks(records, f"Combo Hub: {short_title}")
 
     def _display_tracks(self, records: List[Dict[str, Any]], title_desc: str) -> None:
         self.current_filtered_tracks = records
