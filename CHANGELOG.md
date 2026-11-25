@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-11-25
+
 ### Added
 
 - **analytics**: Add full-height track table expand/restore toggle and splitter handle double-click shortcut in Stacked mode (hidden and auto-restored in Lateral side-by-side mode, with adaptive `TITLE` column stretch in Stacked mode)
@@ -407,7 +409,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Remove header sidebar toggle button and update info text font stack
 - Remove auto-extract dates feature and update tests
 
-[Unreleased]: https://github.com/fabriziocacicia/rekordbox-collection-manager/compare/v0.23.0...HEAD
+[Unreleased]: https://github.com/fabriziocacicia/rekordbox-collection-manager/compare/v0.24.0...HEAD
+[0.24.0]: https://github.com/fabriziocacicia/rekordbox-collection-manager/compare/v0.23.0...v0.24.0
 [0.23.0]: https://github.com/fabriziocacicia/rekordbox-collection-manager/compare/v0.22.0...v0.23.0
 [0.22.0]: https://github.com/fabriziocacicia/rekordbox-collection-manager/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/fabriziocacicia/rekordbox-collection-manager/compare/v0.20.0...v0.21.0
