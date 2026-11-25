@@ -210,13 +210,13 @@ class TestAnalyticsEngine(unittest.TestCase):
         self.assertEqual(t3.exposure_gigs, 5)
         self.assertEqual(t3.set_presence_gigs, 0)
         self.assertEqual(t3.pick_rate, 0.0)
-        self.assertEqual(t3.cluster, "Dead Weight (Zavorra)")
+        self.assertEqual(t3.cluster, "Dead Weight")
 
         # T4 (Untested): added just before set 5, exposure = 1 <= 2, 0 plays
         t4 = snapshot.tracks_by_id["t4"]
         self.assertEqual(t4.exposure_gigs, 1)
         self.assertEqual(t4.set_presence_gigs, 0)
-        self.assertEqual(t4.cluster, "In Incubazione / Untested")
+        self.assertEqual(t4.cluster, "Untested")
 
     def test_point_in_time_turnover_series(self):
         """Verify turnover and cluster composition is computed point-in-time without future leakage."""
@@ -228,7 +228,7 @@ class TestAnalyticsEngine(unittest.TestCase):
         self.assertEqual(s1.new_entries_count, s1.total_tracks)
         self.assertEqual(s1.untested_count, s1.total_tracks)
         self.assertEqual(s1.burnout_count, 0)
-        self.assertEqual(s1.archetype, "Genesis / Battesimo")
+        self.assertEqual(s1.archetype, "Genesis / Debut")
         self.assertEqual(s1.archetype_icon, "🌱")
 
         # In set 4: t1 was played in sets 1, 2, 3 (3 out of 3 consecutive sets right before set 4)
