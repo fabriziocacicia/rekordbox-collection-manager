@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **analytics**: Add full-height track table expand/restore toggle with splitter handle double-click shortcut and auto-restore on tab or KPI selection
+- **analytics**: Add full-height track table expand/restore toggle and splitter handle double-click shortcut in Stacked mode (hidden and auto-restored in Lateral side-by-side mode, with adaptive `TITLE` column stretch in Stacked mode)
 - **analytics**: Add responsive breakpoint adapting Analytics dashboard to stacked layout on compact window widths with manual Lateral/Stacked view toggle
 
 ### Changed

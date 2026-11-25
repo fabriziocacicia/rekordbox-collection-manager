@@ -329,27 +329,12 @@ class TestAnalyticsGUI(unittest.TestCase):
         view._toggle_layout_mode()
         self.assertEqual(view.splitter.orientation(), Qt.Orientation.Horizontal)
 
-        # Verify horizontal scrollbar policy and stretch factors
+        # Verify horizontal scrollbar policy, export button, and Expand hidden in Lateral mode
         self.assertEqual(view.table.horizontalScrollBarPolicy(), Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.assertIn("Export", view.btn_export_menu.text())
+        self.assertFalse(view.btn_expand_table.isVisible())
 
-        # Test table expand/collapse functionality and auto-restore
-        self.assertTrue(view.chart_container.isVisible())
-        self.assertIn("Expand", view.btn_expand_table.text())
-
-        # Expand table via button
-        view.btn_expand_table.click()
-        self.assertTrue(view._table_expanded)
-        self.assertFalse(view.chart_container.isVisible())
-        self.assertIn("Restore", view.btn_expand_table.text())
-
-        # Auto-restore on tab switch
-        view._on_tab_switched(2)
-        self.assertFalse(view._table_expanded)
-        self.assertTrue(view.chart_container.isVisible())
-        self.assertIn("Expand", view.btn_expand_table.text())
-
-        # Expand via double-click on splitter handle
+        # Double-click on splitter handle is a no-op in Lateral (horizontal split) mode
         from PySide6.QtCore import QEvent, QPointF
         from PySide6.QtGui import QMouseEvent
         handle = view.splitter.handle(1)
@@ -361,6 +346,29 @@ class TestAnalyticsGUI(unittest.TestCase):
             Qt.KeyboardModifier.NoModifier,
         )
         QApplication.sendEvent(handle, dbl_click)
+        self.assertFalse(getattr(view, "_table_expanded", False))
+        self.assertTrue(view.chart_container.isVisible())
+
+        # Switch to Vertical (Stacked) mode: Expand button becomes visible and TITLE stretches
+        view._toggle_layout_mode()
+        self.assertEqual(view.splitter.orientation(), Qt.Orientation.Vertical)
+        self.assertTrue(view.btn_expand_table.isVisible())
+        self.assertIn("Expand", view.btn_expand_table.text())
+
+        # Expand table via button in Stacked mode
+        view.btn_expand_table.click()
+        self.assertTrue(view._table_expanded)
+        self.assertFalse(view.chart_container.isVisible())
+        self.assertIn("Restore", view.btn_expand_table.text())
+
+        # Auto-restore on tab switch
+        view._on_tab_switched(2)
+        self.assertFalse(view._table_expanded)
+        self.assertTrue(view.chart_container.isVisible())
+        self.assertIn("Expand", view.btn_expand_table.text())
+
+        # Expand via double-click on splitter handle in Stacked mode
+        QApplication.sendEvent(handle, dbl_click)
         self.assertTrue(view._table_expanded)
         self.assertFalse(view.chart_container.isVisible())
 
@@ -368,6 +376,15 @@ class TestAnalyticsGUI(unittest.TestCase):
         view._on_kpi_card_clicked(view.card_dead_weight, "Dead Weight (Zavorra)")
         self.assertFalse(view._table_expanded)
         self.assertTrue(view.chart_container.isVisible())
+
+        # Auto-restore if switching back to Horizontal while expanded
+        view.btn_expand_table.click()
+        self.assertTrue(view._table_expanded)
+        view._toggle_layout_mode()
+        self.assertEqual(view.splitter.orientation(), Qt.Orientation.Horizontal)
+        self.assertFalse(view._table_expanded)
+        self.assertTrue(view.chart_container.isVisible())
+        self.assertFalse(view.btn_expand_table.isVisible())
 
         # Tab switching and section descriptions
         self.assertEqual(len(view.tab_buttons), 5)

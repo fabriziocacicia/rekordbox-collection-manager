@@ -726,9 +726,32 @@ class AnalyticsView(QWidget):
         min_right = max(460, self.splitter.widget(1).minimumSizeHint().width())
         self.splitter.setSizes([max(580, total_w - min_right), min_right])
 
+    def _update_table_columns_for_orientation(self, orientation: Qt.Orientation) -> None:
+        """Use interactive horizontal-scroll columns in Lateral mode and stretch TITLE in Stacked mode."""
+        if not hasattr(self, "table"):
+            return
+        t_header = self.table.horizontalHeader()
+        t_header.setStretchLastSection(False)
+        for c_idx, c_name in enumerate(ANALYTICS_TABLE_COLUMNS):
+            if c_name == TrackColumn.TITLE:
+                if orientation == Qt.Orientation.Vertical:
+                    t_header.setSectionResizeMode(c_idx, QHeaderView.ResizeMode.Stretch)
+                else:
+                    t_header.setSectionResizeMode(c_idx, QHeaderView.ResizeMode.Interactive)
+                    self.table.setColumnWidth(c_idx, 180)
+            elif c_name == TrackColumn.ARTIST:
+                t_header.setSectionResizeMode(c_idx, QHeaderView.ResizeMode.Interactive)
+                self.table.setColumnWidth(c_idx, 140 if orientation == Qt.Orientation.Vertical else 120)
+            elif c_name == TrackColumn.FOLDER:
+                t_header.setSectionResizeMode(c_idx, QHeaderView.ResizeMode.Interactive)
+                self.table.setColumnWidth(c_idx, 110 if orientation == Qt.Orientation.Vertical else 90)
+
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
         if hasattr(self, "splitter") and watched == self.splitter.handle(1):
-            if event.type() == QEvent.Type.MouseButtonDblClick:
+            if (
+                event.type() == QEvent.Type.MouseButtonDblClick
+                and self.splitter.orientation() == Qt.Orientation.Vertical
+            ):
                 self._toggle_table_expanded()
                 return True
         return super().eventFilter(watched, event)
@@ -793,8 +816,16 @@ class AnalyticsView(QWidget):
 
     def _apply_splitter_orientation(self, orientation: Qt.Orientation) -> None:
         self.splitter.setOrientation(orientation)
+        self._update_table_columns_for_orientation(orientation)
+        handle = self.splitter.handle(1) if self.splitter.count() >= 2 else None
 
         if orientation == Qt.Orientation.Horizontal:
+            if getattr(self, "_table_expanded", False):
+                self._toggle_table_expanded(expand=False)
+            if hasattr(self, "btn_expand_table"):
+                self.btn_expand_table.setVisible(False)
+            if handle:
+                handle.setToolTip("Drag divider to resize charts and track table")
             self.splitter.setStyleSheet(f"""
                 QSplitter::handle:horizontal {{
                     background-color: {COLOR_BORDER};
@@ -819,6 +850,10 @@ class AnalyticsView(QWidget):
                 self.btn_layout_toggle.setText("⫤⫥ Lateral")
                 self.btn_layout_toggle.setToolTip("Layout: Lateral (Side-by-Side). Click to switch to Stacked.")
         else:
+            if hasattr(self, "btn_expand_table"):
+                self.btn_expand_table.setVisible(True)
+            if handle:
+                handle.setToolTip("Double-click to collapse/expand charts")
             self.splitter.setStyleSheet(f"""
                 QSplitter::handle:vertical {{
                     background-color: {COLOR_BORDER};
