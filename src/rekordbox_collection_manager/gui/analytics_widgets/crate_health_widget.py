@@ -5,15 +5,13 @@ selection pick rate brackets (Y-axis), isolating dead weight (Death Zone) from p
 """
 
 from typing import Dict, List, Optional, Tuple
-from PySide6.QtCore import QPoint, QRect, QRectF, QSize, Qt, Signal
-from PySide6.QtGui import QBrush, QColor, QFont, QLinearGradient, QPainter, QPen
+from PySide6.QtCore import QRectF, Qt, Signal
+from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import QToolTip, QWidget
 
 from rekordbox_collection_manager.analytics import EXPOSURE_BRACKETS, PICK_RATE_BRACKETS
 from rekordbox_collection_manager.gui.theme import (
-    COLOR_BG_CARD,
     COLOR_BG_DARK,
-    COLOR_BG_PANEL,
     COLOR_BLUE,
     COLOR_BORDER,
     COLOR_GREEN,
@@ -48,6 +46,8 @@ class CrateHealthMatrixWidget(QWidget):
     def set_data(self, matrix: Dict[Tuple[str, str], List[str]]) -> None:
         """Update matrix dataset and redraw."""
         self.matrix_data = matrix or {}
+        self.hovered_cell = None
+        self.selected_cell = None
         max_c = 1
         for track_ids in self.matrix_data.values():
             if len(track_ids) > max_c:
@@ -233,6 +233,13 @@ class CrateHealthMatrixWidget(QWidget):
                     painter.setFont(font_sub)
                     painter.setPen(QColor(COLOR_TEXT_MUTED))
                     painter.drawText(cell_rect, Qt.AlignmentFlag.AlignCenter, "—")
+
+    def leaveEvent(self, event) -> None:
+        super().leaveEvent(event)
+        if self.hovered_cell is not None:
+            self.hovered_cell = None
+            self.update()
+        QToolTip.hideText()
 
     def mouseMoveEvent(self, event) -> None:
         pos = event.position()

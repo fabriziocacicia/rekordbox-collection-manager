@@ -5,6 +5,7 @@ Highlights rigid mixing habits, fixed pairs, and transitions executed repeatedly
 Supports smooth mouse-wheel zooming, click-and-drag panning, and individual node dragging.
 """
 
+import html
 import math
 from collections import defaultdict, deque
 from typing import Any, Dict, List, Optional, Tuple
@@ -130,7 +131,6 @@ class TransitionGraphWidget(QWidget):
 
         if len(topo_order) == k and k <= 10:
             # Pull source branches rightwards toward their immediate targets to eliminate long-edge crossings
-            max_layer = max(depth.values(), default=0)
             for u in reversed(topo_order):
                 children = out_edges[u] & comp_set
                 if children:
@@ -407,6 +407,9 @@ class TransitionGraphWidget(QWidget):
         painter.fillRect(0, 0, w, h, QColor(COLOR_BG_DARK))
 
         if not self.nodes or not self.edges:
+            self._btn_zoom_in = QRectF()
+            self._btn_zoom_out = QRectF()
+            self._btn_zoom_reset = QRectF()
             painter.setPen(QColor(COLOR_TEXT_MUTED))
             font_empty = QFont()
             font_empty.setPointSize(11)
@@ -431,6 +434,7 @@ class TransitionGraphWidget(QWidget):
 
         # 1. Draw Directed Edges (Arrows)
         max_edge_cnt = max((e.count for e in self.edges), default=1)
+        edge_pairs = {(e.source_id, e.target_id) for e in self.edges}
 
         for edge in self.edges:
             p1 = self.node_positions.get(edge.source_id)
@@ -439,6 +443,9 @@ class TransitionGraphWidget(QWidget):
                 continue
 
             edge_key = (edge.source_id, edge.target_id)
+            has_reciprocal = (edge.target_id, edge.source_id) in edge_pairs
+            p1_draw, p2_draw, mid_pt = self._edge_geometry(p1, p2, has_reciprocal)
+
             is_edge_hovered = self.hovered_edge == edge_key
             is_edge_selected = self.selected_edge == edge_key
             is_node_connected = (
@@ -458,10 +465,9 @@ class TransitionGraphWidget(QWidget):
             r1 = self._get_node_radius(edge.source_id)
             r2 = self._get_node_radius(edge.target_id)
             painter.setPen(pen_edge)
-            self._draw_arrow(painter, p1, p2, r1, r2, thickness)
+            self._draw_arrow(painter, p1_draw, p2_draw, r1, r2, thickness)
 
             # Draw edge count badge at midpoint
-            mid_pt = QPointF((p1.x() + p2.x()) / 2.0, (p1.y() + p2.y()) / 2.0)
             active_badge = is_edge_hovered or is_edge_selected
             painter.setBrush(QBrush(QColor("#382305" if active_badge else COLOR_BG_CARD)))
             painter.setPen(QPen(QColor(COLOR_AMBER if active_badge else COLOR_BORDER), 1.5 if active_badge else 1.0))
@@ -665,13 +671,33 @@ class TransitionGraphWidget(QWidget):
     # Interactive Mouse & Gesture Events (Pan, Zoom, Drag, Selection)
     # --------------------------------------------------------------------------
 
+    def _edge_geometry(
+        self, p1: QPointF, p2: QPointF, has_reciprocal: bool
+    ) -> Tuple[QPointF, QPointF, QPointF]:
+        """Offset reciprocal A->B / B->A edges perpendicular to the segment so neither masks the other."""
+        if not has_reciprocal:
+            mid_pt = QPointF((p1.x() + p2.x()) / 2.0, (p1.y() + p2.y()) / 2.0)
+            return p1, p2, mid_pt
+        dx = p2.x() - p1.x()
+        dy = p2.y() - p1.y()
+        dist = math.hypot(dx, dy) or 1.0
+        nx, ny = -dy / dist, dx / dist
+        offset = 10.0
+        p1_off = QPointF(p1.x() + nx * offset, p1.y() + ny * offset)
+        p2_off = QPointF(p2.x() + nx * offset, p2.y() + ny * offset)
+        mid_pt = QPointF((p1_off.x() + p2_off.x()) / 2.0, (p1_off.y() + p2_off.y()) / 2.0)
+        return p1_off, p2_off, mid_pt
+
     def _hit_test_edge(self, world_pos: QPointF) -> Optional[Tuple[str, str]]:
         """Find edge whose midpoint badge/line center is near world_pos."""
+        edge_pairs = {(e.source_id, e.target_id) for e in self.edges}
         for edge in self.edges:
             p1 = self.node_positions.get(edge.source_id)
             p2 = self.node_positions.get(edge.target_id)
             if p1 and p2:
-                mid_pt = QPointF((p1.x() + p2.x()) / 2.0, (p1.y() + p2.y()) / 2.0)
+                _, _, mid_pt = self._edge_geometry(
+                    p1, p2, (edge.target_id, edge.source_id) in edge_pairs
+                )
                 if (world_pos.x() - mid_pt.x()) ** 2 + (world_pos.y() - mid_pt.y()) ** 2 <= 256:  # radius 16
                     return (edge.source_id, edge.target_id)
         return None
@@ -714,18 +740,18 @@ class TransitionGraphWidget(QWidget):
     def mousePressEvent(self, event) -> None:
         pos = event.position()
 
-        # Check Floating Toolbar Clicks
-        if self._btn_zoom_in.contains(pos):
-            self.zoom_in()
-            return
-        elif self._btn_zoom_out.contains(pos):
-            self.zoom_out()
-            return
-        elif self._btn_zoom_reset.contains(pos):
-            self.reset_view()
-            return
-
         if event.button() == Qt.MouseButton.LeftButton:
+            # Check Floating Toolbar Clicks
+            if self._btn_zoom_in.contains(pos):
+                self.zoom_in()
+                return
+            elif self._btn_zoom_out.contains(pos):
+                self.zoom_out()
+                return
+            elif self._btn_zoom_reset.contains(pos):
+                self.reset_view()
+                return
+
             world_pos = self._widget_to_world(pos)
 
             # 1. Check node hit
@@ -842,9 +868,9 @@ class TransitionGraphWidget(QWidget):
             if self.hovered_node_id:
                 nd = self.nodes[self.hovered_node_id]
                 tip = (
-                    f"🎵 <b>{nd.get('title')}</b><br/>"
-                    f"• Artist: <b>{nd.get('artist')}</b><br/>"
-                    f"• Key: <b>{nd.get('key')}</b> | BPM: <b>{nd.get('bpm')}</b><br/>"
+                    f"🎵 <b>{html.escape(str(nd.get('title') or ''))}</b><br/>"
+                    f"• Artist: <b>{html.escape(str(nd.get('artist') or ''))}</b><br/>"
+                    f"• Key: <b>{html.escape(str(nd.get('key') or ''))}</b> | BPM: <b>{nd.get('bpm')}</b><br/>"
                     f"• Total live plays: <b>{nd.get('plays')}</b><br/><br/>"
                     f"<i>(Drag to move node • Click to view combo hub)</i>"
                 )
@@ -853,13 +879,13 @@ class TransitionGraphWidget(QWidget):
                 src_id, tgt_id = self.hovered_edge
                 edge = next((e for e in self.edges if e.source_id == src_id and e.target_id == tgt_id), None)
                 if edge:
-                    sessions_str = "<br/>• ".join(edge.session_names[:4])
+                    sessions_str = "<br/>• ".join(html.escape(s) for s in edge.session_names[:4])
                     if len(edge.session_names) > 4:
                         sessions_str += f"<br/>• ...and {len(edge.session_names) - 4} more sets"
                     tip = (
                         f"<b>Automatic Combo Detected:</b><br/>"
-                        f"🎵 <b>{edge.source_title}</b><br/>"
-                        f"&nbsp;&nbsp;&nbsp;&nbsp;➔ <b>{edge.target_title}</b><br/>"
+                        f"🎵 <b>{html.escape(edge.source_title)}</b><br/>"
+                        f"&nbsp;&nbsp;&nbsp;&nbsp;➔ <b>{html.escape(edge.target_title)}</b><br/>"
                         f"• Played together: <b>{edge.count} times</b> in:<br/>• {sessions_str}<br/><br/>"
                         f"<i>Click to view pair in track table</i>"
                     )

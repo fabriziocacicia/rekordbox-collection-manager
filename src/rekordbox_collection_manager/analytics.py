@@ -16,16 +16,16 @@ import math
 import os
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Set, Tuple
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from rekordbox_collection_manager.utils import (
     build_exclude_streaming_clause,
-    build_track_record,
     detect_content_table,
     detect_history_table,
+    ensure_rekordbox_not_running,
     get_rekordbox_timestamp,
 )
 
@@ -294,7 +294,7 @@ class SessionTurnoverData:
     fresh_tracks_ids: List[str] = field(default_factory=list)
 
     # Set Archetype & Descriptive Profile
-    archetype: str = "Signature Flow / Equilibrato"
+    archetype: str = "Signature Flow / Balanced"
     archetype_icon: str = "⚖️"
     archetype_desc: str = ""
     archetype_tags: List[str] = field(default_factory=list)
@@ -314,7 +314,7 @@ def classify_session_archetype(s: SessionTurnoverData) -> Tuple[str, str, str, L
     if s.new_entries_pct >= 45.0 and s.session_index > 1:
         tags.append("✨ Fresh Wave")
     if s.session_index > 1 and s.new_entries_pct < 10.0 and s.repeated_prev_pct >= 50.0:
-        tags.append("⚠️ Rischio Stagnazione")
+        tags.append("⚠️ Stagnation Risk")
     if s.deep_cuts_cluster_pct >= 25.0 or s.deep_cuts_pct >= 25.0:
         tags.append("🕰️ Vintage Digger")
 
@@ -322,27 +322,27 @@ def classify_session_archetype(s: SessionTurnoverData) -> Tuple[str, str, str, L
     # 1. Genesis: 1st set in history or total catalog renewal
     if s.session_index == 1 or s.new_entries_pct >= 85.0:
         return (
-            "Genesis / Battesimo",
+            "Genesis / Debut",
             "🌱",
-            "Punto zero dello storico: debutto o rinnovo quasi totale del catalogo live.",
+            "Collection debut or near-total overhaul of live repertoire.",
             tags,
         )
 
     # 2. Twin: High retention from immediately preceding set
     if s.session_index > 1 and s.repeated_prev_pct >= 55.0:
         return (
-            "Twin / Serata Fotocopia",
+            "Twin / Duplicate",
             "🔁",
-            "Set replica: oltre il 55% della scaletta riproposto dal set precedente.",
+            "Duplicate set: over 55% of the tracklist repeated from the previous gig.",
             tags,
         )
 
     # 3. Testing Lab: High percentage of untested / new tracks
     if s.untested_pct >= 35.0 or s.new_entries_pct >= 35.0:
         return (
-            "Testing Lab / Rodaggio",
+            "Testing Lab / Burn-in",
             "🧪",
-            "Set di sperimentazione: oltre un terzo di musica nuova mai testata prima.",
+            "Experimental set: over one third brand-new untested music.",
             tags,
         )
 
@@ -351,24 +351,24 @@ def classify_session_archetype(s: SessionTurnoverData) -> Tuple[str, str, str, L
         return (
             "Prime-Time / Festival",
             "🚀",
-            "Set ad alto impatto e zero rischi: dominano hit collaudate e rotazione fissa.",
+            "High-impact low-risk set: proven hits and core rotation dominate.",
             tags,
         )
 
-    # 5. Digger's Set: High percentage of Deep Cuts / Ripescaggi
+    # 5. Digger's Set: High percentage of Deep Cuts / Rediscoveries
     if s.deep_cuts_cluster_pct >= 25.0 or s.deep_cuts_pct >= 25.0:
         return (
-            "Digger's Set / Ricerca",
+            "Digger's Set / Deep Dive",
             "🔍",
-            "Set da collezionista: ampio spazio a perle ripescate dal catalogo storico.",
+            "Collector's set: generous space for deep catalog rediscoveries.",
             tags,
         )
 
     # 6. Default: Balanced Signature Flow
     return (
-        "Signature Flow / Equilibrato",
+        "Signature Flow / Balanced",
         "⚖️",
-        "Flusso armonioso: solida rotazione con il giusto innesto di novità e ripescaggi.",
+        "Harmonious flow: solid core rotation blended with fresh tracks and rediscoveries.",
         tags,
     )
 
@@ -584,6 +584,7 @@ def compute_analytics(
                 {h_del_clause}
                 {sh_del_clause}
                 {c_del_clause}
+                {c_stream_clause}
                 ORDER BY {h_id_col}, {sh_order_col} ASC;
             """)
             history_rows = conn.execute(sessions_query).mappings().fetchall()
@@ -704,8 +705,8 @@ def compute_analytics(
         "Peak Bangers": [],
         "Core Rotation": [],
         "Deep Cuts / Occasionals": [],
-        "In Incubazione / Untested": [],
-        "Dead Weight (Zavorra)": [],
+        "Untested": [],
+        "Dead Weight": [],
         "Burnout Tracks": [],
         "Standard": [],
     }
@@ -795,7 +796,7 @@ def compute_analytics(
         # Cluster Assignment
         # 1. Untested: E_i <= 2 AND S_i == 0
         if e_i <= 2 and s_i == 0:
-            c_name = "In Incubazione / Untested"
+            c_name = "Untested"
         # 2. Burnout Tracks: high play count and not played in >= 8 sets
         elif t.dj_play_count >= burnout_threshold and m_i >= 8 and s_i > 0:
             c_name = "Burnout Tracks"
@@ -808,9 +809,9 @@ def compute_analytics(
         # 5. Deep Cuts / Occasionals: E_i >= 6 AND P_i < 25% AND played at least once in last 3 months
         elif e_i >= 6 and p_i < 25.0 and s_i > 0 and (t.last_played_dt and t.last_played_dt >= three_months_ago):
             c_name = "Deep Cuts / Occasionals"
-        # 6. Dead Weight (Zavorra): (E_i >= 5 AND P_i == 0%) OR M_i >= 6
+        # 6. Dead Weight: (E_i >= 5 AND P_i == 0%) OR M_i >= 6
         elif (e_i >= 5 and s_i == 0) or (m_i >= 6 and e_i >= 6):
-            c_name = "Dead Weight (Zavorra)"
+            c_name = "Dead Weight"
         else:
             c_name = "Standard"
 
@@ -849,7 +850,6 @@ def compute_analytics(
     # Vista 3 Set Turnover & DNA (100% Stacked Composition - Point-in-Time)
     # --------------------------------------------------------------------------
     turnover_series: List[SessionTurnoverData] = []
-    seen_so_far: Set[str] = set()
 
     # Track point-in-time history: plays count and last played session index
     track_prior_plays: Dict[str, int] = {}
@@ -941,9 +941,6 @@ def compute_analytics(
         for cid in session_presence_sets[idx]:
             track_prior_plays[cid] = track_prior_plays.get(cid, 0) + 1
             track_last_played_idx[cid] = idx
-
-        # Update global seen tracks
-        seen_so_far.update(s.track_ids_in_order)
 
         t_data = SessionTurnoverData(
             session_id=s.session_id,
@@ -1129,8 +1126,8 @@ def compute_analytics(
         peak_bangers_count=len(clusters_map["Peak Bangers"]),
         core_rotation_count=len(clusters_map["Core Rotation"]),
         deep_cuts_count=len(clusters_map["Deep Cuts / Occasionals"]),
-        untested_count=len(clusters_map["In Incubazione / Untested"]),
-        dead_weight_count=len(clusters_map["Dead Weight (Zavorra)"]),
+        untested_count=len(clusters_map["Untested"]),
+        dead_weight_count=len(clusters_map["Dead Weight"]),
         burnout_count=len(clusters_map["Burnout Tracks"]),
         avg_rotation_rate=round(avg_rotation, 1),
         avg_new_entries_rate=round(avg_new_entries, 1),
@@ -1174,7 +1171,7 @@ def export_tracks_to_rekordbox_xml(file_path: str, playlist_name: str, tracks: L
     import xml.etree.ElementTree as ET
 
     root = ET.Element("DJ_PLAYLISTS", Version="1.0.0")
-    product = ET.SubElement(root, "PRODUCT", Name="rekordbox", Version="6.0.0", Company="Pioneer DJ")
+    ET.SubElement(root, "PRODUCT", Name="rekordbox", Version="6.0.0", Company="Pioneer DJ")
     collection = ET.SubElement(root, "COLLECTION", Entries=str(len(tracks)))
 
     playlists = ET.SubElement(root, "PLAYLISTS")
@@ -1216,9 +1213,13 @@ def create_purge_playlist_in_rekordbox(
     engine: Engine,
     playlist_name: str,
     track_ids: List[str],
+    force: bool = False,
 ) -> Dict[str, Any]:
     """Create a new purge playlist directly in Rekordbox djmdPlaylist & populate with tracks."""
     from rekordbox_collection_manager.playlists import create_playlist
+
+    if ensure_rekordbox_not_running(force=force, exit_on_running=False) and not force:
+        raise RuntimeError("Pioneer Rekordbox is currently running. Close Rekordbox before creating playlists.")
 
     # 1. Create playlist
     pl_info = create_playlist(engine, name=playlist_name, parent_id_or_name="root", is_folder=False)

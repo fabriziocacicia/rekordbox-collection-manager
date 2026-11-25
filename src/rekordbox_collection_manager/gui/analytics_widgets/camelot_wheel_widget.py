@@ -6,8 +6,8 @@ displays track count badges directly inside each sector, and overlays live set e
 """
 
 import math
-from typing import Dict, List, Optional, Tuple
-from PySide6.QtCore import QPointF, QRectF, QSize, Qt, Signal
+from typing import Dict, Optional, Tuple
+from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QToolTip, QWidget
 
@@ -18,7 +18,6 @@ from rekordbox_collection_manager.gui.theme import (
     COLOR_BG_DARK,
     COLOR_BLUE,
     COLOR_BORDER,
-    COLOR_GREEN,
     COLOR_RED,
     COLOR_TEXT_MUTED,
     COLOR_TEXT_PRIMARY,
@@ -48,6 +47,8 @@ class CamelotWheelWidget(QWidget):
     def set_data(self, slices: Dict[str, CamelotSliceData]) -> None:
         """Update Camelot slices dataset and compute scale maxima."""
         self.slices = slices or {}
+        self.hovered_code = None
+        self.selected_code = None
         max_cnt = 1
         total_cnt = 0
         max_cat = 1.0
@@ -453,6 +454,13 @@ class CamelotWheelWidget(QWidget):
 
         ring = "B" if dist >= r_mid else "A"
         return f"{num}{ring}"
+
+    def leaveEvent(self, event) -> None:
+        super().leaveEvent(event)
+        if self.hovered_code is not None:
+            self.hovered_code = None
+            self.update()
+        QToolTip.hideText()
 
     def mouseMoveEvent(self, event) -> None:
         pos = event.position()

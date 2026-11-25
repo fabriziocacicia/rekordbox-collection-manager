@@ -8,8 +8,8 @@ import logging
 import os
 from datetime import datetime
 from typing import Any, Dict, List, Optional
-from PySide6.QtCore import QEvent, QObject, QPoint, QSize, Qt, Signal
-from PySide6.QtGui import QAction, QColor, QFont, QIcon
+from PySide6.QtCore import QEvent, QObject, QPoint, Qt, Signal
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QButtonGroup,
     QFileDialog,
@@ -21,8 +21,6 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QPushButton,
-    QScrollArea,
-    QSizePolicy,
     QSplitter,
     QStackedWidget,
     QToolTip,
@@ -34,7 +32,6 @@ from sqlalchemy.engine import Engine
 from rekordbox_collection_manager.analytics import (
     AnalyticsSnapshot,
     CamelotSliceData,
-    CAMELOT_TO_TRADITIONAL,
     create_purge_playlist_in_rekordbox,
     export_tracks_to_m3u8,
     export_tracks_to_rekordbox_xml,
@@ -49,7 +46,6 @@ from rekordbox_collection_manager.gui.analytics_widgets import (
 from rekordbox_collection_manager.gui.theme import (
     COLOR_AMBER,
     COLOR_BG_CARD,
-    COLOR_BG_DARK,
     COLOR_BG_INPUT,
     COLOR_BG_PANEL,
     COLOR_BLUE,
@@ -61,7 +57,6 @@ from rekordbox_collection_manager.gui.theme import (
     COLOR_TEXT_SECONDARY,
 )
 from rekordbox_collection_manager.gui.track_table import (
-    DEFAULT_COLLECTION_COLUMNS,
     TrackColumn,
     TrackTableConfig,
     TracksTableWidget,
@@ -85,6 +80,58 @@ ANALYTICS_TABLE_COLUMNS: List[str] = [
 ]
 
 
+def _dark_button_qss(
+    padding: str,
+    font_size: int = 11,
+    color: str = COLOR_TEXT_PRIMARY,
+    hover_color: Optional[str] = None,
+    hover_border: Optional[str] = None,
+    font_weight: int = 600,
+    checked_bg: Optional[str] = None,
+) -> str:
+    """Build consistent dark card QPushButton QSS for AnalyticsView toolbars."""
+    hover_rules = ["background-color: #2b2b36;"]
+    if hover_color:
+        hover_rules.append(f"color: {hover_color};")
+    if hover_border:
+        hover_rules.append(f"border-color: {hover_border};")
+    checked_block = (
+        f"\n        QPushButton:checked {{"
+        f" background-color: {checked_bg};"
+        f" border-color: {COLOR_BLUE};"
+        f" color: #ffffff;"
+        f" }}"
+        if checked_bg
+        else ""
+    )
+    return (
+        f"QPushButton {{ background-color: {COLOR_BG_CARD}; border: 1px solid {COLOR_BORDER};"
+        f" border-radius: 6px; color: {color}; padding: {padding};"
+        f" font-weight: {font_weight}; font-size: {font_size}px; }}"
+        f"\n        QPushButton:hover {{ {' '.join(hover_rules)} }}"
+        f"{checked_block}"
+    )
+
+
+_EXPAND_BTN_DEFAULT_QSS = _dark_button_qss(
+    "5px 10px", font_size=11, color=COLOR_TEXT_SECONDARY, hover_color=COLOR_TEXT_PRIMARY, hover_border=COLOR_BLUE
+)
+_EXPAND_BTN_ACTIVE_QSS = f"""
+    QPushButton {{
+        background-color: #0f3a63;
+        border: 1px solid {COLOR_BLUE};
+        border-radius: 6px;
+        color: #ffffff;
+        padding: 5px 10px;
+        font-weight: 700;
+        font-size: 11px;
+    }}
+    QPushButton:hover {{
+        background-color: #1a4d80;
+    }}
+"""
+
+
 class KPICard(QFrame):
     """Compact status card displaying a single KPI metric."""
 
@@ -97,11 +144,14 @@ class KPICard(QFrame):
         accent_color: str,
         subtitle: str = "",
         tooltip: str = "",
+        clickable: bool = True,
         parent: Optional[QWidget] = None,
     ):
         super().__init__(parent)
         self.setObjectName("kpiCard")
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._clickable = clickable
+        if clickable:
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.accent_color = accent_color
         self._is_active = False
         if tooltip:
@@ -146,6 +196,16 @@ class KPICard(QFrame):
                 }}
             """)
         else:
+            hover_css = (
+                f"""
+                QFrame#kpiCard:hover {{
+                    border-color: {self.accent_color};
+                    background-color: #262632;
+                }}
+                """
+                if self._clickable
+                else ""
+            )
             self.setStyleSheet(f"""
                 QFrame#kpiCard {{
                     background-color: {COLOR_BG_CARD};
@@ -153,10 +213,7 @@ class KPICard(QFrame):
                     border-radius: 8px;
                     padding: 6px 10px;
                 }}
-                QFrame#kpiCard:hover {{
-                    border-color: {self.accent_color};
-                    background-color: #262632;
-                }}
+                {hover_css}
             """)
 
     def set_value(self, value: str, subtitle: Optional[str] = None) -> None:
@@ -165,7 +222,7 @@ class KPICard(QFrame):
             self.lbl_sub.setText(subtitle)
 
     def mousePressEvent(self, event) -> None:
-        if event.button() == Qt.MouseButton.LeftButton:
+        if self._clickable and event.button() == Qt.MouseButton.LeftButton:
             self.clicked.emit()
 
 
@@ -224,41 +281,13 @@ class AnalyticsView(QWidget):
         self.btn_layout_toggle = QPushButton("⫤⫥ Lateral")
         self.btn_layout_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_layout_toggle.setToolTip("Switch between Lateral (side-by-side) and Stacked (vertical) layouts")
-        self.btn_layout_toggle.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {COLOR_BG_CARD};
-                border: 1px solid {COLOR_BORDER};
-                border-radius: 6px;
-                color: {COLOR_TEXT_PRIMARY};
-                padding: 6px 12px;
-                font-weight: 600;
-                font-size: 11px;
-            }}
-            QPushButton:hover {{
-                background-color: #2b2b36;
-                border-color: {COLOR_BLUE};
-            }}
-        """)
+        self.btn_layout_toggle.setStyleSheet(_dark_button_qss("6px 12px", font_size=11, hover_border=COLOR_BLUE))
         self.btn_layout_toggle.clicked.connect(self._toggle_layout_mode)
         header_row.addWidget(self.btn_layout_toggle)
 
         self.btn_refresh = QPushButton("Recalculate Metrics")
         self.btn_refresh.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_refresh.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {COLOR_BG_CARD};
-                border: 1px solid {COLOR_BORDER};
-                border-radius: 6px;
-                color: {COLOR_TEXT_PRIMARY};
-                padding: 6px 14px;
-                font-weight: 600;
-                font-size: 12px;
-            }}
-            QPushButton:hover {{
-                background-color: #2b2b36;
-                border-color: {COLOR_BLUE};
-            }}
-        """)
+        self.btn_refresh.setStyleSheet(_dark_button_qss("6px 14px", font_size=12, hover_border=COLOR_BLUE))
         self.btn_refresh.clicked.connect(lambda: self.refresh(interactive=True))
         header_row.addWidget(self.btn_refresh)
 
@@ -303,14 +332,15 @@ class AnalyticsView(QWidget):
         self.card_sessions = KPICard(
             "Live Sets", "0", "#a855f7", "Valid sessions analyzed",
             tooltip="History sessions with duration >= 20 min and >= 5 tracks",
+            clickable=False,
         )
         self.cards_row.addWidget(self.card_sessions)
 
         self.kpi_cluster_map = {
-            self.card_dead_weight: "Dead Weight (Zavorra)",
+            self.card_dead_weight: "Dead Weight",
             self.card_peak: "Peak Bangers",
             self.card_core: "Core Rotation",
-            self.card_untested: "In Incubazione / Untested",
+            self.card_untested: "Untested",
             self.card_burnout: "Burnout Tracks",
         }
 
@@ -372,7 +402,7 @@ class AnalyticsView(QWidget):
                     "<b>How to interpret data:</b><br/>"
                     "• <b>Thermal Colors:</b> Owned track density (from dark blue = few tracks, through gold up to coral red = richest keys).<br/>"
                     "• <b>Center Number:</b> Exact count of tracks in collection for that key.<br/>"
-                    "• <b>Cyan Outer Rim:</b> Actual share of tracks played in your live sets in that key.<br/>"
+                    "• <b>Glowing Outer Rim:</b> Actual share of tracks played in your live sets in that key.<br/>"
                     "• <b>Center Hub:</b> Statistics on global harmonic balance and dominant key.<br/><br/>"
                     "<i style='color: #94a3b8;'>💡 Click a slice to filter and inspect all tracks in that key.</i>"
                     "</div>"
@@ -440,32 +470,20 @@ class AnalyticsView(QWidget):
             },
         ]
 
+        tab_btn_qss = _dark_button_qss(
+            "6px 14px",
+            font_size=11,
+            color=COLOR_TEXT_SECONDARY,
+            hover_color=COLOR_TEXT_PRIMARY,
+            checked_bg="#0f3a63",
+        )
         self.tab_buttons: List[QPushButton] = []
         for meta in self._tabs_metadata:
             btn = QPushButton(meta["label"].replace("&", "&&"))
             btn.setCheckable(True)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.setToolTip(meta["rich_tooltip"])
-            btn.setStyleSheet(f"""
-                QPushButton {{
-                    background-color: {COLOR_BG_CARD};
-                    border: 1px solid {COLOR_BORDER};
-                    border-radius: 6px;
-                    color: {COLOR_TEXT_SECONDARY};
-                    padding: 6px 14px;
-                    font-size: 11px;
-                    font-weight: 600;
-                }}
-                QPushButton:hover {{
-                    background-color: #2b2b36;
-                    color: {COLOR_TEXT_PRIMARY};
-                }}
-                QPushButton:checked {{
-                    background-color: #0f3a63;
-                    border-color: {COLOR_BLUE};
-                    color: #ffffff;
-                }}
-            """)
+            btn.setStyleSheet(tab_btn_qss)
             if meta["id"] == 0:
                 btn.setChecked(True)
             self.tab_group.addButton(btn, meta["id"])
@@ -635,22 +653,7 @@ class AnalyticsView(QWidget):
         self.btn_expand_table = QPushButton("⤢ Expand")
         self.btn_expand_table.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_expand_table.setToolTip("Expand track table to full height / Hide charts (or double-click splitter)")
-        self.btn_expand_table.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {COLOR_BG_CARD};
-                border: 1px solid {COLOR_BORDER};
-                border-radius: 6px;
-                color: {COLOR_TEXT_SECONDARY};
-                padding: 5px 10px;
-                font-weight: 600;
-                font-size: 11px;
-            }}
-            QPushButton:hover {{
-                background-color: #2b2b36;
-                color: {COLOR_TEXT_PRIMARY};
-                border-color: {COLOR_BLUE};
-            }}
-        """)
+        self.btn_expand_table.setStyleSheet(_EXPAND_BTN_DEFAULT_QSS)
         self.btn_expand_table.clicked.connect(lambda: self._toggle_table_expanded())
         table_bar.addWidget(self.btn_expand_table)
 
@@ -767,40 +770,12 @@ class AnalyticsView(QWidget):
             self.chart_container.setVisible(False)
             self.btn_expand_table.setText("⤡ Restore")
             self.btn_expand_table.setToolTip("Restore charts view (or click any tab / KPI card)")
-            self.btn_expand_table.setStyleSheet(f"""
-                QPushButton {{
-                    background-color: #0f3a63;
-                    border: 1px solid {COLOR_BLUE};
-                    border-radius: 6px;
-                    color: #ffffff;
-                    padding: 5px 10px;
-                    font-weight: 700;
-                    font-size: 11px;
-                }}
-                QPushButton:hover {{
-                    background-color: #1a4d80;
-                }}
-            """)
+            self.btn_expand_table.setStyleSheet(_EXPAND_BTN_ACTIVE_QSS)
         else:
             self.chart_container.setVisible(True)
             self.btn_expand_table.setText("⤢ Expand")
             self.btn_expand_table.setToolTip("Expand track table to full height / Hide charts (or double-click splitter)")
-            self.btn_expand_table.setStyleSheet(f"""
-                QPushButton {{
-                    background-color: {COLOR_BG_CARD};
-                    border: 1px solid {COLOR_BORDER};
-                    border-radius: 6px;
-                    color: {COLOR_TEXT_SECONDARY};
-                    padding: 5px 10px;
-                    font-weight: 600;
-                    font-size: 11px;
-                }}
-                QPushButton:hover {{
-                    background-color: #2b2b36;
-                    color: {COLOR_TEXT_PRIMARY};
-                    border-color: {COLOR_BLUE};
-                }}
-            """)
+            self.btn_expand_table.setStyleSheet(_EXPAND_BTN_DEFAULT_QSS)
 
     def _toggle_layout_mode(self) -> None:
         """Manually toggle between Lateral (horizontal) and Stacked (vertical) splitter orientation."""
@@ -1035,23 +1010,25 @@ class AnalyticsView(QWidget):
 
     def _update_harmonic_profile(self, slices: Dict[str, CamelotSliceData]) -> None:
         """Update companion card with mode distribution and dominant keys."""
-        if not slices:
-            return
-
-        minor_cnt = sum(s.catalog_count for code, s in slices.items() if code.endswith("A"))
-        major_cnt = sum(s.catalog_count for code, s in slices.items() if code.endswith("B"))
+        bar_layout = self.bar_mode_container.layout()
+        minor_cnt = sum(s.catalog_count for code, s in slices.items() if code.endswith("A")) if slices else 0
+        major_cnt = sum(s.catalog_count for code, s in slices.items() if code.endswith("B")) if slices else 0
         total = minor_cnt + major_cnt
         if total > 0:
             minor_pct = round((minor_cnt / total) * 100)
             major_pct = 100 - minor_pct
             self.lbl_mode_ratio.setText(f"Minor (A): {minor_pct}% ({minor_cnt}) | Major (B): {major_pct}% ({major_cnt})")
-            bar_layout = self.bar_mode_container.layout()
             if bar_layout:
                 bar_layout.setStretch(0, max(1, minor_pct))
                 bar_layout.setStretch(1, max(1, major_pct))
+        else:
+            self.lbl_mode_ratio.setText("Minor (A): 0% (0) | Major (B): 0% (0)")
+            if bar_layout:
+                bar_layout.setStretch(0, 50)
+                bar_layout.setStretch(1, 50)
 
         # Dominant Keys
-        sorted_slices = sorted(slices.values(), key=lambda s: s.catalog_count, reverse=True)
+        sorted_slices = sorted(slices.values(), key=lambda s: s.catalog_count, reverse=True) if slices else []
         for idx in range(3):
             if idx < len(sorted_slices) and sorted_slices[idx].catalog_count > 0:
                 s = sorted_slices[idx]
@@ -1137,11 +1114,12 @@ class AnalyticsView(QWidget):
 
         # Default filter: if dead weight tracks exist, display them to facilitate crate pruning
         if snapshot.dead_weight_count > 0:
-            self._filter_by_cluster("Dead Weight (Zavorra)")
+            self._filter_by_cluster("Dead Weight")
         else:
             self._set_active_kpi_card(None)
+            self._clear_chart_selections()
             all_records = [t.to_dict() for t in snapshot.tracks_by_id.values()]
-            self._display_tracks(all_records, "All catalog tracks")
+            self._display_tracks(all_records, "All Tracks")
 
         self.notify_status.emit(
             f"Analytics updated: {snapshot.total_valid_sessions} sets analyzed, "
@@ -1174,9 +1152,22 @@ class AnalyticsView(QWidget):
     # Interactive Filtering Callbacks
     # --------------------------------------------------------------------------
 
+    def _clear_chart_selections(self, except_widget: Optional[QWidget] = None) -> None:
+        """Reset active visual selections on all analytics widgets except the triggering source."""
+        for widget in (
+            self.widget_health_matrix,
+            self.widget_camelot,
+            self.widget_turnover,
+            self.widget_survival,
+            self.widget_transitions,
+        ):
+            if widget is not except_widget:
+                widget.clear_selection()
+
     def _on_kpi_card_clicked(self, card: KPICard, cluster_key: str) -> None:
         if getattr(self, "_table_expanded", False):
             self._toggle_table_expanded(expand=False)
+        self._clear_chart_selections()
         if card.is_active():
             self._set_active_kpi_card(None)
             if self.snapshot:
@@ -1192,32 +1183,27 @@ class AnalyticsView(QWidget):
     def _filter_by_cluster(self, cluster_name: str) -> None:
         if not self.snapshot:
             return
-        if cluster_name in ("All", "Tutti"):
+        self._clear_chart_selections()
+        if cluster_name == "All":
             self._set_active_kpi_card(None)
             records = [t.to_dict() for t in self.snapshot.tracks_by_id.values()]
             self._display_tracks(records, "All Tracks")
             return
 
-        cluster_map = {
-            "Dead Weight": "Dead Weight (Zavorra)",
-            "Untested": "In Incubazione / Untested",
-        }
-        target_key = cluster_map.get(cluster_name, cluster_name)
-
         matched_card = None
         for card, c_key in self.kpi_cluster_map.items():
-            if c_key == target_key or cluster_name in (c_key, card.lbl_title.text()):
+            if c_key == cluster_name or cluster_name in (c_key, card.lbl_title.text()):
                 matched_card = card
                 break
         self._set_active_kpi_card(matched_card)
 
-        c_ids = self.snapshot.cluster_track_ids.get(target_key, [])
+        c_ids = self.snapshot.cluster_track_ids.get(cluster_name, [])
         records = [self.snapshot.tracks_by_id[cid].to_dict() for cid in c_ids if cid in self.snapshot.tracks_by_id]
-        clean_name = "Dead Weight" if "Dead Weight" in cluster_name else ("Untested" if "Untested" in cluster_name else cluster_name)
-        self._display_tracks(records, f"Cluster: {clean_name}")
+        self._display_tracks(records, f"Cluster: {cluster_name}")
 
     def _on_matrix_cell_clicked(self, exposure: str, pick_rate: str, track_ids: List[str]) -> None:
         self._set_active_kpi_card(None)
+        self._clear_chart_selections(except_widget=self.widget_health_matrix)
         if not self.snapshot:
             return
         records = [self.snapshot.tracks_by_id[cid].to_dict() for cid in track_ids if cid in self.snapshot.tracks_by_id]
@@ -1227,6 +1213,7 @@ class AnalyticsView(QWidget):
 
     def _on_camelot_slice_clicked(self, camelot_code: str, track_ids: List[str]) -> None:
         self._set_active_kpi_card(None)
+        self._clear_chart_selections(except_widget=self.widget_camelot)
         if not self.snapshot:
             return
         records = [self.snapshot.tracks_by_id[cid].to_dict() for cid in track_ids if cid in self.snapshot.tracks_by_id]
@@ -1236,13 +1223,16 @@ class AnalyticsView(QWidget):
 
     def _on_turnover_session_clicked(self, session_id: str, category_name: str, track_ids: List[str]) -> None:
         self._set_active_kpi_card(None)
+        self._clear_chart_selections(except_widget=self.widget_turnover)
         if not self.snapshot:
             return
         records = [self.snapshot.tracks_by_id[cid].to_dict() for cid in track_ids if cid in self.snapshot.tracks_by_id]
-        self._display_tracks(records, f"Set #{session_id}: {category_name}")
+        label = category_name.strip() if category_name and category_name.strip() else f"Set #{session_id}"
+        self._display_tracks(records, label)
 
     def _on_survival_step_clicked(self, set_number: int, unplayed_pct: float) -> None:
         self._set_active_kpi_card(None)
+        self._clear_chart_selections(except_widget=self.widget_survival)
         if not self.snapshot:
             return
         # Tracks exposed to set_number with 0 plays up to set_number
@@ -1254,6 +1244,7 @@ class AnalyticsView(QWidget):
 
     def _on_transition_edge_clicked(self, src_id: str, tgt_id: str, count: int) -> None:
         self._set_active_kpi_card(None)
+        self._clear_chart_selections(except_widget=self.widget_transitions)
         if not self.snapshot:
             return
         records = []
@@ -1264,6 +1255,7 @@ class AnalyticsView(QWidget):
 
     def _on_transition_node_clicked(self, track_id: str) -> None:
         self._set_active_kpi_card(None)
+        self._clear_chart_selections(except_widget=self.widget_transitions)
         if not self.snapshot:
             return
         if track_id in self.snapshot.tracks_by_id:
@@ -1285,7 +1277,9 @@ class AnalyticsView(QWidget):
     def _display_tracks(self, records: List[Dict[str, Any]], title_desc: str) -> None:
         self.current_filtered_tracks = records
         self._active_filter_label = title_desc
-        self.lbl_table_title.setText(title_desc)
+        display_title = title_desc if len(title_desc) <= 30 else title_desc[:28] + "…"
+        self.lbl_table_title.setText(display_title)
+        self.lbl_table_title.setToolTip(title_desc)
         self.lbl_table_count.setText(f"({len(records)} tracks)")
         self.search_input.clear()
         self.table.set_tracks(records)
@@ -1397,7 +1391,7 @@ class AnalyticsView(QWidget):
             return
 
         try:
-            res = create_purge_playlist_in_rekordbox(self.engine, default_name, track_ids)
+            create_purge_playlist_in_rekordbox(self.engine, default_name, track_ids)
             QMessageBox.information(
                 self,
                 "Playlist Created",

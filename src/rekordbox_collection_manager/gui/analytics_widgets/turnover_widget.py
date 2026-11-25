@@ -6,8 +6,9 @@ Allows analyzing the composition of chronological live sets through 3 unified di
 3. 🔁 Direct Retention (Fresh vs Repeated from immediately preceding set)
 """
 
-from typing import Any, Dict, List, Optional, Tuple
-from PySide6.QtCore import QPointF, QRectF, Qt, Signal
+import html
+from typing import List, Optional, Tuple
+from PySide6.QtCore import QRectF, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -24,7 +25,6 @@ from rekordbox_collection_manager.gui.theme import (
     COLOR_AMBER,
     COLOR_BG_CARD,
     COLOR_BG_DARK,
-    COLOR_BG_PANEL,
     COLOR_BLUE,
     COLOR_BORDER,
     COLOR_GREEN,
@@ -64,7 +64,21 @@ class _TurnoverCanvas(QWidget):
 
     def set_data(self, series: List[SessionTurnoverData]) -> None:
         self.series = series or []
+        self.hovered_session_idx = None
+        self.hovered_segment = None
+        self.selected_session_idx = None
         self.update()
+
+    def select_session(self, session_idx: int) -> None:
+        """Select a session by 0-based index or 1-based session_index."""
+        if 0 <= session_idx < len(self.series):
+            self.selected_session_idx = session_idx
+            self.update()
+
+    def clear_selection(self) -> None:
+        if self.selected_session_idx is not None:
+            self.selected_session_idx = None
+            self.update()
 
     def set_mode(self, mode: str) -> None:
         if mode in ("cluster", "turnover", "retention"):
@@ -191,9 +205,6 @@ class _TurnoverCanvas(QWidget):
             # Draw X-Axis Label below bar
             is_endpoint = (idx == 0) or (idx == n_sessions - 1)
             is_interval = (idx + 1) % label_interval == 0
-            # Don't crowd the last endpoint label if interval just drew
-            if idx == n_sessions - 1 and (idx - last_labeled_idx) < (label_interval // 2) and (idx != 0):
-                is_endpoint = True
             should_draw_label = is_endpoint or is_interval or is_session_hovered or is_session_selected
 
             if should_draw_label:
@@ -231,29 +242,42 @@ class _TurnoverCanvas(QWidget):
                         s.date_str[:4],
                     )
 
+    def _draw_stacked_bars(
+        self,
+        painter: QPainter,
+        segments: List[Tuple[str, float, str]],
+        x_left: float,
+        col_w: float,
+        top_margin: float,
+        grid_h: float,
+        is_hovered: bool,
+    ) -> None:
+        """Render vertical 100% stacked bar segments from bottom to top."""
+        y_curr = top_margin + grid_h
+        for seg_name, pct, color_hex in segments:
+            h_seg = (pct / 100.0) * grid_h
+            if h_seg > 0:
+                y_next = y_curr - h_seg
+                rect = QRectF(x_left, y_next, col_w, h_seg)
+                is_seg_active = is_hovered and (self.hovered_segment == seg_name)
+                col = QColor(color_hex)
+                painter.fillRect(rect, col.lighter(130) if is_seg_active else col)
+                y_curr = y_next
+
     def _draw_cluster_bars(
         self, painter: QPainter, s: SessionTurnoverData, idx: int,
         x_left: float, col_w: float, top_margin: float, grid_h: float, is_hovered: bool
     ) -> None:
         """Render stacked bar for Performance Clusters mode."""
         segments = [
-            ("peak", s.peak_bangers_pct, QColor(COLOR_PEAK)),
-            ("core", s.core_rotation_pct, QColor(COLOR_CORE)),
-            ("untested", s.untested_pct, QColor(COLOR_UNTESTED)),
-            ("deep_cluster", s.deep_cuts_cluster_pct, QColor(COLOR_DEEP_CUTS)),
-            ("burnout", s.burnout_pct, QColor(COLOR_BURNOUT)),
-            ("standard", s.standard_pct, QColor(COLOR_STANDARD)),
+            ("peak", s.peak_bangers_pct, COLOR_PEAK),
+            ("core", s.core_rotation_pct, COLOR_CORE),
+            ("untested", s.untested_pct, COLOR_UNTESTED),
+            ("deep_cluster", s.deep_cuts_cluster_pct, COLOR_DEEP_CUTS),
+            ("burnout", s.burnout_pct, COLOR_BURNOUT),
+            ("standard", s.standard_pct, COLOR_STANDARD),
         ]
-        y_curr = top_margin + grid_h
-        for seg_name, pct, col in segments:
-            h_seg = (pct / 100.0) * grid_h
-            if h_seg > 0:
-                y_next = y_curr - h_seg
-                rect = QRectF(x_left, y_next, col_w, h_seg)
-                is_seg_active = is_hovered and (self.hovered_segment == seg_name)
-                draw_col = col.lighter(130) if is_seg_active else col
-                painter.fillRect(rect, draw_col)
-                y_curr = y_next
+        self._draw_stacked_bars(painter, segments, x_left, col_w, top_margin, grid_h, is_hovered)
 
     def _draw_turnover_bars(
         self, painter: QPainter, s: SessionTurnoverData, idx: int,
@@ -261,21 +285,12 @@ class _TurnoverCanvas(QWidget):
     ) -> None:
         """Render stacked bar for Temporal Turnover mode."""
         segments = [
-            ("new", s.new_entries_pct, QColor(COLOR_GREEN)),
-            ("rotation", s.in_rotation_pct, QColor(COLOR_BLUE)),
-            ("deep", s.deep_cuts_pct, QColor(COLOR_DEEP_CUTS)),
-            ("one_shot", s.one_shot_pct, QColor(COLOR_ONE_SHOT)),
+            ("new", s.new_entries_pct, COLOR_GREEN),
+            ("rotation", s.in_rotation_pct, COLOR_BLUE),
+            ("deep", s.deep_cuts_pct, COLOR_DEEP_CUTS),
+            ("one_shot", s.one_shot_pct, COLOR_ONE_SHOT),
         ]
-        y_curr = top_margin + grid_h
-        for seg_name, pct, col in segments:
-            h_seg = (pct / 100.0) * grid_h
-            if h_seg > 0:
-                y_next = y_curr - h_seg
-                rect = QRectF(x_left, y_next, col_w, h_seg)
-                is_seg_active = is_hovered and (self.hovered_segment == seg_name)
-                draw_col = col.lighter(130) if is_seg_active else col
-                painter.fillRect(rect, draw_col)
-                y_curr = y_next
+        self._draw_stacked_bars(painter, segments, x_left, col_w, top_margin, grid_h, is_hovered)
 
     def _draw_retention_bars(
         self, painter: QPainter, s: SessionTurnoverData, idx: int,
@@ -283,19 +298,10 @@ class _TurnoverCanvas(QWidget):
     ) -> None:
         """Render stacked bar for Previous Set Retention mode."""
         segments = [
-            ("fresh", s.fresh_tracks_pct, QColor(COLOR_GREEN)),
-            ("repeated", s.repeated_prev_pct, QColor(COLOR_AMBER)),
+            ("fresh", s.fresh_tracks_pct, COLOR_GREEN),
+            ("repeated", s.repeated_prev_pct, COLOR_AMBER),
         ]
-        y_curr = top_margin + grid_h
-        for seg_name, pct, col in segments:
-            h_seg = (pct / 100.0) * grid_h
-            if h_seg > 0:
-                y_next = y_curr - h_seg
-                rect = QRectF(x_left, y_next, col_w, h_seg)
-                is_seg_active = is_hovered and (self.hovered_segment == seg_name)
-                draw_col = col.lighter(130) if is_seg_active else col
-                painter.fillRect(rect, draw_col)
-                y_curr = y_next
+        self._draw_stacked_bars(painter, segments, x_left, col_w, top_margin, grid_h, is_hovered)
 
     def _draw_legend(self, painter: QPainter, start_x: float, y: float, total_w: float) -> None:
         if self.active_mode == "cluster":
@@ -391,6 +397,7 @@ class _TurnoverCanvas(QWidget):
                 pos_pt = event.position().toPoint()
                 QToolTip.showText(self.mapToGlobal(pos_pt), tip, self)
                 return
+            QToolTip.hideText()
 
         step_w = grid_w / float(n_sessions)
         col_w = max(4.0, min(48.0, step_w - 2.0))
@@ -412,32 +419,32 @@ class _TurnoverCanvas(QWidget):
                     pct_pos = (y_rel / grid_h) * 100.0
 
                     if pct_pos <= 100.0:
-                        # Identify hovered segment based on active mode
+                        # Identify hovered segment based on active mode (skip zero-height segments)
                         if self.active_mode == "cluster":
                             acc = 0.0
-                            if pct_pos <= (acc := acc + s.peak_bangers_pct):
+                            if s.peak_bangers_pct > 0 and pct_pos <= (acc := acc + s.peak_bangers_pct):
                                 self.hovered_segment = "peak"
-                            elif pct_pos <= (acc := acc + s.core_rotation_pct):
+                            elif s.core_rotation_pct > 0 and pct_pos <= (acc := acc + s.core_rotation_pct):
                                 self.hovered_segment = "core"
-                            elif pct_pos <= (acc := acc + s.untested_pct):
+                            elif s.untested_pct > 0 and pct_pos <= (acc := acc + s.untested_pct):
                                 self.hovered_segment = "untested"
-                            elif pct_pos <= (acc := acc + s.deep_cuts_cluster_pct):
+                            elif s.deep_cuts_cluster_pct > 0 and pct_pos <= (acc := acc + s.deep_cuts_cluster_pct):
                                 self.hovered_segment = "deep_cluster"
-                            elif pct_pos <= (acc := acc + s.burnout_pct):
+                            elif s.burnout_pct > 0 and pct_pos <= (acc := acc + s.burnout_pct):
                                 self.hovered_segment = "burnout"
                             else:
                                 self.hovered_segment = "standard"
                         elif self.active_mode == "turnover":
-                            if pct_pos <= s.new_entries_pct:
+                            if s.new_entries_pct > 0 and pct_pos <= s.new_entries_pct:
                                 self.hovered_segment = "new"
-                            elif pct_pos <= (s.new_entries_pct + s.in_rotation_pct):
+                            elif s.in_rotation_pct > 0 and pct_pos <= (s.new_entries_pct + s.in_rotation_pct):
                                 self.hovered_segment = "rotation"
-                            elif pct_pos <= (s.new_entries_pct + s.in_rotation_pct + s.deep_cuts_pct):
+                            elif s.deep_cuts_pct > 0 and pct_pos <= (s.new_entries_pct + s.in_rotation_pct + s.deep_cuts_pct):
                                 self.hovered_segment = "deep"
                             else:
                                 self.hovered_segment = "one_shot"
                         else:
-                            if pct_pos <= s.fresh_tracks_pct:
+                            if s.fresh_tracks_pct > 0 and pct_pos <= s.fresh_tracks_pct:
                                 self.hovered_segment = "fresh"
                             else:
                                 self.hovered_segment = "repeated"
@@ -460,13 +467,13 @@ class _TurnoverCanvas(QWidget):
                 )
                 tags_html = ""
                 if s.archetype_tags:
-                    tags_pills = " ".join([f"<span style='background:#334155; color:#cbd5e1; padding:1px 5px; border-radius:3px; font-size:10px;'>{t}</span>" for t in s.archetype_tags])
+                    tags_pills = " ".join([f"<span style='background:#334155; color:#cbd5e1; padding:1px 5px; border-radius:3px; font-size:10px;'>{html.escape(t)}</span>" for t in s.archetype_tags])
                     tags_html = f"<br/>{tags_pills}"
 
                 tip = (
-                    f"<b>Set #{s.session_index}: {s.name}</b> ({s.date_str})<br/>"
-                    f"🏷️ <b>DNA Profile:</b> {s.archetype_icon} <b>{s.archetype}</b>{tags_html}<br/>"
-                    f"<i>«{s.archetype_desc}»</i><br/><br/>"
+                    f"<b>Set #{s.session_index}: {html.escape(s.name)}</b> ({html.escape(s.date_str)})<br/>"
+                    f"🏷️ <b>DNA Profile:</b> {s.archetype_icon} <b>{html.escape(s.archetype)}</b>{tags_html}<br/>"
+                    f"<i>«{html.escape(s.archetype_desc)}»</i><br/><br/>"
                     f"Total tracks: <b>{s.total_tracks}</b><br/><br/>"
                     f"<b>🧬 PERFORMANCE CLUSTERS (at that time):</b><br/>"
                     f"• <b>Peak Bangers:</b> {s.peak_bangers_count} ({s.peak_bangers_pct}%)<br/>"
