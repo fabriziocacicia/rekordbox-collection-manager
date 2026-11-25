@@ -20,12 +20,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **analytics**: Anchor default horizontal split to the compact minimum tracklist width (maximizing chart space) while enabling horizontal scrolling and preserving manual splitter drags
 - **analytics**: Transition desktop dashboard to horizontal master-detail layout with full-height lateral tracklist, compact column proportions, and streamlined harmonic profile summary
 - **analytics**: Refine desktop Analytics dashboard UI layout, interactive KPI cards, Crate Health Matrix heatmap contrast, full-width responsive track table, and subtle splitter styling
-- **analytics**: Redesign Camelot Wheel view with Harmonic Profile and Harmonic Mix Guide companion cards, adaptive WCAG 2.1 AA text contrast, and complete airtime legend
+- **analytics**: Redesign Camelot Wheel view with a streamlined Harmonic Profile bar, adaptive WCAG 2.1 AA text contrast, and complete airtime legend
 
 ### Fixed
 
-- **analytics**: Fix Transition Graph edge-badge click handling (preventing background pan from swallowing `edge_clicked`), guard zoom buttons from double-click resets, and add `leaveEvent` cleanup across Transition and Survival widgets
-- **analytics**: Localize desktop Analytics dashboard, status bar notifications, chart widgets, tooltips, and export dialogs into English for consistency with application language standards
+- **analytics**: Fix Transition Graph edge-badge click handling (preventing background pan from swallowing `edge_clicked`), guard zoom buttons from double-click resets and non-left clicks, separate reciprocal edges, and clear stale zoom button hitboxes on empty graphs
+- **analytics**: Hardened analytics charts and engine invariants (HTML-escape widget tooltips, reset stale hover/selection state across reloads and `leaveEvent`, exclude streaming tracks from session queries, enforce `ensure_rekordbox_not_running` in `create_purge_playlist_in_rekordbox`, clear cross-chart selections on interaction, and make Live Sets KPI card non-clickable)
+- **analytics**: Localize desktop Analytics dashboard, clusters, session archetypes, status bar notifications, chart widgets, tooltips, and export dialogs into English for consistency with application language standards
 
 ## [0.23.0] - 2026-11-23
 
